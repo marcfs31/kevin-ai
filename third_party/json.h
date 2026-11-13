@@ -228,7 +228,7 @@ static jval *j_parse_num(jparser *p) {
 }
 
 static jval *j_parse_val(jparser *p);
-static void json_free_tree(jval *v);
+static inline void json_free_tree(jval *v);
 
 static jval *j_parse_obj(jparser *p) {
     if (*p->s != '{') return NULL;
@@ -354,7 +354,7 @@ static jval *j_parse_val(jparser *p) {
 }
 
 /* API */
-static jval *json_parse(const char *text, char **arena_out) {
+static inline jval *json_parse(const char *text, char **arena_out) {
     jparser p = { text, NULL, 0, 0, 0, 0 };
     jval *v = j_parse_val(&p);
     if (!v || p.oom) { json_free_tree(v); v = NULL; }
@@ -368,7 +368,7 @@ static jval *json_parse(const char *text, char **arena_out) {
     return v;
 }
 
-static jval *json_get(jval *o, const char *key) {
+static inline jval *json_get(jval *o, const char *key) {
     if (!o || o->t != J_OBJ) return NULL;
     for (int i = 0; i < o->len; i++) if (strcmp(o->keys[i], key) == 0) return o->kids[i];
     return NULL;
@@ -380,7 +380,7 @@ static jval *json_get(jval *o, const char *key) {
  * The one exception a caller must respect: anything it ALIASED out of the
  * tree (k3_tok.h special-token strings) must be strdup'd first (trunk) or
  * deliberately process-lifetime (tokenizer). */
-static void json_free_tree(jval *v) {
+static inline void json_free_tree(jval *v) {
     int i;
     if (!v) return;
     if (v->t == J_OBJ) {

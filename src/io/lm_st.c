@@ -21,16 +21,7 @@
 #include "io/lm_io.h"
 #include "io/lm_st.h"
 
-/* json.h defines its parser as unused-in-some-files static functions; it is vendored and
- * unmodifiable, so the diagnostic is silenced around the include only. */
-#if defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
-#endif
 #include "json.h"
-#if defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
 
 int lm_dtype_size(LmDtype d)
 {
