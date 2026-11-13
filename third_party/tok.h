@@ -11,7 +11,11 @@
  *   int n = tok_encode(&T, text, len, out_ids, max);
  *   int m = tok_decode(&T, ids, n, out_buf, max);
  *
- * This project never calls tok_load: Kimi K3 ships no tokenizer.json. The structures
+ * small-llm-in-c adds a `qwen35` pre-tokenizer family (Qwen3.5: single digits, letters
+ * plus combining marks, "a b" string merges, ignore_merges honoured). It is selected only
+ * by the Qwen regex in the tokenizer.json, so every other file behaves as before.
+ *
+ * This project never calls tok_load for Kimi: Kimi K3 ships no tokenizer.json. The structures
  * below are populated directly from the released tiktoken.model by
  * src/tokenizer/k3_tok.h, after which tok_encode/tok_decode/tok_id_of work unchanged.
  * See NOTICE for the modifications made to this file.
@@ -62,9 +66,15 @@ typedef struct {
     int o200k;           /* pre_tokenizer regex family: 0 = cl100k, 1 = o200k */
     int kimi;            /* 1 = Kimi (K3) family: o200k rules + a leading \p{Han}-run rule,
                           * Han excluded from the letter classes, no '/' tail in the punct rule */
+    int qwen35;          /* 1 = Qwen3.5 family: cl100k rule order, but \p{N} one digit at a time,
+                          * letters are [\p{L}\p{M}], marks excluded from the punctuation rule */
+    int keep_merges;     /* qwen35 only: model.ignore_merges is false, so a piece that is itself a
+                          * vocab entry still goes through the merge list (no whole-piece shortcut) */
     int rankbpe;         /* 1 = no merges list (tiktoken-derived vocab): merge the adjacent
                           * pair whose CONCATENATION has the lowest vocab id, exactly
                           * tiktoken's byte_pair_encode, no recovered merges to diverge */
+    char *file_buf_;     /* tok_load's file buffer and parse tree, kept only so tok_free() can */
+    jval *json_root_;    /* release them; nothing else reads these */
 } Tok;
 
 /* ---------- UTF-8 ---------- */
@@ -119,6 +129,7 @@ static void tok_load(Tok *T, const char *path){
     tk_build_bytemap(T);
     long fn; char *buf=tk_read_file(path,&fn);
     char *arena=NULL; jval *root=json_parse(buf,&arena);
+    T->file_buf_=buf; T->json_root_=root;
     jval *model=json_get(root,"model");
     jval *vocab=json_get(model,"vocab");
     jval *merges=json_get(model,"merges");
@@ -163,11 +174,19 @@ static void tok_load(Tok *T, const char *path){
     hm_init(&T->merges, mc);
     if(merges) for(int i=0;i<merges->len;i++){
         jval *pr=merges->kids[i];
-        if(!pr||pr->t!=J_ARR||pr->len<2||!pr->kids[0]||!pr->kids[1]||
-           pr->kids[0]->t!=J_STR||pr->kids[1]->t!=J_STR){
-            fprintf(stderr,"tokenizer.json: malformed merge entry %d\n",i); exit(1); }
-        const char *l=pr->kids[0]->str, *r=pr->kids[1]->str;
-        int ll=(int)strlen(l), rl=(int)strlen(r);
+        const char *l, *r; int ll, rl;
+        if(pr&&pr->t==J_STR&&pr->str){           /* "left right" (Qwen). Byte-level tokens never contain a space */
+            const char *sp=strchr(pr->str,' ');
+            if(!sp||sp==pr->str||!sp[1]||strchr(sp+1,' ')){
+                fprintf(stderr,"tokenizer.json: malformed merge entry %d\n",i); exit(1); }
+            l=pr->str; ll=(int)(sp-pr->str); r=sp+1; rl=(int)strlen(r);
+        } else {
+            if(!pr||pr->t!=J_ARR||pr->len<2||!pr->kids[0]||!pr->kids[1]||
+               pr->kids[0]->t!=J_STR||pr->kids[1]->t!=J_STR){
+                fprintf(stderr,"tokenizer.json: malformed merge entry %d\n",i); exit(1); }
+            l=pr->kids[0]->str; r=pr->kids[1]->str;
+            ll=(int)strlen(l); rl=(int)strlen(r);
+        }
         char *key=malloc(ll+1+rl); memcpy(key,l,ll); key[ll]=0; memcpy(key+ll+1,r,rl);
         hm_put(&T->merges, key, ll+1+rl, i);
     }
@@ -197,10 +216,29 @@ static void tok_load(Tok *T, const char *path){
             jval *rx=pat?json_get(pat,"Regex"):NULL;
             if(rx&&rx->t==J_STR&&strstr(rx->str,"\\p{Lu}")) T->o200k=1;
             if(rx&&rx->t==J_STR&&strstr(rx->str,"\\p{Han}")) T->kimi=1;
+            if(rx&&rx->t==J_STR&&strstr(rx->str,"[\\p{L}\\p{M}]+")&&!strstr(rx->str,"\\p{Lu}")) T->qwen35=1;
         }
+    }
+    if(T->qwen35){
+        jval *ig=json_get(model,"ignore_merges");
+        if(!ig || (ig->t==J_BOOL && !ig->boolean)) T->keep_merges=1;   /* absent = HF default false */
     }
     /* arena/buf stay allocated: the j_dup strings are independent mallocs and must outlive them */
     (void)arena;
+}
+
+/* Release everything tok_load() allocated. Not called by the original users of this file
+ * (they keep the tokenizer for the life of the process); lm_tok_close() uses it so a
+ * tokenizer can be opened and closed repeatedly without leaking. The vocab keys and added
+ * token strings point into the parse tree, so the tree goes last. */
+static void tok_free(Tok *T){
+    if(T->merges.e){
+        for(int i=0;i<T->merges.cap;i++) if(T->merges.e[i].used) free((void*)T->merges.e[i].k);
+        free(T->merges.e);
+    }
+    free(T->vocab.e); free(T->id2str); free(T->id_added); free(T->id_special); free(T->sp);
+    json_free_tree(T->json_root_); free(T->file_buf_);
+    memset(T,0,sizeof(*T));
 }
 
 /* ---------- BPE over one piece: raw bytes [a,b) -> ids appended to out ---------- */
@@ -212,7 +250,7 @@ static void bpe_piece(Tok *T, const unsigned char *p, int a, int b, int *out, in
     s[sl]=0;
     /* ignore_merges: if the whole piece is itself a token, emit it directly */
     int whole=hm_get(&T->vocab,s,sl);
-    if(whole>=0){ if(*no<max) out[(*no)++]=whole; free(s); return; }
+    if(whole>=0 && !T->keep_merges){ if(*no<max) out[(*no)++]=whole; free(s); return; }
     /* initial symbols = the codepoints of the byte-level string */
     int *soff=malloc((sl+1)*sizeof(int)), *slen=malloc((sl+1)*sizeof(int)); int ns=0;
     for(int i=0;i<sl;){ uint32_t cp; int k=u8_next((const unsigned char*)s,sl,i,&cp);
@@ -508,6 +546,66 @@ static void pretok_chunk_kimi(Tok *T, const unsigned char *p, int a, int b, int 
     free(cp); free(off);
 }
 
+/* ---------- pre-tokenizer Qwen3.5 ----------
+ * Split regex (tokenizer.json pre_tokenizer, Split/Isolated):
+ *   (?i:'s|'t|'re|'ve|'m|'ll|'d) | [^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+ | \p{N}
+ *   | ' ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*' | \s*[\r\n]+ | \s+(?!\S) | \s+
+ * It is the cl100k rule order with three differences: a digit is a piece on its own,
+ * a letter run may contain combining marks, and a mark does not count as punctuation.
+ * \p{M} is uni_X minus \p{L}: uni_X is Lm+Lo+M and both Lm and Lo are inside \p{L}. */
+static inline int is_M(uint32_t c){ return is_X(c) && !is_L(c); }
+#define QW_LM(c) (is_L(c)||is_M(c))
+#define QW_P(c)  (!is_S(c) && !is_L(c) && !is_M(c) && !is_N(c))
+static void pretok_chunk_qwen35(Tok *T, const unsigned char *p, int a, int b, int *out, int *no, int max){
+    int nb=b-a; if(nb<=0) return;
+    uint32_t *cp=malloc((nb+1)*sizeof(uint32_t)); int *off=malloc((nb+2)*sizeof(int)); int n=0;
+    for(int i=a;i<b;){ uint32_t c; int k=u8_next(p,b,i,&c); off[n]=i; cp[n]=c; n++; i+=k; }
+    off[n]=b;
+    #define ISNL(c) ((c)=='\r'||(c)=='\n')
+    int i=0;
+    while(i<n){
+        int start=i; uint32_t c=cp[i];
+        /* 1) (?i:'s|'t|'re|'ve|'m|'ll|'d) */
+        if(c=='\'' && i+1<n){
+            int e=o2_contraction(cp,n,i);
+            if(e>i){ i=e; bpe_piece(T,p,off[start],off[i],out,no,max); continue; }
+        }
+        /* 2) [^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+ */
+        {
+            int j=-1;
+            if(!ISNL(c) && !is_L(c) && !is_N(c) && i+1<n && QW_LM(cp[i+1])) j=i+1;
+            else if(QW_LM(c)) j=i;
+            if(j>=0){ while(j<n && QW_LM(cp[j])) j++; i=j; bpe_piece(T,p,off[start],off[i],out,no,max); continue; }
+        }
+        /* 3) \p{N} */
+        if(is_N(c)){ i++; bpe_piece(T,p,off[start],off[i],out,no,max); continue; }
+        /* 4) ' ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*' */
+        {
+            int j=i;
+            if(c==' ' && j+1<n && QW_P(cp[j+1])) j++;
+            if(j<n && QW_P(cp[j])){
+                while(j<n && QW_P(cp[j])) j++;
+                while(j<n && ISNL(cp[j])) j++;
+                i=j; bpe_piece(T,p,off[start],off[i],out,no,max); continue;
+            }
+        }
+        /* 5) \s*[\r\n]+   6) \s+(?!\S)   7) \s+ */
+        {
+            int r=i; while(r<n && is_S(cp[r])) r++;
+            if(r>i){ int last=-1; for(int j=i;j<r;j++) if(ISNL(cp[j])) last=j;
+                if(last>=0){ i=last+1; bpe_piece(T,p,off[start],off[i],out,no,max); continue; }
+                int end = (r<n) ? r-1 : r;
+                if(end<=i) end=i+1;
+                i=end; bpe_piece(T,p,off[start],off[i],out,no,max); continue;
+            }
+        }
+        i++;
+        bpe_piece(T,p,off[start],off[i],out,no,max);
+    }
+    #undef ISNL
+    free(cp); free(off);
+}
+
 /* ---------- encode: text -> ids (split on added tokens, then pre-tokenise + BPE) ---------- */
 /* Encode with an explicit policy for added tokens.  Prompt templates need their
  * structural markers to remain atomic, while untrusted user text must never turn a
@@ -517,7 +615,8 @@ static int tok_encode_mode(Tok *T, const char *text, int len, int *out, int max,
                            int allow_added){
     const unsigned char *p=(const unsigned char*)text; int no=0; int i=0;
     if(!allow_added){
-        if(T->kimi)       pretok_chunk_kimi(T,p,0,len,out,&no,max);
+        if(T->qwen35)     pretok_chunk_qwen35(T,p,0,len,out,&no,max);
+        else if(T->kimi)  pretok_chunk_kimi(T,p,0,len,out,&no,max);
         else if(T->o200k) pretok_chunk_o200k(T,p,0,len,out,&no,max);
         else              pretok_chunk(T,p,0,len,out,&no,max);
         return no;
@@ -533,7 +632,8 @@ static int tok_encode_mode(Tok *T, const char *text, int len, int *out, int max,
         }
         int chunk_end = (hitpos<0) ? len : hitpos;
         if(chunk_end>i){
-            if(T->kimi)       pretok_chunk_kimi(T,p,i,chunk_end,out,&no,max);
+            if(T->qwen35)     pretok_chunk_qwen35(T,p,i,chunk_end,out,&no,max);
+            else if(T->kimi)  pretok_chunk_kimi(T,p,i,chunk_end,out,&no,max);
             else if(T->o200k) pretok_chunk_o200k(T,p,i,chunk_end,out,&no,max);
             else              pretok_chunk(T,p,i,chunk_end,out,&no,max);
         }
