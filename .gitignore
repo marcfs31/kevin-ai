@@ -1,0 +1,11 @@
+/build/
+/build-san/
+/bin/
+/models/
+*.o
+*.d
+.DS_Store
+__pycache__/
+.env
+.env.*
+!.env.example
