@@ -1,149 +1,163 @@
-# Plan: gpt-oss-20b in C99 on an 8 GB CPU box
+# Plan: Qwen3.5-4B and Gemma 4 E4B in C99 on an 8 GB CPU box
 
 ## Decision
 
-**Model: `openai/gpt-oss-20b`.** Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2),
-8 GB RAM, 238 GB NVMe SSD, 931 GB 5400 rpm HDD, Ubuntu Server 26.04.
+Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2, no AVX-512), 8 GB RAM, 238 GB NVMe
+SSD, 931 GB 5400 rpm HDD, Ubuntu Server 26.04. Owner's choice (2026-11-13): run
+**Qwen3.5-4B** and **Gemma 4 E4B** with a from-scratch C engine in the style of
+kimi-k3-in-c, replacing the earlier gpt-oss-20b plan.
 
-| candidate | checkpoint | why / why not |
-|---|---:|---|
-| Kimi K3 | 1,561 GB | larger than either disk; ~135 GB read per token |
-| GLM-5.2 | 1,507 GB | larger than either disk |
-| DeepSeek-V4-Flash | 160 GB | SSD-only fit, tens of GB read per token, FP8 |
-| Qwen3.5-35B-A3B | 72 GB | bf16 only: 4x the bytes per weight, or a lossy quantiser we would own |
-| Gemma 4 26B-A4B | 52 GB | same |
-| gpt-oss-120b | 65 GB | same engine runs it (config-driven); ~2 GB read per token, a later option |
-| **gpt-oss-20b** | **13.76 GB** | native MXFP4 experts, 1.7x RAM, Apache-2.0 |
+| model | params (text) | checkpoint | order | why |
+|---|---:|---:|---|---|
+| Qwen3.5-4B | ~4.2 B | 9.32 GB bf16, 2 shards | **phase 1** | its Gated DeltaNet layers are the closest thing to the reference repo's KDA code, so the most transfers |
+| Gemma 4 E4B | ~4 B core + per-layer embeddings | 15.99 GB bf16, 1 file | phase 2 | needs pieces the reference has none of: per-layer embeddings, KV sharing across layers, logit softcap |
 
-gpt-oss-20b is the only candidate whose experts ship in MXFP4, the format the reference
-engine multiplies without dequantising, and the only one where streaming is a modest
-stretch (1.7x RAM) rather than a 190x one.
+Both Apache-2.0, ungated. Vision, audio and Qwen's MTP head are out of scope (text only).
 
-**Repo: from scratch, not a fork.** About 70% of kimi-k3-in-c is K3-specific (KDA, MLA,
-attention residuals, latent MoE, trunk streaming, a 112 KB CLI, 30 MB of figures and
-fixtures). What transfers is ported file by file under Apache-2.0 with attribution in
-`NOTICE`: the safetensors reader, the MXFP4 and bf16 matmul kernels, the expert cache,
-the portable I/O shim, the sampler, and the vendored tokenizer/JSON headers.
+**Weights: q8 resident, bf16 exact.** bf16 Qwen is 8.4 GB of text weights, more than
+RAM. `bin/lm-quant` writes a q8 file (int8, one f32 scale per 32 weights, about
+4.75 GB) that the engine mmaps and keeps resident. The original bf16 safetensors also
+load directly; on 8 GB they stream through the page cache (the kimi-k3-in-c
+technique), slow but exact. Speed is **an estimate until measured on the box: roughly
+2 to 4 tokens/s for q8**, bounded by memory bandwidth (~4.75 GB read per token).
 
-## Model (normative: OpenAI's `gpt_oss/torch/model.py` and `weights.py`)
+**Repo: from scratch, porting by file** from kimi-k3-in-c (Apache-2.0, attribution in
+`NOTICE`): safetensors reader, bf16 and int8 matmul kernels, ShortConv and the
+delta-rule recurrence (KDA is a channel-wise relative of Gated DeltaNet), portable I/O,
+sampler, vendored tokenizer/JSON headers.
 
-Read every number from `config.json` (the `original/` layout). For gpt-oss-20b:
-24 layers, hidden 2880, 32 experts, top-4, intermediate 2880, vocab 201088, 64 heads of
-dim 64, 8 KV heads, sliding window 128, rope theta 150000, scaling 32, ntk alpha 1,
-beta 32, initial context 4096, swiglu limit 7.
+## Phase 1 model: Qwen3.5 text (normative: transformers `modeling_qwen3_5.py`)
 
-Per token position `x` (a vector of `hidden`):
+Reference copy: `/private/tmp/claude-501/-Users-marcfors--claude-spares-spare-4OZGox/
+e66db16d-b4f1-4a8b-b27d-cc43b2cb8009/scratchpad/hf2/modeling_qwen3_5.py`, classes
+`Qwen3_5TextRotaryEmbedding`, `Qwen3_5RMSNormGated`, `torch_recurrent_gated_delta_rule`,
+`Qwen3_5GatedDeltaNet`, `Qwen3_5Attention`, `Qwen3_5MLP`, `Qwen3_5RMSNorm`,
+`Qwen3_5DecoderLayer`, `Qwen3_5TextModel`. Where this section and that file disagree,
+the file wins.
 
-1. `x = embedding[token]`.
-2. For each layer `n`: `x = attn(x)`, then `x = mlp(x)`.
-3. `logits = unembedding @ rmsnorm(x, norm.scale)` (no bias).
+Every number comes from `config.json` → `text_config`. Qwen3.5-4B: 32 layers, `layer_types`
+3 x linear_attention then 1 x full_attention, repeated; hidden 2560; intermediate 9216;
+vocab 248320; tied embeddings; rms_norm_eps 1e-6; full attention 16 heads, 4 KV heads,
+head_dim 256, `attn_output_gate` true, rope theta 1e7, partial_rotary_factor 0.25;
+linear attention 16 key heads x 128, 32 value heads x 128, conv kernel 4.
 
-`rmsnorm(x, s) = x * rsqrt(mean(x^2) + 1e-5) * s`.
+Tensor prefix `model.language_model.`; ignore `model.visual.*` and `mtp.*`. Embedding
+`embed_tokens.weight` [vocab, hidden], also the unembedding (tied). Final `norm.weight`.
 
-**Attention.** `t = rmsnorm(x, attn.norm.scale)`; `qkv = qkv.weight @ t + qkv.bias`,
-split in this order: q = first `heads*head_dim`, k = next `kv_heads*head_dim`, v = the
-last `kv_heads*head_dim`. Query head `h` uses KV head `h / (heads/kv_heads)`. RoPE
-rotates q and k per head: split the head's vector into halves `x1, x2`;
-`o1 = x1*cos - x2*sin`, `o2 = x2*cos + x1*sin`, with `cos/sin = concentration *
-cos/sin(pos * inv_freq[i])`. YaRN: `freq[i] = theta^(2i/head_dim)`; when scaling > 1,
-`concentration = 0.1*ln(scaling) + 1`, `low = d_half*ln(ctx0/(beta*2pi))/ln(theta)`,
-`high = d_half*ln(ctx0/(alpha*2pi))/ln(theta)`, `ramp = (i - low)/(high - low)`,
-`mask = 1 - clamp(ramp, 0, 1)`, `inv_freq = (1/(scaling*freq))*(1 - mask) +
-(1/freq)*mask`. Scores `q.k / sqrt(head_dim)` over causal positions; even layers
-(0, 2, ...) see only the last `sliding_window` positions including the current one, odd
-layers see all. **Sink:** one extra logit `sinks[h]` per head joins the softmax and is
-then dropped, so the weights sum to less than 1. Output
-`x + out.weight @ concat_heads + out.bias`.
+**RMSNorm (zero-centred):** `y = x * rsqrt(mean(x^2) + eps) * (1 + w)`. Used for
+`input_layernorm`, `post_attention_layernorm`, `q_norm`, `k_norm`, final `norm`.
+**Gated RMSNorm** (`linear_attn.norm`): `y = x * rsqrt(mean(x^2) + eps) * w * silu(z)`
+— plain `w`, NOT `1 + w`.
 
-**MoE.** `t = rmsnorm(x, mlp.norm.scale)`; `g = gate.weight @ t + gate.bias`; take the
-top-k logits (ties: lowest index), softmax over those k only. For each chosen expert
-`e`: `a = mlp1_weight[e] @ t + mlp1_bias[e]` (2*intermediate values, interleaved);
-`glu = a[0::2]` clamped to max `limit`, `lin = a[1::2]` clamped to `[-limit, limit]`;
-`s = glu * sigmoid(1.702 * glu) * (lin + 1)`; `y_e = mlp2_weight[e] @ s + mlp2_bias[e]`.
-Output `x + sum_e w_e * y_e`.
+**Decoder layer:** `h = x + mixer(norm1(x))`; `out = h + mlp(norm2(h))`;
+`mlp(t) = down(silu(gate(t)) * up(t))`.
 
-**MXFP4.** `mlpN_weight.blocks` is `[experts, rows, in/32, 16]` U8, `.scales` is
-`[experts, rows, in/32]` U8. Low nibble is the even element. Value =
-`E2M1[nibble] * 2^(scale - 127)` with `E2M1 = {0, .5, 1, 1.5, 2, 3, 4, 6}` and bit 3 the
-sign. Never dequantise an expert into memory.
+**Full attention** (`self_attn`): `q_proj` gives `heads * head_dim * 2`, viewed per head
+as `[head_dim query | head_dim gate]` (the split is inside each head, not across the
+whole vector). `q = q_norm(query)` and `k = k_norm(k_proj(x))` per head; `v = v_proj(x)`.
+RoPE on the first `rot = head_dim * 0.25 = 64` dims of each head, rotate-half style:
+for `i < rot/2`, `inv_freq[i] = theta^(-2i/rot)`, angle `pos * inv_freq[i]`,
+`o[i] = x[i]*cos - x[i+rot/2]*sin`, `o[i+rot/2] = x[i+rot/2]*cos + x[i]*sin`; dims
+`>= rot` pass through. For text the three mRoPE sections share the same position, so
+this is plain RoPE. Causal softmax of `q.k / sqrt(head_dim)`, GQA (query head `h` uses KV
+head `h / (heads / kv_heads)`), then `attn = attn * sigmoid(gate)` and `o_proj`.
 
-Tensor names: `embedding.weight`, `unembedding.weight`, `norm.scale`,
-`block.N.attn.{norm.scale, qkv.weight, qkv.bias, out.weight, out.bias, sinks}`,
-`block.N.mlp.{norm.scale, gate.weight, gate.bias, mlp1_bias, mlp2_bias,
-mlp1_weight.blocks, mlp1_weight.scales, mlp2_weight.blocks, mlp2_weight.scales}`.
-Everything except the four MXFP4 tensors is BF16.
+**Gated DeltaNet** (`linear_attn`), one token at a time:
+1. `qkv = in_proj_qkv(x)` (size `2*key_dim + value_dim`), `z = in_proj_z(x)`,
+   `b = in_proj_b(x)`, `a = in_proj_a(x)` (one per value head).
+2. Causal depthwise conv1d over the last 4 positions of `qkv` (weight `[C, 1, 4]`, no
+   bias), then SiLU. The conv state holds the previous 3 inputs, zero at position 0.
+3. Split into q, k (key heads x 128) and v (value heads x 128). Each key head serves
+   `value_heads / key_heads` CONSECUTIVE value heads (repeat_interleave).
+4. `q = l2norm(q) / sqrt(128)`, `k = l2norm(k)`, with `l2norm(x) = x * rsqrt(sum(x^2) + 1e-6)`.
+5. `beta = sigmoid(b)`, `g = -exp(A_log) * softplus(a + dt_bias)` per value head.
+6. Per value head with state `S` [128 key x 128 value], zero at position 0:
+   `S *= exp(g)`; `kv = S^T k`; `delta = (v - kv) * beta`; `S += k outer delta`;
+   `o = S^T q`. Order is load-bearing.
+7. `o = gated_rmsnorm(o, z)` per value head, then `out_proj`.
 
-## Memory design at 8 GB
+## q8 format (owned by `tools/quant_ref.py`, mirrored by `bin/lm-quant`)
 
-| component | bytes | residency |
-|---|---:|---|
-| experts (768 x 13.2 MB) | 10.15 GB | streamed; LRU cache of whole experts |
-| attention weights | 1.29 GB | resident, bf16 |
-| unembedding | 1.16 GB | resident, bf16 |
-| embedding | 1.16 GB | one row read per token |
-| KV cache, 4096 positions | 0.4 GB | fp32, every layer keeps every position so `oss_truncate` can rewind |
+Quantise every 2-D text weight matrix (`*.weight` with 2 dims, including the
+embedding); keep norms, `A_log`, `dt_bias` and the conv weight in their original dtype.
+For a row-major `[out, in]` matrix and each group of 32 consecutive inputs in a row:
+`absmax` = max |x| over the bf16-widened group; `scale = (float)(absmax / 127.0)`
+computed in double and rounded once to f32; `q = round_half_even((double)x /
+(double)scale)` clamped to [-127, 127]; `scale == 0` gives all-zero `q`. `in` must be a
+multiple of 32 or the tool fails loudly. Output: one safetensors file, tensor `<name>`
+dtype I8 shape `[out, in]` plus `<name>.q8scale` dtype F32 shape `[out, in/32]`,
+everything else copied byte-for-byte with its name, header `__metadata__`
+`{"format": "lm-q8", "group": "32", "source": "<sha256 of index or file>"}`. The Python
+and C writers must produce byte-identical files from the same input.
 
-A token touches 96 experts (1.27 GB). With ~4.3 GB of cache (325 of 768 slots) the
-misses are read from NVMe. Expected speed is **an estimate until measured on the box:
-roughly 0.5 to 2 tokens/s**. The model directory must live on the SSD, never the HDD.
-Cache size changes speed only: logits are identical at every budget, and a test holds
-that.
-
-## Layout and contracts
+## Engine layout and contracts
 
 ```
-include/gptoss/gptoss.h   engine API (token ids in, logits out) -- the contract
-src/io/      safetensors reader, positional reads          src/core/   kernels and ops
-src/cache/   expert LRU                                     src/model/  config, bind, forward
-src/tokenizer/ src/chat/  tokenizer, Harmony, sampler       src/cli/    one binary per file
-tools/       Python stdlib oracle and fixture generators    tests/      unit tests, fixtures
+include/lm/lm.h           engine API (token ids in, logits out) -- the contract
+src/io/      safetensors (sharded via index.json), mmap/pread       src/core/  kernels, ops
+src/model/   config, bind, forward per family (qwen35, later gemma4)
+src/tokenizer/ src/chat/  tokenizer, chat templates, sampler        src/cli/   one binary per file
+tools/       Python stdlib oracle, quantiser reference, fixture generators
+tests/       unit tests, fixtures
 ```
 
-Headers are included relative to `src/` (`#include "io/oss_st.h"`). The Makefile
+Symbols `lm_`, files `lm_*.c/h`, headers included relative to `src/`. The Makefile
 discovers sources by wildcard; nobody edits it to add a file.
 
-`bin/gptoss-run --model DIR --tokens 1,2,3 [--logits-out F] [--greedy N]
-[--cache-slots N] [--ram-gb X] [--ctx N] [--threads N] [--stats]` feeds the tokens,
-writes one little-endian float32 row of `vocab` logits per fed token to `F`, then
-generates `N` tokens by argmax (lowest id wins a tie) and prints one id per line on
-stdout. Nothing else goes to stdout.
+`bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F] [--greedy N]
+[--ctx N] [--threads N]` feeds the tokens, writes one little-endian f32 row of `vocab`
+logits per fed token to `F`, then generates `N` tokens by argmax (lowest id wins a tie)
+and prints one id per line on stdout. Nothing else goes to stdout.
 
-Tiny fixture `tests/fixtures/tiny/`: `config.json`, `model.safetensors`, `golden.json`
-= `{"tokens": [...], "logits": [[vocab floats] per token], "router": [[[top-k expert
-ids, best first] per layer] per token], "greedy": {"prompt": [...], "out": [...]}}`.
-Tiny config: 4 layers, hidden 64, intermediate 96, 8 experts top-2, 8 heads of dim 16,
-2 KV heads, vocab 384, sliding window 4, the real RoPE constants.
+`bin/lm-quant --model DIR --out FILE` writes the q8 file.
+
+Tiny fixture `tests/fixtures/qwen35-tiny/`: `config.json` (real schema, nested
+`text_config`, `model_type` qwen3_5), weights in TWO shards plus
+`model.safetensors.index.json` (so sharding is tested), the real tensor names including
+a few `visual.*` and `mtp.*` tensors that must be ignored, and:
+- `golden_bf16.json` and `golden_q8.json` = `{"tokens": [...], "logits": [[vocab] per
+  token], "greedy": {"prompt": [...], "out": [...]}}` — the q8 golden is the oracle run
+  on the dequantised q8 weights, so both are exact targets;
+- `model.q8.safetensors` from `tools/quant_ref.py`.
+Tiny config: 8 layers (2 full), hidden 64, intermediate 128, 4 heads x 32, 2 KV heads,
+key heads 2 x 16, value heads 4 x 16, conv 4, vocab 384, partial rotary 0.25, the real
+rope theta and eps.
 
 ## Gates
 
-1. `make test` -- unit tests, including MXFP4 matmul against dequantise-then-multiply,
-   scalar against SIMD paths, cache eviction, and every heuristic's negative case.
-2. `make gate` -- `tools/check_golden.py`: engine logits within `2e-4 * max|logit|` of
-   the oracle at every position, argmax equal, greedy ids exactly equal, and the
-   logits file byte-identical between the default cache and `--cache-slots <top-k>`.
-3. `make sanitize` -- unit tests under ASan and UBSan.
-4. On the server only (needs the 13.76 GB checkpoint): AVX2 `make test`, real-vocab
-   tokenizer round-trip, a real-weights smoke prompt, and the measured tokens/s.
+1. `make test` — unit tests: kernels against references (bf16, q8, scalar vs SIMD),
+   every op against `tests/fixtures/ops/`, and each heuristic's negative case.
+2. `make gate` — `tools/check_golden.py`: for bf16 and q8, engine logits within
+   `2e-4 * max|logit|` of the oracle at every position, argmax equal, greedy ids
+   exactly equal; and `bin/lm-quant` output byte-identical to `model.q8.safetensors`.
+3. `make sanitize` — unit tests under ASan and UBSan.
+4. On the server only (needs the checkpoint): AVX2 `make test`, real-vocab tokenizer
+   round-trip, q8 vs bf16 agreement on a short real prompt (greedy tokens and top-1
+   agreement rate reported, not assumed), a smoke chat, measured tokens/s.
 
 The oracle is deterministic, so no model verifier stage is needed for the engine; the
-orchestrating session reviews the oracle itself line by line against OpenAI's source.
+orchestrating session reviews the oracle itself against the transformers source.
 
-## Tracks
+## Tracks (phase 1)
 
 | stage | track | model | owns |
 |---|---|---|---|
-| A | oracle + fixtures | Sonnet: bounded numeric port with exact acceptance | `tools/`, `tests/fixtures/` |
-| A | engine foundation | Sonnet: porting kernels, I/O and cache with self-contained tests | `src/io`, `src/core`, `src/cache`, their tests |
-| A | tokenizer + chat | Sonnet: bounded adaptation against a fixed API | `src/tokenizer`, `src/chat`, `src/cli/gptoss-chat.c`, their tests |
-| A | server scripts + docs | Haiku: three known files | `scripts/`, `README.md`, `docs/QUICKSTART.md` |
-| B | model forward | Sonnet (same agent as foundation): iterate against the oracle | `src/model`, `src/cli/gptoss-run.c` |
-| C | integration, gates, review | orchestrator (top model) | merges, final gate |
+| A | oracle, quantiser reference, fixtures | Sonnet: bounded numeric port, exact acceptance | `tools/`, `tests/fixtures/qwen35-tiny/`, `tests/fixtures/ops/` |
+| A | engine foundation | Sonnet: kernels, I/O and ops with self-contained tests | `src/io`, `src/core`, `src/cli/lm-quant.c`, their tests |
+| A | tokenizer + chat | Sonnet: bounded adaptation against a fixed API | `src/tokenizer`, `src/chat`, `src/cli/lm-chat.c`, `third_party/tok.h`, their tests |
+| A | server scripts + docs | Haiku: four known files | `scripts/`, `README.md`, `docs/QUICKSTART.md` |
+| B | Qwen3.5 forward | Sonnet: iterate against the oracle | `src/model`, `src/cli/lm-run.c` |
+| C | integration, gates, review | orchestrator | merges, final gate |
 
-Each Stage A track runs in its own git worktree and touches only what it owns. Only the
-orchestrator runs git.
+## Phase 2: Gemma 4 E4B (after phase 1 passes gate 2)
+
+Reuses io, kernels, q8, tokenizer machinery and chat loop; adds a `gemma4` forward with
+per-layer input embeddings (`hidden_size_per_layer_input` 256 x 42 layers, read per
+token from the mmapped file), sliding (512) and full attention with different head
+dims and RoPE types, KV shared by the last 18 layers, GELU-tanh MLP, final logit
+softcap 30, and the Gemma chat template. Its own oracle and tiny fixture, same gates.
 
 ## Later
 
-- Server bring-up: `scripts/download-model.sh`, `scripts/doctor.sh`, gate 4, tuning.
-- An OpenAI-compatible HTTP endpoint and a systemd unit.
-- Batched prefill; gpt-oss-120b on the same engine.
+Batched prefill; the MTP head as a speculative draft for Qwen; an OpenAI-compatible
+HTTP endpoint and a systemd unit.
