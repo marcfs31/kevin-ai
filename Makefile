@@ -1,9 +1,9 @@
-# gpt-oss-in-c. Sources are discovered by wildcard: adding a file under src/ or a
+# small-llm-in-c. Sources are discovered by wildcard: adding a file under src/ or a
 # tests/unit/test_*.c needs no Makefile edit.
 #
 #   make            build bin/* (one binary per src/cli/*.c)
 #   make test       build and run every tests/unit/test_*.c
-#   make gate       compare bin/gptoss-run against the Python oracle's golden files
+#   make gate       compare bin/lm-run against the Python oracle's golden files
 #   make sanitize   run the unit tests under ASan + UBSan
 #   make portable   x86-64 build with -mavx2 -mfma instead of -march=native
 
@@ -60,8 +60,8 @@ test: $(TESTS)
 	@test -n "$(TESTS)" || { echo "make test: no tests/unit/test_*.c found"; exit 1; }
 	@fail=0; for t in $(TESTS); do echo "== $$t"; ./$$t || { echo "FAILED: $$t"; fail=1; }; done; exit $$fail
 
-gate: bin/gptoss-run
-	python3 tools/check_golden.py --bin bin/gptoss-run --fixtures tests/fixtures/tiny
+gate: bin/lm-run bin/lm-quant
+	python3 tools/check_golden.py --run bin/lm-run --quant bin/lm-quant --fixtures tests/fixtures/qwen35-tiny
 
 sanitize:
 	$(MAKE) B=build-san OPT="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" test
