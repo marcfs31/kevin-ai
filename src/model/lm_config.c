@@ -41,28 +41,46 @@ static int req_str(jval *o, const char *key, const char **out, char *err, size_t
     return 0;
 }
 
-int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
+struct jval *lm_config_read_json(const char *path, char *err, size_t errlen)
 {
-    memset(c, 0, sizeof *c);
     char file[4096];
     struct stat st;
-    if (stat(path, &st) != 0) return lm_fail(err, errlen, "cannot open %s", path);
+    if (stat(path, &st) != 0) { lm_fail(err, errlen, "cannot open %s", path); return NULL; }
     if (S_ISDIR(st.st_mode)) snprintf(file, sizeof file, "%s/config.json", path);
     else snprintf(file, sizeof file, "%s", path);
     FILE *f = fopen(file, "rb");
-    if (!f) return lm_fail(err, errlen, "cannot open %s", file);
+    if (!f) { lm_fail(err, errlen, "cannot open %s", file); return NULL; }
     fseek(f, 0, SEEK_END);
     const long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (sz <= 0 || sz > (16 << 20)) { fclose(f); return lm_fail(err, errlen, "%s has an implausible size", file); }
+    if (sz <= 0 || sz > (16 << 20)) { fclose(f); lm_fail(err, errlen, "%s has an implausible size", file); return NULL; }
     char *text = (char *)malloc((size_t)sz + 1);
-    if (!text) { fclose(f); return lm_fail(err, errlen, "out of memory"); }
+    if (!text) { fclose(f); lm_fail(err, errlen, "out of memory"); return NULL; }
     const size_t got = fread(text, 1, (size_t)sz, f);
     fclose(f);
     text[got] = '\0';
     jval *root = json_parse(text, NULL);
     free(text);
-    if (!root || root->t != J_OBJ) { json_free_tree(root); return lm_fail(err, errlen, "%s is not a valid JSON object", file); }
+    if (!root || root->t != J_OBJ) { json_free_tree(root); lm_fail(err, errlen, "%s is not a valid JSON object", file); return NULL; }
+    return root;
+}
+
+int lm_config_model_type(const char *path, char *out, size_t n)
+{
+    jval *root = lm_config_read_json(path, NULL, 0);
+    if (!root) return -1;
+    jval *v = json_get(root, "model_type");
+    int rc = -1;
+    if (v && v->t == J_STR && strlen(v->str) < n) { snprintf(out, n, "%s", v->str); rc = 0; }
+    json_free_tree(root);
+    return rc;
+}
+
+int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
+{
+    memset(c, 0, sizeof *c);
+    jval *root = lm_config_read_json(path, err, errlen);
+    if (!root) return -1;
 
     int rc = -1;
     const char *mt = NULL, *act = NULL, *rtype = NULL;
