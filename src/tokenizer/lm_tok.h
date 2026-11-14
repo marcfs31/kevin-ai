@@ -19,8 +19,20 @@
  *   - a streaming-safe UTF-8 path: a character split across tokens is emitted only when
  *     it is complete.
  *
- * Expected file: Hugging Face tokenizers JSON, normalizer NFC (or null), pre_tokenizer =
- * Sequence[Split(Qwen regex), ByteLevel], model.type BPE, ByteLevel decoder. */
+ * Two file families, told apart by the normalizer (no flag for the caller):
+ *   Qwen3.5: normalizer NFC (or null), pre_tokenizer = Sequence[Split(Qwen regex), ByteLevel],
+ *            model BPE, ByteLevel decoder.
+ *   Gemma 4: normalizer Replace " " -> U+2581, pre_tokenizer Split " ", model BPE with
+ *            byte_fallback / fuse_unk / unk_token, decoder Sequence[Replace, ByteFallback,
+ *            Fuse]. Implemented here (a heap merge, O(n log n) on a long word) rather than
+ *            in tok.h; with this family tok.h only loads the vocab, merges and added tokens.
+ *            The result matches tools/ref_tok_gemma.py. Invalid UTF-8 in the input (which HF
+ *            cannot receive) becomes one <0xXX> byte-fallback token per bad byte.
+ *            lm_tok_vocab_id takes the token's literal spelling; lm_tok_piece returns the
+ *            token's bytes (a <0xXX> token is its one byte, U+2581 is a space);
+ *            lm_tok_decode_alloc follows HF: a run of byte tokens that is not valid UTF-8
+ *            becomes one U+FFFD per byte, while the streaming path (lm_tok_piece + LmUtf8)
+ *            emits one U+FFFD per invalid sequence. */
 #ifndef LM_TOK_H
 #define LM_TOK_H
 
@@ -45,6 +57,11 @@ int lm_tok_n_ids(const LmTok *t);
  * the count in *n; NULL only on allocation failure. A zero-length text gives n == 0 and a
  * non-NULL array. Invalid UTF-8 is tokenised byte-wise, never rejected. */
 int *lm_tok_encode(const LmTok *t, const char *text, size_t len, int *n);
+
+/* As lm_tok_encode, but added tokens spelled in the text become their ids (leftmost, then
+ * longest), as the Hugging Face tokenizer does. For tests, tools and trusted text only: user
+ * text must go through lm_tok_encode. */
+int *lm_tok_encode_special(const LmTok *t, const char *text, size_t len, int *n);
 
 /* Id of an added token by its content (e.g. "<|im_start|>"), -1 when absent. */
 int lm_tok_special_id(const LmTok *t, const char *content);

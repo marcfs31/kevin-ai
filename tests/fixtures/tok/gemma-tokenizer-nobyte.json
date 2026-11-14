@@ -1,0 +1,1589 @@
+{
+ "version": "1.0",
+ "truncation": null,
+ "padding": null,
+ "added_tokens": [
+  {
+   "id": 0,
+   "content": "<pad>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 1,
+   "content": "<eos>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 2,
+   "content": "<bos>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 3,
+   "content": "<unk>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 4,
+   "content": "<mask>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 46,
+   "content": "<|tool>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 47,
+   "content": "<tool|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 48,
+   "content": "<|tool_call>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 49,
+   "content": "<tool_call|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 50,
+   "content": "<|tool_response>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 51,
+   "content": "<tool_response|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 52,
+   "content": "<|\"|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 98,
+   "content": "<|think|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 100,
+   "content": "<|channel>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 101,
+   "content": "<channel|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 105,
+   "content": "<|turn>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 106,
+   "content": "<turn|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 255999,
+   "content": "<|image>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 256000,
+   "content": "<|audio>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 258880,
+   "content": "<|image|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 258881,
+   "content": "<|audio|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 258882,
+   "content": "<image|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 258883,
+   "content": "<audio|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  },
+  {
+   "id": 258884,
+   "content": "<|video|>",
+   "single_word": false,
+   "lstrip": false,
+   "rstrip": false,
+   "normalized": false,
+   "special": true
+  }
+ ],
+ "normalizer": {
+  "type": "Replace",
+  "pattern": {
+   "String": " "
+  },
+  "content": "▁"
+ },
+ "pre_tokenizer": {
+  "type": "Split",
+  "pattern": {
+   "String": " "
+  },
+  "behavior": "MergedWithPrevious",
+  "invert": false
+ },
+ "post_processor": {
+  "type": "TemplateProcessing",
+  "single": [
+   {
+    "Sequence": {
+     "id": "A",
+     "type_id": 0
+    }
+   }
+  ],
+  "pair": [
+   {
+    "Sequence": {
+     "id": "A",
+     "type_id": 0
+    }
+   },
+   {
+    "Sequence": {
+     "id": "B",
+     "type_id": 1
+    }
+   }
+  ],
+  "special_tokens": {}
+ },
+ "decoder": {
+  "type": "Sequence",
+  "decoders": [
+   {
+    "type": "Replace",
+    "pattern": {
+     "String": "▁"
+    },
+    "content": " "
+   },
+   {
+    "type": "ByteFallback"
+   },
+   {
+    "type": "Fuse"
+   }
+  ]
+ },
+ "model": {
+  "type": "BPE",
+  "dropout": null,
+  "unk_token": "<unk>",
+  "continuing_subword_prefix": null,
+  "end_of_word_suffix": null,
+  "fuse_unk": true,
+  "byte_fallback": false,
+  "ignore_merges": false,
+  "vocab": {
+   "<pad>": 0,
+   "<eos>": 1,
+   "<bos>": 2,
+   "<unk>": 3,
+   "<mask>": 4,
+   "<|tool>": 46,
+   "<tool|>": 47,
+   "<|tool_call>": 48,
+   "<tool_call|>": 49,
+   "<|tool_response>": 50,
+   "<tool_response|>": 51,
+   "<|\"|>": 52,
+   "<|think|>": 98,
+   "<|channel>": 100,
+   "<channel|>": 101,
+   "<|turn>": 105,
+   "<turn|>": 106,
+   "<|image>": 255999,
+   "<|audio>": 256000,
+   "<|image|>": 258880,
+   "<|audio|>": 258881,
+   "<image|>": 258882,
+   "<audio|>": 258883,
+   "<|video|>": 258884,
+   "▁": 5,
+   "\n": 6,
+   "a": 7,
+   "b": 8,
+   "c": 9,
+   "d": 10,
+   "e": 11,
+   "f": 12,
+   "g": 13,
+   "h": 14,
+   "i": 15,
+   "j": 16,
+   "k": 17,
+   "l": 18,
+   "m": 19,
+   "n": 20,
+   "o": 21,
+   "p": 22,
+   "q": 23,
+   "r": 24,
+   "s": 25,
+   "t": 26,
+   "u": 27,
+   "v": 28,
+   "w": 29,
+   "x": 30,
+   "y": 31,
+   "A": 32,
+   "B": 33,
+   "C": 34,
+   "D": 35,
+   "E": 36,
+   "F": 37,
+   "0": 38,
+   "1": 39,
+   "2": 40,
+   "3": 41,
+   "4": 42,
+   "5": 43,
+   "6": 44,
+   "7": 45,
+   "8": 53,
+   "9": 54,
+   ".": 55,
+   ",": 56,
+   "!": 57,
+   "?": 58,
+   "'": 59,
+   "-": 60,
+   ":": 61,
+   "<": 62,
+   ">": 63,
+   "|": 64,
+   "(": 65,
+   ")": 66,
+   "+": 67,
+   "=": 68,
+   "_": 69,
+   "/": 70,
+   "\"": 71,
+   "é": 72,
+   "ñ": 73,
+   "▁t": 74,
+   "he": 75,
+   "in": 76,
+   "▁the": 77,
+   "aa": 78,
+   "an": 79,
+   "re": 80,
+   "en": 81,
+   "▁s": 82,
+   "at": 83,
+   "▁o": 84,
+   "▁b": 85,
+   "▁c": 86,
+   "▁m": 87,
+   "ine": 88,
+   "ken": 89,
+   "lo": 90,
+   "oken": 91,
+   "▁▁": 92,
+   "and": 93,
+   "de": 94,
+   "er": 95,
+   "es": 96,
+   "hel": 97,
+   "hello": 99,
+   "line": 102,
+   "okens": 103,
+   "the": 104,
+   "▁and": 107,
+   "▁sp": 108,
+   "▁tokens": 109,
+   "ac": 110,
+   "ad": 111,
+   "aces": 112,
+   "bb": 113,
+   "cc": 114,
+   "del": 115,
+   "odel": 116,
+   "to": 117,
+   "ur": 118,
+   "wo": 119,
+   "▁1": 120,
+   "▁a": 121,
+   "▁f": 122,
+   "▁hello": 123,
+   "▁re": 124,
+   "▁model": 125,
+   "▁on": 126,
+   "▁spaces": 127,
+   "▁th": 128,
+   "af": 129,
+   "al": 130,
+   "ay": 131,
+   "aaaa": 132,
+   "do": 133,
+   "dog": 134,
+   "end": 135,
+   "ers": 136,
+   "hat": 137,
+   "it": 138,
+   "ing": 139,
+   "into": 140,
+   "mp": 141,
+   "ree": 142,
+   "urn": 143,
+   "ño": 144,
+   "▁2": 145,
+   "▁aaaa": 146,
+   "▁dog": 147,
+   "▁end": 148,
+   "▁into": 149,
+   "▁i": 150,
+   "▁j": 151,
+   "▁l": 152,
+   "▁n": 153,
+   "▁p": 154,
+   "▁bbb": 155,
+   "▁ccc": 156,
+   "▁of": 157,
+   "▁read": 158,
+   "▁sat": 159,
+   "▁te": 160,
+   "▁two": 161,
+   "▁three": 162,
+   "▁there": 163,
+   "(a": 164,
+   "(a,": 165,
+   "):": 166,
+   "02": 167,
+   "024": 168,
+   "23": 169,
+   "234": 170,
+   "2345": 171,
+   "am": 172,
+   "ap": 173,
+   "aaa": 174,
+   "ading": 175,
+   "afe": 176,
+   "afé": 177,
+   "alap": 178,
+   "alape": 179,
+   "alapeño": 180,
+   "ama": 181,
+   "anal": 182,
+   "anama": 183,
+   "ann": 184,
+   "anne": 185,
+   "annel": 186,
+   "ate": 187,
+   "ayb": 188,
+   "aybe": 189,
+   "aybe:": 190,
+   "bers": 191,
+   "cafe": 192,
+   "chat": 193,
+   "ck": 194,
+   "den": 195,
+   "ds": 196,
+   "def": 197,
+   "dent": 198,
+   "dente": 199,
+   "dented": 200,
+   "eading": 201,
+   "eg": 202,
+   "egin": 203,
+   "eginn": 204,
+   "eginning": 205,
+   "es!": 206,
+   "fo": 207,
+   "four": 208,
+   "hannel": 209,
+   "hat?": 210,
+   "here": 211,
+   "ick": 212,
+   "iers": 213,
+   "iño": 214,
+   "indented": 215,
+   "ink": 216,
+   "ith": 217,
+   "lan": 218,
+   "late": 219,
+   "ld": 220,
+   "lit": 221,
+   "log": 222,
+   "mbers": 223,
+   "mplate": 224,
+   "mps": 225,
+   "n(a,": 226,
+   "nu": 227,
+   "numbers": 228,
+   "o.": 229,
+   "ow": 230,
+   "ox": 231,
+   "okeniers": 232,
+   "own": 233,
+   "qu": 234,
+   "quick": 235,
+   "rld": 236,
+   "rown": 237,
+   "ry": 238,
+   "re,": 239,
+   "ser": 240,
+   "tokeniers": 241,
+   "turn": 242,
+   "tory": 243,
+   "umps": 244,
+   "ure,": 245,
+   "user": 246,
+   "ver": 247,
+   "what?": 248,
+   "with": 249,
+   "world": 250,
+   "xt": 251,
+   "yes!": 252,
+   "▁+": 253,
+   "▁-": 254,
+   "▁0": 255,
+   "▁3": 256,
+   "▁4": 257,
+   "▁5": 258,
+   "▁6": 259,
+   "▁7": 260,
+   "▁8": 261,
+   "▁9": 262,
+   "▁here": 263,
+   "▁line": 264,
+   "▁log": 265,
+   "▁quick": 266,
+   "▁user": 267,
+   "▁with": 268,
+   "▁world": 269,
+   "▁yes!": 270,
+   "▁10": 271,
+   "▁12345": 272,
+   "▁2024": 273,
+   "▁aaaaa": 274,
+   "▁b):": 275,
+   "▁beginning": 276,
+   "▁brown": 277,
+   "▁bbbb": 278,
+   "▁café": 279,
+   "▁canal": 280,
+   "▁cat": 281,
+   "▁channel": 282,
+   "▁cccc": 283,
+   "▁fine": 284,
+   "▁fn(a,": 285,
+   "▁fox": 286,
+   "▁ids": 287,
+   "▁is": 288,
+   "▁jalapeño": 289,
+   "▁jumps": 290,
+   "▁lay": 291,
+   "▁leading": 292,
+   "▁man": 293,
+   "▁mat": 294,
+   "▁maybe:": 295,
+   "▁niño": 296,
+   "▁no.": 297,
+   "▁ok": 298,
+   "▁over": 299,
+   "▁one": 300,
+   "▁panama": 301,
+   "▁plan": 302,
+   "▁return": 303,
+   "▁reads": 304,
+   "▁story": 305,
+   "▁sure,": 306,
+   "▁split": 307,
+   "▁turn": 308,
+   "▁template": 309,
+   "▁text": 310,
+   "▁think": 311,
+   "▁▁four": 312,
+   "▁▁indented": 313,
+   "▁▁▁three": 314,
+   "▁▁▁▁four": 315,
+   "▁▁▁": 316,
+   "▁▁▁▁": 317
+  },
+  "merges": [
+   [
+    "▁",
+    "t"
+   ],
+   [
+    "h",
+    "e"
+   ],
+   [
+    "i",
+    "n"
+   ],
+   [
+    "▁t",
+    "he"
+   ],
+   [
+    "a",
+    "a"
+   ],
+   [
+    "a",
+    "n"
+   ],
+   [
+    "r",
+    "e"
+   ],
+   [
+    "e",
+    "n"
+   ],
+   [
+    "▁",
+    "s"
+   ],
+   [
+    "a",
+    "t"
+   ],
+   [
+    "▁",
+    "o"
+   ],
+   [
+    "▁",
+    "b"
+   ],
+   [
+    "▁",
+    "c"
+   ],
+   [
+    "▁",
+    "m"
+   ],
+   [
+    "in",
+    "e"
+   ],
+   [
+    "k",
+    "en"
+   ],
+   [
+    "l",
+    "o"
+   ],
+   [
+    "o",
+    "ken"
+   ],
+   [
+    "▁",
+    "▁"
+   ],
+   [
+    "an",
+    "d"
+   ],
+   [
+    "d",
+    "e"
+   ],
+   [
+    "e",
+    "r"
+   ],
+   [
+    "e",
+    "s"
+   ],
+   [
+    "he",
+    "l"
+   ],
+   [
+    "hel",
+    "lo"
+   ],
+   [
+    "l",
+    "ine"
+   ],
+   [
+    "oken",
+    "s"
+   ],
+   [
+    "t",
+    "he"
+   ],
+   [
+    "▁",
+    "and"
+   ],
+   [
+    "▁s",
+    "p"
+   ],
+   [
+    "▁t",
+    "okens"
+   ],
+   [
+    "a",
+    "c"
+   ],
+   [
+    "a",
+    "d"
+   ],
+   [
+    "ac",
+    "es"
+   ],
+   [
+    "b",
+    "b"
+   ],
+   [
+    "c",
+    "c"
+   ],
+   [
+    "de",
+    "l"
+   ],
+   [
+    "o",
+    "del"
+   ],
+   [
+    "t",
+    "o"
+   ],
+   [
+    "u",
+    "r"
+   ],
+   [
+    "w",
+    "o"
+   ],
+   [
+    "▁",
+    "1"
+   ],
+   [
+    "▁",
+    "a"
+   ],
+   [
+    "▁",
+    "f"
+   ],
+   [
+    "▁",
+    "hello"
+   ],
+   [
+    "▁",
+    "re"
+   ],
+   [
+    "▁m",
+    "odel"
+   ],
+   [
+    "▁o",
+    "n"
+   ],
+   [
+    "▁sp",
+    "aces"
+   ],
+   [
+    "▁t",
+    "h"
+   ],
+   [
+    "a",
+    "f"
+   ],
+   [
+    "a",
+    "l"
+   ],
+   [
+    "a",
+    "y"
+   ],
+   [
+    "aa",
+    "aa"
+   ],
+   [
+    "d",
+    "o"
+   ],
+   [
+    "do",
+    "g"
+   ],
+   [
+    "en",
+    "d"
+   ],
+   [
+    "er",
+    "s"
+   ],
+   [
+    "h",
+    "at"
+   ],
+   [
+    "i",
+    "t"
+   ],
+   [
+    "in",
+    "g"
+   ],
+   [
+    "in",
+    "to"
+   ],
+   [
+    "m",
+    "p"
+   ],
+   [
+    "re",
+    "e"
+   ],
+   [
+    "ur",
+    "n"
+   ],
+   [
+    "ñ",
+    "o"
+   ],
+   [
+    "▁",
+    "2"
+   ],
+   [
+    "▁",
+    "aaaa"
+   ],
+   [
+    "▁",
+    "dog"
+   ],
+   [
+    "▁",
+    "end"
+   ],
+   [
+    "▁",
+    "into"
+   ],
+   [
+    "▁",
+    "i"
+   ],
+   [
+    "▁",
+    "j"
+   ],
+   [
+    "▁",
+    "l"
+   ],
+   [
+    "▁",
+    "n"
+   ],
+   [
+    "▁",
+    "p"
+   ],
+   [
+    "▁b",
+    "bb"
+   ],
+   [
+    "▁c",
+    "cc"
+   ],
+   [
+    "▁o",
+    "f"
+   ],
+   [
+    "▁re",
+    "ad"
+   ],
+   [
+    "▁s",
+    "at"
+   ],
+   [
+    "▁t",
+    "e"
+   ],
+   [
+    "▁t",
+    "wo"
+   ],
+   [
+    "▁th",
+    "ree"
+   ],
+   [
+    "▁the",
+    "re"
+   ],
+   [
+    "(",
+    "a"
+   ],
+   [
+    "(a",
+    ","
+   ],
+   [
+    ")",
+    ":"
+   ],
+   [
+    "0",
+    "2"
+   ],
+   [
+    "02",
+    "4"
+   ],
+   [
+    "2",
+    "3"
+   ],
+   [
+    "23",
+    "4"
+   ],
+   [
+    "234",
+    "5"
+   ],
+   [
+    "a",
+    "m"
+   ],
+   [
+    "a",
+    "p"
+   ],
+   [
+    "aa",
+    "a"
+   ],
+   [
+    "ad",
+    "ing"
+   ],
+   [
+    "af",
+    "e"
+   ],
+   [
+    "af",
+    "é"
+   ],
+   [
+    "al",
+    "ap"
+   ],
+   [
+    "alap",
+    "e"
+   ],
+   [
+    "alape",
+    "ño"
+   ],
+   [
+    "am",
+    "a"
+   ],
+   [
+    "an",
+    "al"
+   ],
+   [
+    "an",
+    "ama"
+   ],
+   [
+    "an",
+    "n"
+   ],
+   [
+    "ann",
+    "e"
+   ],
+   [
+    "anne",
+    "l"
+   ],
+   [
+    "at",
+    "e"
+   ],
+   [
+    "ay",
+    "b"
+   ],
+   [
+    "ayb",
+    "e"
+   ],
+   [
+    "aybe",
+    ":"
+   ],
+   [
+    "b",
+    "ers"
+   ],
+   [
+    "c",
+    "afe"
+   ],
+   [
+    "c",
+    "hat"
+   ],
+   [
+    "c",
+    "k"
+   ],
+   [
+    "d",
+    "en"
+   ],
+   [
+    "d",
+    "s"
+   ],
+   [
+    "de",
+    "f"
+   ],
+   [
+    "den",
+    "t"
+   ],
+   [
+    "dent",
+    "e"
+   ],
+   [
+    "dente",
+    "d"
+   ],
+   [
+    "e",
+    "ading"
+   ],
+   [
+    "e",
+    "g"
+   ],
+   [
+    "eg",
+    "in"
+   ],
+   [
+    "egin",
+    "n"
+   ],
+   [
+    "eginn",
+    "ing"
+   ],
+   [
+    "es",
+    "!"
+   ],
+   [
+    "f",
+    "o"
+   ],
+   [
+    "fo",
+    "ur"
+   ],
+   [
+    "h",
+    "annel"
+   ],
+   [
+    "hat",
+    "?"
+   ],
+   [
+    "he",
+    "re"
+   ],
+   [
+    "i",
+    "ck"
+   ],
+   [
+    "i",
+    "ers"
+   ],
+   [
+    "i",
+    "ño"
+   ],
+   [
+    "in",
+    "dented"
+   ],
+   [
+    "in",
+    "k"
+   ],
+   [
+    "it",
+    "h"
+   ],
+   [
+    "l",
+    "an"
+   ],
+   [
+    "l",
+    "ate"
+   ],
+   [
+    "l",
+    "d"
+   ],
+   [
+    "l",
+    "it"
+   ],
+   [
+    "lo",
+    "g"
+   ],
+   [
+    "m",
+    "bers"
+   ],
+   [
+    "mp",
+    "late"
+   ],
+   [
+    "mp",
+    "s"
+   ],
+   [
+    "n",
+    "(a,"
+   ],
+   [
+    "n",
+    "u"
+   ],
+   [
+    "nu",
+    "mbers"
+   ],
+   [
+    "o",
+    "."
+   ],
+   [
+    "o",
+    "w"
+   ],
+   [
+    "o",
+    "x"
+   ],
+   [
+    "oken",
+    "iers"
+   ],
+   [
+    "ow",
+    "n"
+   ],
+   [
+    "q",
+    "u"
+   ],
+   [
+    "qu",
+    "ick"
+   ],
+   [
+    "r",
+    "ld"
+   ],
+   [
+    "r",
+    "own"
+   ],
+   [
+    "r",
+    "y"
+   ],
+   [
+    "re",
+    ","
+   ],
+   [
+    "s",
+    "er"
+   ],
+   [
+    "t",
+    "okeniers"
+   ],
+   [
+    "t",
+    "urn"
+   ],
+   [
+    "to",
+    "ry"
+   ],
+   [
+    "u",
+    "mps"
+   ],
+   [
+    "u",
+    "re,"
+   ],
+   [
+    "u",
+    "ser"
+   ],
+   [
+    "v",
+    "er"
+   ],
+   [
+    "w",
+    "hat?"
+   ],
+   [
+    "w",
+    "ith"
+   ],
+   [
+    "wo",
+    "rld"
+   ],
+   [
+    "x",
+    "t"
+   ],
+   [
+    "y",
+    "es!"
+   ],
+   [
+    "▁",
+    "+"
+   ],
+   [
+    "▁",
+    "-"
+   ],
+   [
+    "▁",
+    "0"
+   ],
+   [
+    "▁",
+    "3"
+   ],
+   [
+    "▁",
+    "4"
+   ],
+   [
+    "▁",
+    "5"
+   ],
+   [
+    "▁",
+    "6"
+   ],
+   [
+    "▁",
+    "7"
+   ],
+   [
+    "▁",
+    "8"
+   ],
+   [
+    "▁",
+    "9"
+   ],
+   [
+    "▁",
+    "here"
+   ],
+   [
+    "▁",
+    "line"
+   ],
+   [
+    "▁",
+    "log"
+   ],
+   [
+    "▁",
+    "quick"
+   ],
+   [
+    "▁",
+    "user"
+   ],
+   [
+    "▁",
+    "with"
+   ],
+   [
+    "▁",
+    "world"
+   ],
+   [
+    "▁",
+    "yes!"
+   ],
+   [
+    "▁1",
+    "0"
+   ],
+   [
+    "▁1",
+    "2345"
+   ],
+   [
+    "▁2",
+    "024"
+   ],
+   [
+    "▁aaaa",
+    "a"
+   ],
+   [
+    "▁b",
+    "):"
+   ],
+   [
+    "▁b",
+    "eginning"
+   ],
+   [
+    "▁b",
+    "rown"
+   ],
+   [
+    "▁bbb",
+    "b"
+   ],
+   [
+    "▁c",
+    "afé"
+   ],
+   [
+    "▁c",
+    "anal"
+   ],
+   [
+    "▁c",
+    "at"
+   ],
+   [
+    "▁c",
+    "hannel"
+   ],
+   [
+    "▁ccc",
+    "c"
+   ],
+   [
+    "▁f",
+    "ine"
+   ],
+   [
+    "▁f",
+    "n(a,"
+   ],
+   [
+    "▁f",
+    "ox"
+   ],
+   [
+    "▁i",
+    "ds"
+   ],
+   [
+    "▁i",
+    "s"
+   ],
+   [
+    "▁j",
+    "alapeño"
+   ],
+   [
+    "▁j",
+    "umps"
+   ],
+   [
+    "▁l",
+    "ay"
+   ],
+   [
+    "▁l",
+    "eading"
+   ],
+   [
+    "▁m",
+    "an"
+   ],
+   [
+    "▁m",
+    "at"
+   ],
+   [
+    "▁m",
+    "aybe:"
+   ],
+   [
+    "▁n",
+    "iño"
+   ],
+   [
+    "▁n",
+    "o."
+   ],
+   [
+    "▁o",
+    "k"
+   ],
+   [
+    "▁o",
+    "ver"
+   ],
+   [
+    "▁on",
+    "e"
+   ],
+   [
+    "▁p",
+    "anama"
+   ],
+   [
+    "▁p",
+    "lan"
+   ],
+   [
+    "▁re",
+    "turn"
+   ],
+   [
+    "▁read",
+    "s"
+   ],
+   [
+    "▁s",
+    "tory"
+   ],
+   [
+    "▁s",
+    "ure,"
+   ],
+   [
+    "▁sp",
+    "lit"
+   ],
+   [
+    "▁t",
+    "urn"
+   ],
+   [
+    "▁te",
+    "mplate"
+   ],
+   [
+    "▁te",
+    "xt"
+   ],
+   [
+    "▁th",
+    "ink"
+   ],
+   [
+    "▁▁",
+    "four"
+   ],
+   [
+    "▁▁",
+    "indented"
+   ],
+   [
+    "▁▁",
+    "▁three"
+   ],
+   [
+    "▁▁",
+    "▁▁four"
+   ],
+   [
+    "a",
+    "a"
+   ],
+   [
+    "aa",
+    "a"
+   ],
+   [
+    "▁",
+    "▁"
+   ],
+   [
+    "▁▁",
+    "▁"
+   ],
+   [
+    "▁▁",
+    "▁▁"
+   ]
+  ]
+ }
+}

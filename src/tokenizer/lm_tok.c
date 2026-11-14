@@ -18,9 +18,22 @@
 #include "tokenizer/lm_nfc.h"
 #include "tokenizer/lm_tok.h"
 
+enum { FAM_QWEN = 0, FAM_GEMMA = 1 };
+
+/* (left id, right id) -> (rank, merged id): the Gemma merge table, keyed by ids like the
+ * Hugging Face implementation so that a merge costs one probe and no string work. */
+typedef struct { uint64_t key; int rank, id; } PairEnt; /* key 0 = empty (see pair_key) */
+
 struct LmTok {
     Tok t;
-    int nfc; /* normalizer is NFC */
+    int nfc;    /* normalizer is NFC */
+    int family; /* FAM_QWEN | FAM_GEMMA */
+    /* Gemma only */
+    int byte_fb, fuse_unk, unk_id;
+    int byte_id[256];            /* id of "<0xXX>", -1 when the vocab has none */
+    unsigned char sp_first[256]; /* some added token starts with this byte */
+    PairEnt *pair;
+    size_t pair_cap;             /* power of two */
 };
 
 static void seterr(char *err, size_t n, const char *fmt, const char *a, const char *b)
@@ -94,10 +107,15 @@ static int check_normalizer(jval *nz, int *nfc, char *err, size_t errlen)
 
 /* Every condition under which tok_load() would exit(), plus the assumptions tok.h bakes
  * in without checking. Returns 0 when the document is usable. */
-static int validate(jval *root, int *nfc, char *err, size_t errlen)
+static int validate_gemma(jval *root, jval *model, char *err, size_t errlen);
+
+static int validate(jval *root, int *nfc, int *family, char *err, size_t errlen)
 {
     if (!root || root->t != J_OBJ) { seterr(err, errlen, "tokenizer.json: top level is not a JSON object", NULL, NULL); return -1; }
-    if (check_normalizer(json_get(root, "normalizer"), nfc, err, errlen)) return -1;
+    jval *nz = json_get(root, "normalizer");
+    jval *nzt = nz && nz->t == J_OBJ ? json_get(nz, "type") : NULL;
+    *family = (is_str(nzt) && !strcmp(nzt->str, "Replace")) ? FAM_GEMMA : FAM_QWEN;
+    if (*family == FAM_QWEN && check_normalizer(nz, nfc, err, errlen)) return -1;
     jval *model = json_get(root, "model");
     if (!model || model->t != J_OBJ) { seterr(err, errlen, "tokenizer.json: missing \"model\" object", NULL, NULL); return -1; }
     jval *type = json_get(model, "type");
@@ -106,7 +124,7 @@ static int validate(jval *root, int *nfc, char *err, size_t errlen)
         return -1;
     }
     jval *bf = json_get(model, "byte_fallback");
-    if (bf && bf->t == J_BOOL && bf->boolean) {
+    if (*family == FAM_QWEN && bf && bf->t == J_BOOL && bf->boolean) {
         seterr(err, errlen, "tokenizer.json: model.byte_fallback true is not supported", NULL, NULL);
         return -1;
     }
@@ -149,6 +167,7 @@ static int validate(jval *root, int *nfc, char *err, size_t errlen)
             return -1;
         }
     }
+    if (*family == FAM_GEMMA) return validate_gemma(root, model, err, errlen);
     int qwen = 0;
     jval *pt = json_get(root, "pre_tokenizer");
     jval *ps = pt ? json_get(pt, "pretokenizers") : NULL;
@@ -174,6 +193,145 @@ static int validate(jval *root, int *nfc, char *err, size_t errlen)
     return 0;
 }
 
+static int jbool(jval *v, int dflt)
+{
+    return v && v->t == J_BOOL ? v->boolean : dflt;
+}
+
+/* The Gemma 4 schema: normalizer Replace " " -> U+2581, pre_tokenizer Split on the literal
+ * " " (MergedWithPrevious), decoder Sequence[Replace U+2581 -> " ", ByteFallback, Fuse].
+ * Anything else changes the ids and is refused. */
+static int validate_gemma(jval *root, jval *model, char *err, size_t errlen)
+{
+    jval *nz = json_get(root, "normalizer");
+    jval *pat = json_get(nz, "pattern");
+    jval *ps = pat ? json_get(pat, "String") : NULL;
+    jval *content = json_get(nz, "content");
+    if (!is_str(ps) || strcmp(ps->str, " ") || !is_str(content) || strcmp(content->str, "\xE2\x96\x81")) {
+        seterr(err, errlen, "tokenizer.json: normalizer Replace must map \" \" to U+2581 (the only Replace this tokenizer implements)", NULL, NULL);
+        return -1;
+    }
+    jval *pt = json_get(root, "pre_tokenizer");
+    jval *ptt = pt && pt->t == J_OBJ ? json_get(pt, "type") : NULL;
+    jval *ptp = pt && pt->t == J_OBJ ? json_get(pt, "pattern") : NULL;
+    jval *pts = ptp ? json_get(ptp, "String") : NULL;
+    jval *beh = pt && pt->t == J_OBJ ? json_get(pt, "behavior") : NULL;
+    if (!is_str(ptt) || strcmp(ptt->str, "Split") || !is_str(pts) || strcmp(pts->str, " ") ||
+        !is_str(beh) || strcmp(beh->str, "MergedWithPrevious") || jbool(json_get(pt, "invert"), 0)) {
+        seterr(err, errlen, "tokenizer.json: pre_tokenizer is not Split on \" \" (MergedWithPrevious), the Gemma pre-tokenizer", NULL, NULL);
+        return -1;
+    }
+    jval *dec = json_get(root, "decoder");
+    jval *dt = dec && dec->t == J_OBJ ? json_get(dec, "type") : NULL;
+    jval *dl = dt ? json_get(dec, "decoders") : NULL;
+    static const char *const want[3] = { "Replace", "ByteFallback", "Fuse" };
+    int ok = is_str(dt) && !strcmp(dt->str, "Sequence") && dl && dl->t == J_ARR && dl->len == 3;
+    for (int i = 0; ok && i < 3; i++) {
+        jval *ty = json_get(dl->kids[i], "type");
+        ok = is_str(ty) && !strcmp(ty->str, want[i]);
+    }
+    if (ok) {
+        jval *dp = json_get(json_get(dl->kids[0], "pattern"), "String");
+        jval *dc = json_get(dl->kids[0], "content");
+        ok = is_str(dp) && !strcmp(dp->str, "\xE2\x96\x81") && is_str(dc) && !strcmp(dc->str, " ");
+    }
+    if (!ok) {
+        seterr(err, errlen, "tokenizer.json: decoder is not Sequence[Replace U+2581 -> \" \", ByteFallback, Fuse]", NULL, NULL);
+        return -1;
+    }
+    if (jbool(json_get(model, "ignore_merges"), 0)) {
+        seterr(err, errlen, "tokenizer.json: model.ignore_merges true is not supported", NULL, NULL);
+        return -1;
+    }
+    static const char *const unsupported[] = { "continuing_subword_prefix", "end_of_word_suffix", "dropout" };
+    for (int i = 0; i < 3; i++) {
+        jval *v = json_get(model, unsupported[i]);
+        if (v && v->t != J_NULL && !(v->t == J_STR && v->str && !v->str[0])) {
+            seterr(err, errlen, "tokenizer.json: model.%s is not supported", unsupported[i], NULL);
+            return -1;
+        }
+    }
+    jval *unk = json_get(model, "unk_token");
+    if (unk && unk->t != J_NULL && !is_str(unk)) {
+        seterr(err, errlen, "tokenizer.json: model.unk_token must be a string or null", NULL, NULL);
+        return -1;
+    }
+    return 0;
+}
+
+static uint64_t pair_key(int l, int r) { return ((uint64_t)(unsigned)l << 32) | (uint64_t)(unsigned)r | (1ULL << 63); }
+
+static size_t pair_slot(uint64_t key, size_t cap)
+{
+    uint64_t h = key * 0x9E3779B97F4A7C15ULL;
+    return (size_t)(h >> 20) & (cap - 1);
+}
+
+/* Build the id-keyed merge table; every merge must name vocab entries and its concatenation
+ * must be one too (Hugging Face refuses such a file; so do we). */
+static int build_gemma(LmTok *t, char *err, size_t errlen)
+{
+    jval *model = json_get(t->t.json_root_, "model");
+    jval *merges = json_get(model, "merges");
+    t->pair_cap = 1;
+    while (t->pair_cap < (size_t)merges->len * 2) t->pair_cap <<= 1;
+    t->pair = (PairEnt *)calloc(t->pair_cap, sizeof(PairEnt));
+    if (!t->pair) { seterr(err, errlen, "out of memory", NULL, NULL); return -1; }
+    char *cat = NULL;
+    size_t catcap = 0;
+    for (int i = 0; i < merges->len; i++) {
+        jval *m = merges->kids[i];
+        const char *l, *r;
+        size_t ll, rl;
+        if (m->t == J_STR) {
+            const char *sp = strchr(m->str, ' ');
+            l = m->str; ll = (size_t)(sp - m->str); r = sp + 1; rl = strlen(r);
+        } else {
+            l = m->kids[0]->str; ll = strlen(l); r = m->kids[1]->str; rl = strlen(r);
+        }
+        if (ll + rl > catcap) {
+            free(cat);
+            catcap = (ll + rl) * 2 + 64;
+            cat = (char *)malloc(catcap);
+            if (!cat) { seterr(err, errlen, "out of memory", NULL, NULL); return -1; }
+        }
+        memcpy(cat, l, ll);
+        memcpy(cat + ll, r, rl);
+        int a = hm_get(&t->t.vocab, l, (int)ll), b = hm_get(&t->t.vocab, r, (int)rl);
+        int c = hm_get(&t->t.vocab, cat, (int)(ll + rl));
+        if (a < 0 || b < 0 || c < 0) {
+            char num[32];
+            snprintf(num, sizeof num, "%d", i);
+            seterr(err, errlen, "tokenizer.json: merge %s names a token (or a result) missing from model.vocab", num, NULL);
+            free(cat);
+            return -1;
+        }
+        uint64_t key = pair_key(a, b);
+        size_t s = pair_slot(key, t->pair_cap);
+        while (t->pair[s].key && t->pair[s].key != key) s = (s + 1) & (t->pair_cap - 1);
+        t->pair[s].key = key; /* a duplicated pair keeps its LAST rank, like HF's map */
+        t->pair[s].rank = i;
+        t->pair[s].id = c;
+    }
+    free(cat);
+    jval *unk = json_get(model, "unk_token");
+    t->byte_fb = jbool(json_get(model, "byte_fallback"), 0);
+    t->fuse_unk = jbool(json_get(model, "fuse_unk"), 0);
+    t->unk_id = -1;
+    if (is_str(unk)) {
+        t->unk_id = hm_get(&t->t.vocab, unk->str, (int)strlen(unk->str));
+        if (t->unk_id < 0) { seterr(err, errlen, "tokenizer.json: unk_token %s is not in model.vocab", unk->str, NULL); return -1; }
+    }
+    for (int b = 0; b < 256; b++) {
+        char name[8];
+        snprintf(name, sizeof name, "<0x%02X>", b);
+        t->byte_id[b] = hm_get(&t->t.vocab, name, 6);
+    }
+    for (int i = 0; i < t->t.nsp; i++)
+        if (t->t.sp[i].len > 0) t->sp_first[(unsigned char)t->t.sp[i].str[0]] = 1;
+    return 0;
+}
+
 LmTok *lm_tok_open(const char *path, char *err, size_t errlen)
 {
     if (err && errlen) err[0] = 0;
@@ -185,8 +343,8 @@ LmTok *lm_tok_open(const char *path, char *err, size_t errlen)
         seterr(err, errlen, "tokenizer file %s is not valid JSON (malformed or truncated)", path, NULL);
         return NULL;
     }
-    int nfc = 0;
-    int bad = validate(root, &nfc, err, errlen);
+    int nfc = 0, family = FAM_QWEN;
+    int bad = validate(root, &nfc, &family, err, errlen);
     json_free_tree(root);
     if (bad) return NULL;
 
@@ -196,6 +354,11 @@ LmTok *lm_tok_open(const char *path, char *err, size_t errlen)
      * there, and that tree stays alive for the table pointers until tok_free(). */
     tok_load(&t->t, path);
     t->nfc = nfc;
+    t->family = family;
+    if (family == FAM_GEMMA) {
+        if (build_gemma(t, err, errlen)) { lm_tok_close(t); return NULL; }
+        return t;
+    }
     if (!t->t.qwen35) { /* unreachable after validate(); defends the tok.h contract */
         seterr(err, errlen, "tokenizer.json: Qwen3.5 pre-tokenizer not recognised", NULL, NULL);
         tok_free(&t->t);
@@ -208,15 +371,234 @@ LmTok *lm_tok_open(const char *path, char *err, size_t errlen)
 void lm_tok_close(LmTok *t)
 {
     if (!t) return;
+    free(t->pair);
     tok_free(&t->t);
     free(t);
 }
 
 int lm_tok_n_ids(const LmTok *t) { return t->t.n_ids; }
 
+/* ---- Gemma: BPE with byte fallback over one word ---------------------------------------
+ * The normalizer turns every " " into U+2581 and the Split pre-tokenizer never fires after
+ * that, so a text segment (the text between added tokens) is ONE word. Symbols are token
+ * ids; merges come from the id-pair table. A doubly linked list plus a min-heap of
+ * (rank, position) makes a word of n symbols cost O(n log n): the pair with the lowest
+ * rank is merged first, the leftmost on ties, which is HF's order. Heap entries go stale
+ * when a neighbour merges; they are re-validated on pop instead of being deleted. */
+
+typedef struct { int rank, i, j, li, rj; } HeapEnt;
+
+typedef struct {
+    int *ids, *prev, *next;
+    HeapEnt *heap;
+    int hn;
+    size_t cap; /* symbols */
+} Work;
+
+static int work_reserve(Work *w, size_t n)
+{
+    if (n <= w->cap) return 0;
+    free(w->ids); free(w->prev); free(w->next); free(w->heap);
+    w->ids = (int *)malloc(n * sizeof(int));
+    w->prev = (int *)malloc(n * sizeof(int));
+    w->next = (int *)malloc(n * sizeof(int));
+    w->heap = (HeapEnt *)malloc((3 * n + 4) * sizeof(HeapEnt));
+    w->cap = (w->ids && w->prev && w->next && w->heap) ? n : 0;
+    return w->cap ? 0 : -1;
+}
+
+static int heap_less(const HeapEnt *a, const HeapEnt *b)
+{
+    return a->rank != b->rank ? a->rank < b->rank : a->i < b->i;
+}
+
+static void heap_push(Work *w, HeapEnt e)
+{
+    int k = w->hn++;
+    while (k > 0) {
+        int up = (k - 1) / 2;
+        if (!heap_less(&e, &w->heap[up])) break;
+        w->heap[k] = w->heap[up];
+        k = up;
+    }
+    w->heap[k] = e;
+}
+
+static HeapEnt heap_pop(Work *w)
+{
+    HeapEnt top = w->heap[0], e = w->heap[--w->hn];
+    int k = 0;
+    for (;;) {
+        int c = 2 * k + 1;
+        if (c >= w->hn) break;
+        if (c + 1 < w->hn && heap_less(&w->heap[c + 1], &w->heap[c])) c++;
+        if (!heap_less(&w->heap[c], &e)) break;
+        w->heap[k] = w->heap[c];
+        k = c;
+    }
+    if (w->hn > 0) w->heap[k] = e;
+    return top;
+}
+
+static const PairEnt *pair_find(const LmTok *t, int l, int r)
+{
+    uint64_t key = pair_key(l, r);
+    size_t s = pair_slot(key, t->pair_cap);
+    while (t->pair[s].key) {
+        if (t->pair[s].key == key) return &t->pair[s];
+        s = (s + 1) & (t->pair_cap - 1);
+    }
+    return NULL;
+}
+
+static void queue_pair(const LmTok *t, Work *w, int i)
+{
+    int j = w->next[i];
+    if (j < 0) return;
+    const PairEnt *pe = pair_find(t, w->ids[i], w->ids[j]);
+    if (pe) {
+        HeapEnt e = { pe->rank, i, j, w->ids[i], w->ids[j] };
+        heap_push(w, e);
+    }
+}
+
+/* Length of the strictly valid UTF-8 sequence at p (<= avail), 0 if p starts an invalid one. */
+static int u8_strict_len(const unsigned char *p, size_t avail)
+{
+    unsigned char c = p[0];
+    int need;
+    if (c < 0x80) return 1;
+    if (c >= 0xC2 && c <= 0xDF) need = 2;
+    else if (c >= 0xE0 && c <= 0xEF) need = 3;
+    else if (c >= 0xF0 && c <= 0xF4) need = 4;
+    else return 0;
+    if ((size_t)need > avail) return 0;
+    for (int k = 1; k < need; k++) {
+        unsigned lo = 0x80, hi = 0xBF;
+        if (k == 1) {
+            if (c == 0xE0) lo = 0xA0;
+            else if (c == 0xED) hi = 0x9F;
+            else if (c == 0xF0) lo = 0x90;
+            else if (c == 0xF4) hi = 0x8F;
+        }
+        if (p[k] < lo || p[k] > hi) return 0;
+    }
+    return need;
+}
+
+static const unsigned char SPACE_U2581[3] = { 0xE2, 0x96, 0x81 };
+
+/* Encode one word (raw text bytes p[0..len)) and append its ids to out[*no]. */
+static int gemma_word(const LmTok *t, Work *w, const unsigned char *p, size_t len, int *out, int *no)
+{
+    if (!len) return 0;
+    if (work_reserve(w, len)) return -1;
+    int n = 0, unk_run = 0;
+    for (size_t i = 0; i < len;) {
+        const unsigned char *c;
+        int cl, adv;
+        if (p[i] == ' ') { c = SPACE_U2581; cl = 3; adv = 1; }
+        else {
+            adv = u8_strict_len(p + i, len - i);
+            if (!adv) adv = 1; /* invalid byte: its own "character" (HF never sees one) */
+            c = p + i; cl = adv;
+        }
+        i += (size_t)adv;
+        int id = hm_get((hmap *)&t->t.vocab, (const char *)c, cl);
+        if (id >= 0) { w->ids[n++] = id; unk_run = 0; continue; }
+        if (t->byte_fb) {
+            int ok = 1;
+            for (int k = 0; k < cl; k++) if (t->byte_id[c[k]] < 0) ok = 0;
+            if (ok) {
+                for (int k = 0; k < cl; k++) w->ids[n++] = t->byte_id[c[k]];
+                unk_run = 0;
+                continue;
+            }
+        }
+        if (t->unk_id >= 0) {
+            if (!(unk_run && t->fuse_unk)) w->ids[n++] = t->unk_id;
+            unk_run = 1;
+        }
+    }
+    for (int i = 0; i < n; i++) { w->prev[i] = i - 1; w->next[i] = i + 1 < n ? i + 1 : -1; }
+    w->hn = 0;
+    for (int i = 0; i + 1 < n; i++) queue_pair(t, w, i);
+    while (w->hn) {
+        HeapEnt e = heap_pop(w);
+        int i = e.i, j = e.j;
+        /* stale: i or j merged away (their ids changed or they left the list) */
+        if (w->next[i] != j || w->ids[i] != e.li || w->ids[j] != e.rj || w->ids[j] < 0) continue;
+        const PairEnt *pe = pair_find(t, e.li, e.rj);
+        if (!pe || pe->rank != e.rank) continue;
+        w->ids[i] = pe->id;
+        w->ids[j] = -1; /* dead */
+        w->next[i] = w->next[j];
+        if (w->next[j] >= 0) w->prev[w->next[j]] = i;
+        if (w->prev[i] >= 0) queue_pair(t, w, w->prev[i]);
+        queue_pair(t, w, i);
+    }
+    for (int i = 0; i >= 0 && i < n; i = w->next[i]) out[(*no)++] = w->ids[i];
+    return 0;
+}
+
+/* Encode with added tokens parsed (special != 0: HF's behaviour) or as plain text. The
+ * added tokens are matched on the raw text, leftmost then longest. */
+static int *gemma_encode(const LmTok *t, const char *text, size_t len, int special, int *n)
+{
+    if (len > (size_t)INT_MAX / 8) return NULL;
+    int *out = (int *)malloc((len + 1) * sizeof(int));
+    if (!out) return NULL;
+    Work w;
+    memset(&w, 0, sizeof w);
+    const unsigned char *p = (const unsigned char *)text;
+    int no = 0;
+    size_t seg = 0;
+    int bad = 0;
+    for (size_t i = 0; i < len && special;) {
+        int hit = -1;
+        size_t hl = 0;
+        if (t->sp_first[p[i]]) {
+            for (int k = 0; k < t->t.nsp; k++) { /* sp is sorted longest first */
+                size_t sl = (size_t)t->t.sp[k].len;
+                if (sl && i + sl <= len && !memcmp(p + i, t->t.sp[k].str, sl)) { hit = t->t.sp[k].id; hl = sl; break; }
+            }
+        }
+        if (hit < 0) { i++; continue; }
+        if (gemma_word(t, &w, p + seg, i - seg, out, &no)) { bad = 1; break; }
+        out[no++] = hit;
+        i += hl;
+        seg = i;
+    }
+    if (!bad && gemma_word(t, &w, p + seg, len - seg, out, &no)) bad = 1;
+    free(w.ids); free(w.prev); free(w.next); free(w.heap);
+    if (bad) { free(out); return NULL; }
+    *n = no;
+    return out;
+}
+
+int *lm_tok_encode_special(const LmTok *t, const char *text, size_t len, int *n)
+{
+    *n = 0;
+    if (t->family == FAM_GEMMA) return gemma_encode(t, text, len, 1, n);
+    if (len > (size_t)INT_MAX / 8) return NULL;
+    char *norm = NULL;
+    if (t->nfc && len) {
+        size_t nl = 0;
+        norm = lm_nfc(text, len, &nl);
+        if (!norm) return NULL;
+        text = norm;
+        len = nl;
+    }
+    int *out = (int *)malloc(((size_t)len + 1) * sizeof(int));
+    if (out && len) *n = tok_encode_mode((Tok *)&t->t, text, (int)len, out, (int)len + 1, 1);
+    free(norm);
+    return out;
+}
+
 int *lm_tok_encode(const LmTok *t, const char *text, size_t len, int *n)
 {
     *n = 0;
+    if (t->family == FAM_GEMMA) return gemma_encode(t, text, len, 0, n);
     if (len > (size_t)INT_MAX / 8) return NULL;
     char *norm = NULL;
     if (t->nfc && len) {
@@ -260,6 +642,37 @@ int lm_tok_vocab_id(const LmTok *t, const char *bytelevel)
     return hm_get((hmap *)&t->t.vocab, bytelevel, (int)strlen(bytelevel));
 }
 
+/* "<0xXX>" -> the byte, or -1 (exactly the shape HF's ByteFallback decoder accepts). */
+static int byte_token(const char *s)
+{
+    if (strlen(s) != 6 || memcmp(s, "<0x", 3) || s[5] != '>') return -1;
+    int v = 0;
+    for (int k = 3; k < 5; k++) {
+        int c = (unsigned char)s[k], d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else return -1;
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+/* Gemma piece bytes: a byte token is its one byte, anything else its string with each
+ * U+2581 turned into a space. Never longer than strlen(s). */
+static int gemma_piece(const char *s, char *out)
+{
+    int b = byte_token(s);
+    if (b >= 0) { out[0] = (char)b; return 1; }
+    int o = 0;
+    for (const char *q = s; *q;) {
+        if ((unsigned char)q[0] == SPACE_U2581[0] && (unsigned char)q[1] == SPACE_U2581[1] &&
+            (unsigned char)q[2] == SPACE_U2581[2]) { out[o++] = ' '; q += 3; } /* && stops at the NUL */
+        else out[o++] = *q++;
+    }
+    return o;
+}
+
 int lm_tok_piece(const LmTok *t, int id, char *out, size_t cap)
 {
     if (id < 0 || id >= t->t.n_ids) return -1;
@@ -267,11 +680,53 @@ int lm_tok_piece(const LmTok *t, int id, char *out, size_t cap)
     if (!s) return 0;
     size_t bound = strlen(s); /* decoded length never exceeds the byte-level string */
     if (bound > cap) return -1;
+    if (t->family == FAM_GEMMA) return gemma_piece(s, out);
     return tok_decode((Tok *)&t->t, &id, 1, out, (int)cap);
+}
+
+/* Gemma decode, HF semantics: a maximal run of byte tokens is decoded as UTF-8 and, if the
+ * run is not valid, EVERY byte of it becomes U+FFFD. */
+static char *gemma_decode(const LmTok *t, const int *ids, int n, size_t *len)
+{
+    size_t cap = 1;
+    for (int i = 0; i < n; i++)
+        if (ids[i] >= 0 && ids[i] < t->t.n_ids && t->t.id2str[ids[i]]) cap += strlen(t->t.id2str[ids[i]]);
+    char *out = (char *)malloc(cap + 1);
+    if (!out) return NULL;
+    size_t o = 0;
+    for (int i = 0; i < n;) {
+        const char *s = (ids[i] >= 0 && ids[i] < t->t.n_ids) ? t->t.id2str[ids[i]] : NULL;
+        if (!s) { i++; continue; }
+        if (byte_token(s) < 0) { o += (size_t)gemma_piece(s, out + o); i++; continue; }
+        int j = i;
+        size_t run = 0, o0 = o;
+        for (; j < n; j++) {
+            const char *sj = (ids[j] >= 0 && ids[j] < t->t.n_ids) ? t->t.id2str[ids[j]] : NULL;
+            if (!sj) continue; /* an id with no token is skipped, it does not end the run */
+            int b = byte_token(sj);
+            if (b < 0) break;
+            out[o0 + run++] = (char)b;
+        }
+        int valid = 1;
+        for (size_t k = 0; k < run && valid;) {
+            int l = u8_strict_len((const unsigned char *)out + o0 + k, run - k);
+            if (!l) valid = 0; else k += (size_t)l;
+        }
+        o = o0 + run;
+        if (!valid) { /* one U+FFFD per byte; fits because each byte token spells 6 chars */
+            for (size_t k = 0; k < run; k++) memcpy(out + o0 + 3 * k, "\xEF\xBF\xBD", 3);
+            o = o0 + run * 3;
+        }
+        i = j;
+    }
+    out[o] = 0;
+    if (len) *len = o;
+    return out;
 }
 
 char *lm_tok_decode_alloc(const LmTok *t, const int *ids, int n, size_t *len)
 {
+    if (t->family == FAM_GEMMA) return gemma_decode(t, ids, n, len);
     size_t cap = 1;
     for (int i = 0; i < n; i++) {
         int id = ids[i];
