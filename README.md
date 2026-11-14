@@ -2,7 +2,7 @@
 
 A C99 CPU inference engine for small language models, written from scratch for an
 8 GB machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512),
-8 GB RAM, Ubuntu Server, with the model weights on the NVMe SSD.
+8 GB RAM, Ubuntu Server 26.04.1 LTS, with the model weights on the NVMe SSD.
 
 ## Status
 

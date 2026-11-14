@@ -3,7 +3,7 @@
 ## Decision
 
 Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2, no AVX-512), 8 GB RAM, 238 GB NVMe
-SSD, 931 GB 5400 rpm HDD, Ubuntu Server 26.04. Owner's choice (2026-11-13): run
+SSD, 931 GB 5400 rpm HDD, Ubuntu Server 26.04.1 LTS. Owner's choice (2026-11-13): run
 **Qwen3.5-4B** and **Gemma 4 E4B** with a from-scratch C engine in the style of
 kimi-k3-in-c, replacing the earlier gpt-oss-20b plan.
 
