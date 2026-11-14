@@ -1,7 +1,7 @@
 /* lm_template.h -- chat formats behind one small interface, so the generation loop
  * (lm_chat.c) never learns a model's special tokens. Phase 1 ships Qwen3.5
- * (lm_template_qwen35); a Gemma 4 template is a second constructor returning the same
- * LmTemplate, with no change to lm_chat.
+ * (lm_template_qwen35) and Gemma 4 (lm_template_gemma4), two constructors returning the
+ * same LmTemplate, with no change to lm_chat.
  *
  * A template does two things:
  *   render  a conversation -> the exact token ids to feed, ending in the generation prompt;
@@ -100,6 +100,14 @@ struct LmTemplate {
  * a stop id. NULL with a message in err if the tokenizer lacks <|im_start|>, <|im_end|>,
  * <think>, </think>, <tool_call> or </tool_call>. tok must outlive the template. */
 LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen);
+/* Gemma 4 (the model's chat_template.jinja, text-only): <bos>, an optional system turn that
+ * carries the thinking flag, <|turn>user|model\n ... <turn|>\n turns, generation prompt
+ * <|turn>model\n. <turn|> is always a stop id; eos_ids are the others (generation_config.json
+ * eos_token_id: <eos>, <turn|>, <|tool_response>). NULL with a message in err if the
+ * tokenizer lacks <bos>, <|turn>, <turn|>, <|think|>, <|channel>, <channel|>, <|tool_call>
+ * or <tool_call|>. tok must outlive the template. The parser reports "<|channel>thought\n
+ * ... <channel|>" as reasoning. */
+LmTemplate *lm_template_gemma4(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen);
 void        lm_template_free(LmTemplate *t);
 
 #endif

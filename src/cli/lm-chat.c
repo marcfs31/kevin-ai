@@ -5,8 +5,10 @@
  *           [--top-k K] [--seed N] [--max-tokens N] [--ctx N] [--threads N]
  *           [--strict-template] [--stats]
  *
- * DIR holds config.json and tokenizer.json (Hugging Face layout). --weights names a q8
- * file from lm-quant; without it the bf16 safetensors in DIR are streamed (exact, slow).
+ * DIR holds config.json and tokenizer.json (Hugging Face layout; Gemma 4 also
+ * generation_config.json). The model family comes from config.json model_type (qwen3_5 or
+ * gemma4) and selects the chat template, the stop ids and the sampling defaults. --weights
+ * names a q8 file from lm-quant; without it the bf16 safetensors in DIR are streamed (exact, slow).
  * With --prompt the single answer is streamed to stdout and the program exits; without it
  * lines are read from stdin, one user turn per line: "/reset" starts over, "/exit" (or
  * end of input) quits. stdout carries only the answer; notices, reasoning (with
@@ -14,8 +16,10 @@
  * and keeps the process (at the prompt it quits).
  *
  * Thinking is off by default: a think block costs hundreds of tokens at a few tokens/s.
- * Sampling defaults when a flag is absent: temperature 0.7, top-p 0.8 without thinking;
- * 0.6, 0.95 with; top-k 20. Original to this repository. */
+ * Sampling defaults when a flag is absent: for Qwen3.5 temperature 0.7, top-p 0.8 without
+ * thinking; 0.6, 0.95 with; top-k 20. For Gemma 4 the temperature, top_k and top_p of
+ * generation_config.json (1.0, 64, 0.95 in the release), the Qwen numbers for any key it
+ * lacks. Original to this repository. */
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -27,16 +31,10 @@
 #include <unistd.h>
 
 #include "chat/lm_chat.h"
+#include "chat/lm_profile.h"
 #include "chat/lm_template.h"
 #include "lm/lm.h"
 #include "tokenizer/lm_tok.h"
-
-/* json.h is a header-only library of file-scope functions; the suppression is scoped to
- * this include so first-party dead code still warns. */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
-#include "json.h"
-#pragma GCC diagnostic pop
 
 static volatile sig_atomic_t g_cancel = 0;
 static volatile sig_atomic_t g_in_turn = 0;
@@ -57,63 +55,6 @@ static int cancelled(void *user) { (void)user; return g_cancel != 0; }
 static int be_feed(void *ctx, int token, float *logits) { return lm_feed((LmModel *)ctx, token, logits); }
 static void be_reset(void *ctx) { lm_reset((LmModel *)ctx); }
 static int be_pos(void *ctx) { return lm_pos((const LmModel *)ctx); }
-
-/* ---- config.json: model_type and eos ids ------------------------------------------ */
-
-typedef struct { char model_type[64]; int eos[8]; int n_eos; } ModelInfo;
-
-static int read_all(const char *path, char **out, char *err, size_t errlen)
-{
-    FILE *f = fopen(path, "rb");
-    if (!f) { snprintf(err, errlen, "cannot open %s: %s", path, strerror(errno)); return -1; }
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *b = n >= 0 && n < (1L << 26) ? (char *)malloc((size_t)n + 1) : NULL;
-    if (!b || fread(b, 1, (size_t)n, f) != (size_t)n) {
-        snprintf(err, errlen, "cannot read %s", path);
-        free(b); fclose(f);
-        return -1;
-    }
-    fclose(f);
-    b[n] = 0;
-    *out = b;
-    return 0;
-}
-
-static void add_eos(ModelInfo *mi, const jval *v)
-{
-    if (v && v->t == J_NUM && v->num >= 0 && mi->n_eos < 8) mi->eos[mi->n_eos++] = (int)v->num;
-}
-
-static int read_model_info(const char *dir, ModelInfo *mi, char *err, size_t errlen)
-{
-    char path[4096], *buf = NULL;
-    snprintf(path, sizeof path, "%s/config.json", dir);
-    if (read_all(path, &buf, err, errlen)) return -1;
-    jval *root = json_parse(buf, NULL);
-    free(buf);
-    if (!root || root->t != J_OBJ) { snprintf(err, errlen, "%s is not valid JSON", path); json_free_tree(root); return -1; }
-    memset(mi, 0, sizeof *mi);
-    jval *mt = json_get(root, "model_type");
-    if (!mt || mt->t != J_STR || !mt->str) { snprintf(err, errlen, "%s has no model_type", path); json_free_tree(root); return -1; }
-    snprintf(mi->model_type, sizeof mi->model_type, "%s", mt->str);
-    jval *tc = json_get(root, "text_config");
-    jval *e = json_get(tc && tc->t == J_OBJ ? tc : root, "eos_token_id");
-    if (!e) e = json_get(root, "eos_token_id");
-    if (e && e->t == J_ARR) for (int i = 0; i < e->len; i++) add_eos(mi, e->kids[i]);
-    else add_eos(mi, e);
-    json_free_tree(root);
-    return 0;
-}
-
-/* The one place that maps a model family to its chat format. */
-static LmTemplate *make_template(const ModelInfo *mi, const LmTok *tok, char *err, size_t errlen)
-{
-    if (!strcmp(mi->model_type, "qwen3_5")) return lm_template_qwen35(tok, mi->eos, mi->n_eos, err, errlen);
-    snprintf(err, errlen, "no chat template for model_type \"%s\" (phase 1 supports qwen3_5)", mi->model_type);
-    return NULL;
-}
 
 /* ---- output ----------------------------------------------------------------------- */
 
@@ -241,17 +182,18 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "lm-chat: unknown option %s\n", a); usage(stderr); return 2; }
     }
     if (!model) { fputs("lm-chat: --model DIR is required\n", stderr); usage(stderr); return 2; }
-    if (temperature < 0) temperature = think ? 0.6 : 0.7;
-    if (top_p < 0) top_p = think ? 0.95 : 0.8;
-    if (top_k < 0) top_k = 20;
 
     char err[1024] = "", path[4096];
-    ModelInfo mi;
-    if (read_model_info(model, &mi, err, sizeof err)) { fprintf(stderr, "lm-chat: %s\n", err); return 1; }
+    LmProfile prof;
+    if (lm_profile_read(model, &prof, err, sizeof err)) { fprintf(stderr, "lm-chat: %s\n", err); return 1; }
+    /* flag > the model directory's generation_config.json > the built-in default */
+    if (temperature < 0) temperature = prof.has_temperature ? prof.temperature : think ? 0.6 : 0.7;
+    if (top_p < 0) top_p = prof.has_top_p ? prof.top_p : think ? 0.95 : 0.8;
+    if (top_k < 0) top_k = prof.has_top_k ? prof.top_k : 20;
     snprintf(path, sizeof path, "%s/tokenizer.json", model);
     LmTok *tok = lm_tok_open(path, err, sizeof err);
     if (!tok) { fprintf(stderr, "lm-chat: %s\n", err); return 1; }
-    LmTemplate *tpl = make_template(&mi, tok, err, sizeof err);
+    LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-chat: %s\n", err); lm_tok_close(tok); return 1; }
 
     LmOpts lo = { weights, (int)ctx, (int)threads };
