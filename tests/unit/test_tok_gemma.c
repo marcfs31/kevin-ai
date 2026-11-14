@@ -20,6 +20,7 @@
 #include "tokenizer/lm_tok.h"
 
 static int g_fail = 0, g_checks = 0;
+#undef CHECK /* lm_test.h defines its own; this file counts with g_checks/g_fail */
 #define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
 #define FIX "tests/fixtures/tok/gemma-tokenizer.json"

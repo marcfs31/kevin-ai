@@ -198,7 +198,7 @@ static void test_config_rejections(void)
 
 static void link_fixture_weights(const char *dir)
 {
-    char real[PATH_MAX_], src[2048], dst[2048];
+    char real[PATH_MAX_], src[PATH_MAX_ + 128], dst[PATH_MAX_ + 128];
     static const char *const files[] = { "model.safetensors.index.json",
         "model.safetensors-00001-of-00002.safetensors", "model.safetensors-00002-of-00002.safetensors" };
     CHECK(realpath(FIX, real) != NULL);

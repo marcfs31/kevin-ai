@@ -430,7 +430,7 @@ static void test_config_rejections(void)
 
 static void link_fixture_weights(const char *dir)
 {
-    char real[PATH_MAX_], src[2048], dst[2048];
+    char real[PATH_MAX_], src[PATH_MAX_ + 128], dst[PATH_MAX_ + 128];
     CHECK(realpath(FIX, real) != NULL);
     snprintf(src, sizeof src, "%s/model.safetensors", real);
     snprintf(dst, sizeof dst, "%s/model.safetensors", dir);
