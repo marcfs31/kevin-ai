@@ -1,5 +1,6 @@
 /* test_tok.c -- tokenizer (lm_tok), NFC (lm_nfc) and the streaming UTF-8 decoder, against
  * the synthetic fixture tests/fixtures/tok/qwen-tokenizer.json. Run from the repo root. */
+#include "lm_test.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
