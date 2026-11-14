@@ -1,0 +1,21 @@
+name: ci-heavy
+
+# Backstop for the local .githooks/pre-push run of scripts/ci-heavy.sh. Weekly, not per pull.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  heavy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Heavy checks (sanitizers, portable build)
+        run: scripts/ci-heavy.sh
