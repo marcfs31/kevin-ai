@@ -106,10 +106,6 @@ esac
 MODEL_DIR="${MODEL_DIR_ARG:-$HOME/models/$MODEL}"
 MIN_FREE_BYTES=$((CHECKPOINT_BYTES + ONE_GB))
 
-if [ "$MODEL" = gemma-4-e4b ]; then
-  echo "note: the engine does not run Gemma 4 yet (phase 2). This fetches the checkpoint only."
-fi
-
 for cmd in curl sha256sum; do
   command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
 done
