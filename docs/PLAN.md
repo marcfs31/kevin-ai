@@ -149,13 +149,129 @@ orchestrating session reviews the oracle itself against the transformers source.
 | B | Qwen3.5 forward | Sonnet: iterate against the oracle | `src/model`, `src/cli/lm-run.c` |
 | C | integration, gates, review | orchestrator | merges, final gate |
 
-## Phase 2: Gemma 4 E4B (after phase 1 passes gate 2)
+## Phase 2: Gemma 4 E4B text (normative: transformers `modeling_gemma4.py`)
 
-Reuses io, kernels, q8, tokenizer machinery and chat loop; adds a `gemma4` forward with
-per-layer input embeddings (`hidden_size_per_layer_input` 256 x 42 layers, read per
-token from the mmapped file), sliding (512) and full attention with different head
-dims and RoPE types, KV shared by the last 18 layers, GELU-tanh MLP, final logit
-softcap 30, and the Gemma chat template. Its own oracle and tiny fixture, same gates.
+Reuses io, kernels, q8 (unchanged format and quantiser), tokenizer machinery, sampler
+and chat loop. Reference copies (transformers main, fetched 2026-11-14) in
+`/private/tmp/claude-501/-Users-marcfors-Documents-Self-Hosted-LLM/e66db16d-b4f1-4a8b-b27d-cc43b2cb8009/scratchpad/gemma/`:
+`modeling_gemma4.py` (classes `Gemma4RMSNorm`, `Gemma4TextMLP`,
+`Gemma4TextRotaryEmbedding`, `Gemma4TextAttention`, `eager_attention_forward`,
+`Gemma4TextDecoderLayer`, `Gemma4TextScaledWordEmbedding`, `Gemma4TextModel`,
+`Gemma4ForCausalLM`), `configuration_gemma4.py` (`kv_sharing_modes`, `__post_init__`),
+`modeling_rope_utils.py` (`_compute_proportional_rope_parameters`), `masking_utils.py`
+(`sliding_window_overlay`), `config.json`, `generation_config.json`,
+`chat_template.jinja`, `tokenizer_config.json`, `gemma_header.json` (real tensor
+header), `tokdl/tokenizer.json` (real tokenizer, sha256 91d9cf86…). Where this section
+and those files disagree, the files win.
+
+**Config.** `config.json` top-level `model_type` `gemma4`, numbers in `text_config`
+(`model_type` `gemma4_text`). E4B: 42 layers; `layer_types` 5 x sliding_attention then
+1 x full_attention, repeated (full at 5, 11, ..., 41); hidden 2560; intermediate 10240;
+`hidden_activation` gelu_pytorch_tanh; 8 heads, 2 KV heads; `head_dim` 256 (sliding),
+`global_head_dim` 512 (full); `sliding_window` 512; `num_kv_shared_layers` 18;
+`hidden_size_per_layer_input` 256; `vocab_size` = `vocab_size_per_layer_input` = 262144;
+`rms_norm_eps` 1e-6; `final_logit_softcapping` 30; `tie_word_embeddings` true;
+`rope_parameters` {sliding_attention: default, theta 1e4; full_attention: proportional,
+partial_rotary_factor 0.25, theta 1e6}. Strict like phase 1: every field read, a
+missing one is an error. Fail loudly (unsupported, not defaulted) on: `enable_moe_block`
+true, `attention_k_eq_v` true, `use_double_wide_mlp` true, `use_bidirectional_attention`
+non-null, `num_global_key_value_heads` non-null, an explicit `per_layer_config`, a
+`layer_types` whose last entry is not full_attention, `attention_bias` true, a rope
+type other than default/proportional, `hidden_size_per_layer_input` 0.
+
+Tensor prefix `model.language_model.`; ignore everything else (vision, audio,
+`embed_vision`, `embed_audio`). One file `model.safetensors` (no index).
+
+**Norm.** `rms(x, w) = x * (mean(x^2) + eps)^(-1/2) * w` — plain `w`, NOT `1 + w`
+(differs from Qwen). `v_norm` has no weight (`w = 1`).
+
+**Embedding.** `e = embed_tokens[t] * s`, `s = bf16(sqrt(hidden))` — the scale is
+rounded to bf16 before use, as the reference does (`embed_scale.to(weight.dtype)`):
+50.5 for 2560. Same rule for the per-layer table with `bf16(sqrt(256)) = 16`.
+
+**Per-layer inputs (PLE), once per token before layer 0.** `L` layers, `P` =
+`hidden_size_per_layer_input`:
+`tok = embed_tokens_per_layer[t] * bf16(sqrt(P))` viewed `[L, P]`;
+`ctx = (per_layer_model_projection @ e) * hidden^(-1/2)` (`[L*P, hidden]`, not
+bf16-rounded) viewed `[L, P]`, each row `rms(row, per_layer_projection_norm)`;
+`ple[l] = (ctx[l] + tok[l]) * 2^(-1/2)`. The table `[vocab, L*P]` (5.6 GB bf16) is read
+one row per token, never resident.
+
+**Decoder layer `l`** (`layer_scalar` is a stored `[1]` tensor):
+```
+h = x + post_attention_layernorm(attn(input_layernorm(x)))
+h = h + post_feedforward_layernorm(mlp(pre_feedforward_layernorm(h)))
+g = gelu_tanh(per_layer_input_gate @ h) * ple[l]          # [P]
+h = h + post_per_layer_input_norm(per_layer_projection @ g)
+x' = h * layer_scalar
+```
+`mlp(t) = down(gelu_tanh(gate(t)) * up(t))`,
+`gelu_tanh(x) = 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3)))`.
+
+**Attention.** Head dim `d` = 256 sliding, 512 full. Per head:
+`q = rope(rms(q_proj x, q_norm))`, `k = rope(rms(k_proj x, k_norm))`,
+`v = rms(v_proj x)` (no weight). Scores `q.k` with scaling **1.0** (no `1/sqrt(d)`), no
+attention softcap, GQA head `h` uses KV head `h / (heads / kv_heads)`, softmax, then
+`o_proj`. Causal; sliding layers additionally mask key `j` unless `j > i - window` (512
+keys including the current one).
+
+**RoPE**, rotate-half over the WHOLE head (pairs `i`, `i + d/2`), angle `pos * f[i]`
+for `i < d/2`. Sliding (default): `f[i] = theta^(-2i/d)`. Full (proportional):
+`r = int(partial * d / 2)` = 64; `f[i] = theta^(-2i/d)` for `i < r`, `f[i] = 0` for
+`r <= i < d/2` (those dims pass through), divided by `factor` when present. Note the
+exponent denominator is `d` = 512, not the rotated width (differs from Qwen).
+
+**KV sharing.** `first = layers - num_kv_shared_layers` (24). Layers `>= first` are
+"reuse": they have no K/V of their own (their `k_proj`, `v_proj`, `k_norm` tensors exist
+in the checkpoint and are ignored) and attend with their own `q` to the K/V cache of the
+LAST layer `< first` of the same type (sliding: 22, full: 23), under their own type's
+mask. So only layers `< first` keep a KV cache; a sliding cache needs only the last
+`window` positions.
+
+**Output.** `logits = cap * tanh((embed_tokens @ rms(x, norm)) / cap)`, `cap` =
+`final_logit_softcapping` (the unembedding is the unscaled tied embedding).
+
+**Memory on 8 GB.** Text weights in q8 are about 8.5 GB: the per-layer table is about
+3.2 GB but is read one 12 KB row per token (page cache, evictable), and the shared
+layers' unused K/V tensors are never touched, so the hot working set is about 5.3 GB.
+Tighter than Qwen; same speed caveat: an estimate until measured.
+
+**Tokenizer** (`tokenizer.json` BPE): normalizer replaces `" "` with `"▁"` (U+2581);
+the Split pre-tokenizer then never fires, so each text segment between added tokens is
+ONE word; BPE with `ignore_merges` false, merges as two-element arrays,
+`byte_fallback` true (a char not in the vocab becomes `<0xXX>` tokens, one per UTF-8
+byte, that never merge), `fuse_unk` true; no BOS added by the tokenizer (the template
+writes `<bos>`). 24 `added_tokens` (all special, `normalized` false) are matched in the
+raw text first. Decoder: `▁` -> space, byte-fallback tokens reassembled to UTF-8, no
+strip. Must handle long single words without quadratic blow-up on a 2k-token prompt.
+
+**Chat template** (`chat_template.jinja`, text only, no tools):
+`<bos>` + [`<|turn>system\n` + trim(system) + `<turn|>\n`] + per message
+`<|turn>{user|model}\n` + trim(content) + `<turn|>\n`; generation prompt
+`<|turn>model\n`. Thinking off by default (`enable_thinking` false; on adds
+`<|think|>\n` at the top of a system turn). Stop ids from `generation_config.json`
+`eos_token_id` [1, 106, 50]; sampling defaults temp 1.0, top_k 64, top_p 0.95. Earlier
+model turns are re-rendered with `<|channel>...<channel|>` thought blocks stripped —
+same verbatim-history default and `--strict-template` option as Qwen.
+
+**Tiny fixture** `tests/fixtures/gemma4-tiny/` (real schema, single
+`model.safetensors`, real tensor names incl. ignored vision tensors and the unused
+K/V tensors of shared layers): 12 layers, `layer_types` 5 sliding + 1 full twice,
+`num_kv_shared_layers` 4 (store layers 7 sliding and 5 full; layers 8–11 reuse),
+hidden 64, intermediate 128, 4 heads, 2 KV heads, `head_dim` 16, `global_head_dim` 32,
+`sliding_window` 8, `hidden_size_per_layer_input` 8, vocab 384 for both vocab sizes,
+`layer_scalar` random in [0.5, 1.5], `final_logit_softcapping` chosen so the cap bites
+(max pre-cap |logit| at least cap/2), real rope params. Golden prompt longer than 2 x
+window. Same golden files, q8 file and gate as Qwen.
+
+## Tracks (phase 2)
+
+| stage | track | model | owns |
+|---|---|---|---|
+| A | Gemma oracle, tiny fixture, new op fixtures | Sonnet: bounded numeric port, exact acceptance | `tools/ref_gemma4.py`, `tools/make_tiny_gemma4.py`, `tools/make_ops.py`, `tools/test_tools.py`, `tools/check_golden.py`, `tests/fixtures/gemma4-tiny/`, `tests/fixtures/ops/` |
+| A | Gemma tokenizer + template | Sonnet: bounded adaptation, Python reference as oracle | `src/tokenizer`, `src/chat`, `src/cli/lm-chat.c`, `third_party/tok.h`, `tests/fixtures/tok/`, `tools/ref_tok_gemma.py`, their tests |
+| B | Gemma forward | Sonnet: iterate against the oracle | `src/model`, `src/core/lm_ops.*`, `src/cli/lm-run.c`, their tests |
+| C | integration, gates, review | orchestrator | merges, Makefile `gate`, final gate |
 
 ## Later
 
