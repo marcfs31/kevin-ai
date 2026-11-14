@@ -9,6 +9,7 @@
 #include "chat/lm_sampler.h"
 
 static int g_fail = 0, g_checks = 0;
+#undef CHECK /* lm_test.h defines its own; this file counts with g_checks/g_fail */
 #define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
 /* Reference PCG32 (pcg-c basic): seeded with (42, 54) it yields a15c02b7 7b47f409 ba1d3330
