@@ -6,6 +6,11 @@ Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2), 8 GB RAM, Ubuntu Server 26
 Status: phase 1. The engine has not yet been run on the real checkpoint or on the AVX2
 build, and the speed below is an estimate, not a measurement. See the README for details.
 
+**Fast path:** after `sudo apt install build-essential python3 curl` and copying the repo
+to the server, `scripts/install.sh` does steps 3 to 7 below in one go (build, tests,
+download, q8 file, pre-flight report). `--model gemma-4-e4b` or `--model both` picks the
+model, `--help` lists the rest. The steps below are the same thing by hand.
+
 Run each step in order. Commands run on the server unless stated otherwise.
 
 ## 1. Install the build tools
@@ -13,7 +18,7 @@ Run each step in order. Commands run on the server unless stated otherwise.
 Run this yourself, with sudo:
 
 ```sh
-sudo apt install build-essential curl
+sudo apt install build-essential python3 curl
 ```
 
 The scripts never use sudo.

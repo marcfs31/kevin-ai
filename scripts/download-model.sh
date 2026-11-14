@@ -32,7 +32,6 @@ gemma-4-e4b (phase 2, Apache-2.0)
     tokenizer.json      32156428 bytes, sha256 pinned
     config.json, tokenizer_config.json, chat_template.jinja, generation_config.json
                         no pinned size or hash (presence checked)
-  The engine does not run Gemma 4 yet (phase 2). This only fetches the checkpoint.
 
 Behaviour:
   - Requires curl and sha256sum, and free space of the checkpoint size plus 1 GB.
