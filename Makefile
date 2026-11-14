@@ -62,6 +62,7 @@ test: $(TESTS)
 
 gate: bin/lm-run bin/lm-quant
 	python3 tools/check_golden.py --run bin/lm-run --quant bin/lm-quant --fixtures tests/fixtures/qwen35-tiny
+	python3 tools/check_golden.py --run bin/lm-run --quant bin/lm-quant --fixtures tests/fixtures/gemma4-tiny
 
 sanitize:
 	$(MAKE) B=build-san OPT="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" test
