@@ -1,5 +1,6 @@
 /* test_chat.c -- the generation loop (lm_chat) against a scripted fake backend, with the
  * fixture tokenizer and the Qwen template. Run from the repo root. */
+#include "lm_test.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>

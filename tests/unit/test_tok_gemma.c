@@ -10,6 +10,7 @@
  *     s HEX      encode with added tokens     -> "ids<TAB>microseconds"
  *     d ID...    decode_alloc, as hex         -> "hex"
  *     p ID...    lm_tok_piece joined, as hex  -> "hex" (the streaming path's bytes) */
+#include "lm_test.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

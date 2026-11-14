@@ -5,6 +5,7 @@
  * is made of: a "<...>" entry is a special token (looked up by content), anything else
  * is ordinary text spelled as the vocabulary entry the fixture holds for it. Run from the
  * repo root. */
+#include "lm_test.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
