@@ -9,10 +9,10 @@ A C99 CPU inference engine for small language models, written from scratch for a
 - **Qwen3.5-4B (phase 1) and Gemma 4 E4B (phase 2) are both implemented.** Each passes its
   golden gate on a tiny synthetic model, checked against a float64 oracle. The Gemma
   oracle agrees with Hugging Face transformers to 5e-9.
-- **Nothing has run on a real checkpoint yet.** The AVX2 build and the speed numbers are
-  not measured. The first server run is the measurement.
-- **Speed is an estimate.** Roughly 2 to 4 tokens/s for Qwen q8, bounded by memory
-  bandwidth (about 4.75 GB read per token).
+- **Qwen3.5-4B runs on the real checkpoint** (first run, 2026-11-14, on the target machine).
+  It answers correctly. Measured with the q8 weights: about **1.7 tokens/s** generating and
+  about **1.9 tokens/s** on the prompt. Speed is bounded by memory bandwidth (about 4.75 GB
+  read per token). Gemma 4 E4B has not been run on the real checkpoint yet.
 
 The full plan, with the normative model equations and test gates, is in
 [docs/PLAN.md](docs/PLAN.md).
@@ -42,8 +42,8 @@ What this means for the engine:
 - **Gemma 4 E4B is tight.** Its q8 file is about 8.5 GB, larger than RAM; only the
   per-token working set (about 5.3 GB) stays hot, the rest is read from the SSD on demand.
 - **Verified on this machine (first run, 2026-11-14):** the build, all unit tests and both
-  golden gates pass under gcc 15 with OpenMP and the AVX2 kernels. Model downloads, real
-  weights and tokens per second have not been measured yet.
+  golden gates pass under gcc 15 with OpenMP and the AVX2 kernels. The real Qwen3.5-4B
+  checkpoint loads and answers; the speed is in the Status section above.
 
 ## The two models
 
@@ -476,7 +476,7 @@ sequenceDiagram
 ```
 
 Every token reads each layer's weights once, so speed is bounded by how fast those bytes
-can be read (see the speed estimate above). KV caches exist only where a layer owns one
+can be read (see the measured speed in Status). KV caches exist only where a layer owns one
 (Gemma's shared layers reuse their producer's cache), so memory grows with context only
 through those caches.
 
@@ -495,7 +495,7 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 ```
 
 - Thinking is off by default (`--no-think`). A thinking block costs many tokens at this speed.
-- `--stats` prints tokens/s to stderr. Please record it: it is the first real speed number.
+- `--stats` prints tokens/s to stderr.
 - Sampling defaults come from `generation_config.json` for Gemma; flags override them.
 
 ### bin/lm-run

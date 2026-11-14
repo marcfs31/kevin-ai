@@ -3,8 +3,8 @@
 Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2), 8 GB RAM, Ubuntu Server 26.04.1 LTS,
 238 GB NVMe SSD for the system and weights, 931 GB 5400 rpm HDD (do not put weights here).
 
-Status: phase 1. The engine has not yet been run on the real checkpoint or on the AVX2
-build, and the speed below is an estimate, not a measurement. See the README for details.
+Status: phase 1. The engine runs the real Qwen3.5-4B checkpoint on the target machine, at
+about 1.7 tokens/s generating with the q8 weights (see the README for details).
 
 **Fast path:** after `sudo apt install build-essential python3 curl` and copying the repo
 to the server, `scripts/install.sh` does steps 3 to 7 below in one go (build, tests,
