@@ -1,7 +1,8 @@
-/* lm_template.c -- Qwen3.5 chat format. Original to this repository.
+/* lm_template.c -- Qwen3.5 and Gemma 4 chat formats. Original to this repository.
  *
- * Normative source: Qwen3.5-4B's chat_template.jinja, text-only path (no tools, no
- * images). Everything below mirrors that file; the comments name the jinja it mirrors.
+ * Normative sources: Qwen3.5-4B's chat_template.jinja and Gemma 4's chat_template.jinja,
+ * text-only path (no tools, no images). Everything below mirrors those files; the comments
+ * name the jinja they mirror.
  *
  * The jinja produces one string that the Hugging Face tokenizer then splits on added
  * tokens. Here the structure is built directly: the template's own markers are emitted
@@ -115,7 +116,7 @@ typedef struct {
 /* ---- builder: text segments between special ids --------------------------------- */
 
 typedef struct {
-    const Qwen *q;
+    const LmTok *tok;
     LmIds *out;
     char *txt;
     size_t n, cap;
@@ -144,7 +145,7 @@ static void b_flush(Bld *b)
 {
     if (b->oom || !b->n) return;
     int n = 0;
-    int *ids = lm_tok_encode(b->q->tok, b->txt, b->n, &n);
+    int *ids = lm_tok_encode(b->tok, b->txt, b->n, &n);
     if (!ids || lm_ids_append(b->out, ids, n)) b->oom = 1;
     free(ids);
     b->n = 0;
@@ -158,16 +159,16 @@ static void b_special(Bld *b, int id)
 
 /* '<|im_start|>assistant\n' + ('<think>\n' | '<think>\n\n</think>\n\n') -- the generation
  * prompt, and, for verbatim history, the opening of an assistant turn. */
-static void b_assistant_open(Bld *b, int thinking)
+static void b_assistant_open(Bld *b, const Qwen *q, int thinking)
 {
-    b_special(b, b->q->im_start);
+    b_special(b, q->im_start);
     b_text(b, "assistant\n");
-    b_special(b, b->q->think);
+    b_special(b, q->think);
     if (thinking) {
         b_text(b, "\n");
     } else {
         b_text(b, "\n\n");
-        b_special(b, b->q->think_end);
+        b_special(b, q->think_end);
         b_text(b, "\n\n");
     }
 }
@@ -195,7 +196,7 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
     for (int i = 1; i < n; i++)
         if (msgs[i].role == LM_ROLE_SYSTEM) FAIL("System message must be at the beginning.");
 
-    Bld b = { q, out, NULL, 0, 0, 0 };
+    Bld b = { q->tok, out, NULL, 0, 0, 0 };
     for (int i = 0; i < n; i++) {
         const LmMsg *m = &msgs[i];
         Sl content = sl_trim(sl_of(m->content));
@@ -213,7 +214,7 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
             b_text(&b, "\n");
         } else {
             if (opts->verbatim_history && m->gen_ids) {
-                b_assistant_open(&b, m->gen_thinking);
+                b_assistant_open(&b, q, m->gen_thinking);
                 b_flush(&b);
                 if (!b.oom && lm_ids_append(out, m->gen_ids, m->n_gen_ids)) b.oom = 1;
             } else {
@@ -255,7 +256,7 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
             b_text(&b, "\n");
         }
     }
-    b_assistant_open(&b, opts->enable_thinking);
+    b_assistant_open(&b, q, opts->enable_thinking);
     b_flush(&b);
     free(b.txt);
     if (b.oom) FAIL("out of memory");
@@ -275,9 +276,21 @@ typedef struct {
 
 enum { ST_THINK, ST_ANSWER, ST_TOOL };
 
+/* What the parser needs to know about a family's markers. */
+typedef struct {
+    const LmTok *tok;
+    int think, think_end, tool_call, tool_call_end;
+    int stop[MAX_STOP];
+    int n_stop;
+    /* Gemma: the text after the think-open id up to the first newline names the channel
+     * ("thought") and is not reasoning. */
+    int channel_header;
+} PFmt;
+
 typedef struct {
     LmParser base;
-    const Qwen *q;
+    PFmt f;
+    int hdr_pending; /* still inside the channel name */
     int state;
     LmUtf8 u;
     Strm reason, answer;
@@ -319,6 +332,13 @@ static void strm_push(Strm *s, LmOutKind kind, const char *in, size_t n, LmSink 
 
 static void route(QParser *p, const char *bytes, size_t n, LmSink sink, void *user)
 {
+    if (p->hdr_pending) {
+        const char *nl = (const char *)memchr(bytes, '\n', n);
+        if (!nl) return;
+        p->hdr_pending = 0;
+        n -= (size_t)(nl + 1 - bytes);
+        bytes = nl + 1;
+    }
     if (!n) return;
     if (p->state == ST_THINK) strm_push(&p->reason, LM_OUT_REASONING, bytes, n, sink, user);
     else if (p->state == ST_ANSWER) strm_push(&p->answer, LM_OUT_ANSWER, bytes, n, sink, user);
@@ -336,6 +356,7 @@ static void enter(QParser *p, int state)
 {
     p->state = state;
     p->base.thinking_open = state == ST_THINK;
+    p->hdr_pending = state == ST_THINK && p->f.channel_header;
     if (state == ST_THINK) strm_reset(&p->reason);
     if (state == ST_ANSWER) strm_reset(&p->answer);
 }
@@ -343,7 +364,7 @@ static void enter(QParser *p, int state)
 static int qp_feed(LmParser *base, int id, LmSink sink, void *user)
 {
     QParser *p = (QParser *)base;
-    const Qwen *q = p->q;
+    const PFmt *q = &p->f;
     for (int i = 0; i < q->n_stop; i++) {
         if (q->stop[i] == id) { flush_utf8(p, sink, user); return LM_PARSE_STOP; }
     }
@@ -397,17 +418,25 @@ static void qp_destroy(LmParser *base)
     free(p);
 }
 
-static LmParser *q_parser_new(const LmTemplate *t, int thinking)
+static LmParser *parser_new(const PFmt *f, int start_in_think)
 {
     QParser *p = (QParser *)calloc(1, sizeof *p);
     if (!p) return NULL;
-    p->q = (const Qwen *)t->impl;
+    p->f = *f;
     p->base.feed = qp_feed;
     p->base.finish = qp_finish;
     p->base.destroy = qp_destroy;
     lm_utf8_init(&p->u);
-    enter(p, thinking ? ST_THINK : ST_ANSWER);
+    enter(p, start_in_think ? ST_THINK : ST_ANSWER);
     return &p->base;
+}
+
+static LmParser *q_parser_new(const LmTemplate *t, int thinking)
+{
+    const Qwen *q = (const Qwen *)t->impl;
+    PFmt f = { q->tok, q->think, q->think_end, q->tool_call, q->tool_call_end, { 0 }, q->n_stop, 0 };
+    memcpy(f.stop, q->stop, sizeof f.stop);
+    return parser_new(&f, thinking); /* the Qwen generation prompt itself opens the block */
 }
 
 static int q_is_stop(const LmTemplate *t, int id)
@@ -453,6 +482,169 @@ LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, 
     t->is_stop = q_is_stop;
     t->destroy = q_destroy;
     t->impl = q;
+    return t;
+}
+
+/* ---- Gemma 4 --------------------------------------------------------------------
+ * Mirrors chat_template.jinja of google/gemma-4-E4B-it, text only:
+ *   <bos>
+ *   [<|turn>system\n [<|think|>\n] trim(system) <turn|>\n]      when thinking or a system message
+ *   (<|turn>user|model\n trim(content) <turn|>\n)*
+ *   <|turn>model\n                                              the generation prompt
+ * Thinking is a flag of the system turn, not of the generation prompt. A model turn's
+ * content passes through strip_thinking: every <|channel>...<channel|> block is dropped. */
+
+typedef struct {
+    const LmTok *tok;
+    int bos, turn, turn_end, think, channel, channel_end, tool_call, tool_call_end;
+    int stop[MAX_STOP];
+    int n_stop;
+} Gemma;
+
+/* strip_thinking(text) of the jinja: split on '<channel|>'; in each part keep what precedes
+ * the first '<|channel>'; join; trim. Returns a malloc'd NUL-terminated string. */
+static char *strip_thinking(Sl s, size_t *outn)
+{
+    char *res = (char *)malloc(s.n + 1);
+    if (!res) return NULL;
+    size_t o = 0;
+    Sl rest = s;
+    for (;;) {
+        const char *end = sl_find(rest, "<channel|>");
+        Sl part = { rest.p, end ? (size_t)(end - rest.p) : rest.n };
+        const char *open = sl_find(part, "<|channel>");
+        size_t keep = open ? (size_t)(open - part.p) : part.n;
+        memcpy(res + o, part.p, keep);
+        o += keep;
+        if (!end) break;
+        rest.n -= (size_t)(end + 10 - rest.p);
+        rest.p = end + 10;
+    }
+    Sl t = sl_trim((Sl){ res, o });
+    memmove(res, t.p, t.n);
+    res[t.n] = 0;
+    *outn = t.n;
+    return res;
+}
+
+static int g_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRenderOpts *opts,
+                    LmIds *out, char *err, size_t errlen)
+{
+    const Gemma *g = (const Gemma *)t->impl;
+#define FAIL(m) do { if (err && errlen) snprintf(err, errlen, "%s", m); return -1; } while (0)
+    out->n = 0;
+    if (n <= 0) FAIL("No messages provided.");
+    int last_user = -1;
+    for (int i = 0; i < n; i++) if (msgs[i].role == LM_ROLE_USER) last_user = i;
+    if (last_user < 0) FAIL("No user query found in messages.");
+    for (int i = 1; i < n; i++) {
+        if (msgs[i].role == LM_ROLE_SYSTEM) FAIL("System message must be at the beginning.");
+        /* the jinja merges consecutive assistant messages into one model turn (tool flows) */
+        if (msgs[i].role == LM_ROLE_ASSISTANT && msgs[i - 1].role == LM_ROLE_ASSISTANT)
+            FAIL("Consecutive assistant messages are not supported.");
+    }
+
+    Bld b = { g->tok, out, NULL, 0, 0, 0 };
+    int first_sys = msgs[0].role == LM_ROLE_SYSTEM;
+    b_special(&b, g->bos);
+    if (opts->enable_thinking || first_sys) {
+        b_special(&b, g->turn);
+        b_text(&b, "system\n");
+        if (opts->enable_thinking) { b_special(&b, g->think); b_text(&b, "\n"); }
+        if (first_sys) b_sl(&b, sl_trim(sl_of(msgs[0].content)));
+        b_special(&b, g->turn_end);
+        b_text(&b, "\n");
+    }
+    for (int i = first_sys ? 1 : 0; i < n; i++) {
+        const LmMsg *m = &msgs[i];
+        int model = m->role == LM_ROLE_ASSISTANT;
+        b_special(&b, g->turn);
+        b_text(&b, model ? "model\n" : "user\n");
+        if (!model) {
+            b_sl(&b, sl_trim(sl_of(m->content)));
+        } else if (opts->verbatim_history && m->gen_ids) {
+            b_flush(&b);
+            if (!b.oom && lm_ids_append(out, m->gen_ids, m->n_gen_ids)) b.oom = 1;
+        } else {
+            /* reasoning is rendered only for a model turn after the last user message */
+            if (m->reasoning && m->reasoning[0] && i > last_user) {
+                b_special(&b, g->channel);
+                b_text(&b, "thought\n");
+                b_text(&b, m->reasoning);
+                b_text(&b, "\n");
+                b_special(&b, g->channel_end);
+            }
+            size_t cn = 0;
+            char *c = strip_thinking(sl_of(m->content), &cn);
+            if (!c) b.oom = 1;
+            else b_text_n(&b, c, cn);
+            free(c);
+        }
+        b_special(&b, g->turn_end);
+        b_text(&b, "\n");
+    }
+    b_special(&b, g->turn);
+    b_text(&b, "model\n");
+    b_flush(&b);
+    free(b.txt);
+    if (b.oom) FAIL("out of memory");
+    return 0;
+#undef FAIL
+}
+
+/* The generation prompt never opens a channel, so output starts as the answer even with
+ * thinking on; the model opens "<|channel>thought\n" itself when it thinks. */
+static LmParser *g_parser_new(const LmTemplate *t, int thinking)
+{
+    (void)thinking;
+    const Gemma *g = (const Gemma *)t->impl;
+    PFmt f = { g->tok, g->channel, g->channel_end, g->tool_call, g->tool_call_end, { 0 }, g->n_stop, 1 };
+    memcpy(f.stop, g->stop, sizeof f.stop);
+    return parser_new(&f, 0);
+}
+
+static int g_is_stop(const LmTemplate *t, int id)
+{
+    const Gemma *g = (const Gemma *)t->impl;
+    for (int i = 0; i < g->n_stop; i++) if (g->stop[i] == id) return 1;
+    return 0;
+}
+
+static void g_destroy(LmTemplate *t) { free(t->impl); }
+
+LmTemplate *lm_template_gemma4(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen)
+{
+    Gemma *g = (Gemma *)calloc(1, sizeof *g);
+    LmTemplate *t = (LmTemplate *)calloc(1, sizeof *t);
+    if (!g || !t) {
+        free(g); free(t);
+        if (err && errlen) snprintf(err, errlen, "out of memory");
+        return NULL;
+    }
+    g->tok = tok;
+    if (lm_tok_require(tok, "<bos>", &g->bos, err, errlen) ||
+        lm_tok_require(tok, "<|turn>", &g->turn, err, errlen) ||
+        lm_tok_require(tok, "<turn|>", &g->turn_end, err, errlen) ||
+        lm_tok_require(tok, "<|think|>", &g->think, err, errlen) ||
+        lm_tok_require(tok, "<|channel>", &g->channel, err, errlen) ||
+        lm_tok_require(tok, "<channel|>", &g->channel_end, err, errlen) ||
+        lm_tok_require(tok, "<|tool_call>", &g->tool_call, err, errlen) ||
+        lm_tok_require(tok, "<tool_call|>", &g->tool_call_end, err, errlen)) {
+        free(g); free(t);
+        return NULL;
+    }
+    g->stop[g->n_stop++] = g->turn_end;
+    for (int i = 0; i < n_eos; i++) {
+        int dup = 0;
+        for (int j = 0; j < g->n_stop; j++) if (g->stop[j] == eos_ids[i]) dup = 1;
+        if (!dup && eos_ids[i] >= 0 && g->n_stop < MAX_STOP) g->stop[g->n_stop++] = eos_ids[i];
+    }
+    t->name = "gemma4";
+    t->render = g_render;
+    t->parser_new = g_parser_new;
+    t->is_stop = g_is_stop;
+    t->destroy = g_destroy;
+    t->impl = g;
     return t;
 }
 
