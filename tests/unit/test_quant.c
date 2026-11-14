@@ -545,12 +545,10 @@ static void test_multiblock(void)
  * fixture is read in place, never copied; absence is a FAILURE, not a skip. */
 static void test_reference_fixture(void)
 {
-    static const char *const cands[] = {
-        "tests/fixtures/qwen35-tiny",
-        "/Users/marcfors/Documents/Self Hosted LLM/.claude/worktrees/agent-a0aba2250d37ff760/tests/fixtures/qwen35-tiny" };
+    static const char *const cands[] = { "tests/fixtures/qwen35-tiny" };
     const char *dir = NULL;
     char probe[1200];
-    for (int i = 0; i < 2 && !dir; i++) {
+    for (int i = 0; i < 1 && !dir; i++) {
         snprintf(probe, sizeof probe, "%s/model.q8.safetensors", cands[i]);
         if (access(probe, R_OK) == 0) dir = cands[i];
     }
