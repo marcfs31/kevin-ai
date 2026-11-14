@@ -171,3 +171,96 @@ void lm_silu_mul(float *out, const float *gate, const float *up, int n)
 {
     for (int i = 0; i < n; i++) out[i] = lm_silu(gate[i]) * up[i];
 }
+
+/* ------------------------------------------------------------------ Gemma 4 */
+
+void lm_rmsnorm_plain(float *y, const float *x, const float *w, int n, float eps)
+{
+    double ss = 0.0;
+    for (int i = 0; i < n; i++) ss += (double)x[i] * (double)x[i];
+    const float inv = (float)(1.0 / sqrt(ss / (double)n + (double)eps));
+    if (w) for (int i = 0; i < n; i++) y[i] = (x[i] * inv) * w[i];
+    else for (int i = 0; i < n; i++) y[i] = x[i] * inv;
+}
+
+void lm_gelu_tanh_mul(float *out, const float *gate, const float *up, int n)
+{
+    for (int i = 0; i < n; i++) out[i] = lm_gelu_tanh(gate[i]) * up[i];
+}
+
+int lm_rope_freqs(double *freqs, int head_dim, double theta, double partial)
+{
+    if (head_dim < 2 || (head_dim & 1) || !(theta > 0.0) || !(partial > 0.0 && partial <= 1.0)) return -1;
+    const int half = head_dim / 2;
+    const int r = (int)(partial * (double)head_dim / 2.0);
+    for (int i = 0; i < half; i++)
+        freqs[i] = i < r ? pow(theta, -2.0 * (double)i / (double)head_dim) : 0.0;
+    return 0;
+}
+
+int lm_rope_freqs_apply(float *x, int n_heads, int head_dim, const double *freqs, int pos)
+{
+    if (head_dim < 2 || (head_dim & 1) || n_heads < 0 || pos < 0) return -1;
+    const int half = head_dim / 2;
+    for (int i = 0; i < half; i++) {
+        const double ang = (double)pos * freqs[i];
+        const float c = (float)cos(ang), s = (float)sin(ang);
+        for (int h = 0; h < n_heads; h++) {
+            float *hv = x + (size_t)h * head_dim;
+            const float a = hv[i], b = hv[i + half];
+            hv[i] = a * c - b * s;
+            hv[i + half] = b * c + a * s;
+        }
+    }
+    return 0;
+}
+
+void lm_logit_softcap(float *x, int n, float cap)
+{
+    const float inv = 1.0f / cap;
+    for (int i = 0; i < n; i++) x[i] = cap * tanhf(x[i] * inv);
+}
+
+int lm_attn_window(float *out, const float *q, const float *k_cache, const float *v_cache,
+                   int pos, int window, int slots, int n_heads, int n_kv_heads, int head_dim,
+                   float scaling, float *scores)
+{
+    if (pos < 0 || slots < 1 || n_kv_heads < 1 || n_heads < n_kv_heads || n_heads % n_kv_heads != 0) return -1;
+    const int first = (window > 0 && pos - window + 1 > 0) ? pos - window + 1 : 0;
+    const int nvis = pos - first + 1;
+    if (nvis > slots) return -1;
+    const int group = n_heads / n_kv_heads;
+    const size_t stride = (size_t)n_kv_heads * head_dim;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (n_heads > 1 && nvis > 64)
+#endif
+    for (int h = 0; h < n_heads; h++) {
+        const int kvh = h / group;
+        const float *qh = q + (size_t)h * head_dim;
+        float *sc = scores + (size_t)h * nvis;
+        float mx = -INFINITY;
+        for (int t = 0; t < nvis; t++) {
+            const float *kt = k_cache + (size_t)((first + t) % slots) * stride + (size_t)kvh * head_dim;
+            float d = 0.0f;
+            for (int i = 0; i < head_dim; i++) d += qh[i] * kt[i];
+            d *= scaling;
+            sc[t] = d;
+            if (d > mx) mx = d;
+        }
+        double sum = 0.0;
+        for (int t = 0; t < nvis; t++) {
+            const float e = expf(sc[t] - mx);
+            sc[t] = e;
+            sum += (double)e;
+        }
+        const float inv = (float)(1.0 / sum);
+        float *oh = out + (size_t)h * head_dim;
+        for (int i = 0; i < head_dim; i++) oh[i] = 0.0f;
+        for (int t = 0; t < nvis; t++) {
+            const float *vt = v_cache + (size_t)((first + t) % slots) * stride + (size_t)kvh * head_dim;
+            const float p = sc[t] * inv;
+            for (int i = 0; i < head_dim; i++) oh[i] += p * vt[i];
+        }
+    }
+    return 0;
+}
