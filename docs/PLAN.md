@@ -28,8 +28,8 @@ sampler, vendored tokenizer/JSON headers.
 
 ## Phase 1 model: Qwen3.5 text (normative: transformers `modeling_qwen3_5.py`)
 
-Reference copy: `/private/tmp/claude-501/-Users-marcfors--claude-spares-spare-4OZGox/
-e66db16d-b4f1-4a8b-b27d-cc43b2cb8009/scratchpad/hf2/modeling_qwen3_5.py`, classes
+Upstream reference: `src/transformers/models/qwen3_5/modeling_qwen3_5.py` in the
+transformers repository, classes
 `Qwen3_5TextRotaryEmbedding`, `Qwen3_5RMSNormGated`, `torch_recurrent_gated_delta_rule`,
 `Qwen3_5GatedDeltaNet`, `Qwen3_5Attention`, `Qwen3_5MLP`, `Qwen3_5RMSNorm`,
 `Qwen3_5DecoderLayer`, `Qwen3_5TextModel`. Where this section and that file disagree,
@@ -152,8 +152,8 @@ orchestrating session reviews the oracle itself against the transformers source.
 ## Phase 2: Gemma 4 E4B text (normative: transformers `modeling_gemma4.py`)
 
 Reuses io, kernels, q8 (unchanged format and quantiser), tokenizer machinery, sampler
-and chat loop. Reference copies (transformers main, fetched 2026-11-14) in
-`/private/tmp/claude-501/-Users-marcfors-Documents-Self-Hosted-LLM/e66db16d-b4f1-4a8b-b27d-cc43b2cb8009/scratchpad/gemma/`:
+and chat loop. Upstream reference (transformers main, fetched 2026-11-14), under
+`src/transformers/models/gemma4/`:
 `modeling_gemma4.py` (classes `Gemma4RMSNorm`, `Gemma4TextMLP`,
 `Gemma4TextRotaryEmbedding`, `Gemma4TextAttention`, `eager_attention_forward`,
 `Gemma4TextDecoderLayer`, `Gemma4TextScaledWordEmbedding`, `Gemma4TextModel`,
@@ -161,7 +161,7 @@ and chat loop. Reference copies (transformers main, fetched 2026-11-14) in
 `modeling_rope_utils.py` (`_compute_proportional_rope_parameters`), `masking_utils.py`
 (`sliding_window_overlay`), `config.json`, `generation_config.json`,
 `chat_template.jinja`, `tokenizer_config.json`, `gemma_header.json` (real tensor
-header), `tokdl/tokenizer.json` (real tokenizer, sha256 91d9cf86…). Where this section
+header), the real `tokenizer.json` from the pinned revision (sha256 91d9cf86…). Where this section
 and those files disagree, the files win.
 
 **Config.** `config.json` top-level `model_type` `gemma4`, numbers in `text_config`
