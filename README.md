@@ -6,10 +6,9 @@ A C99 CPU inference engine for small language models, written from scratch for a
 
 ## Status
 
-- **Qwen3.5-4B is phase 1.** The engine is being written against the transformers
-  reference implementation. Nothing here has been run on real checkpoints yet.
-- **Gemma 4 E4B is planned (phase 2).** The engine does not run it yet. The download
-  script can fetch its checkpoint.
+- **Qwen3.5-4B (phase 1) and Gemma 4 E4B (phase 2) are both implemented** and pass their
+  golden gates on tiny synthetic models, against float64 oracles. The Gemma oracle itself
+  agrees with transformers to 5e-9. Nothing here has been run on a real checkpoint yet.
 - **Speed is an estimate, not a measurement.** Roughly 2 to 4 tokens/s for the q8 path,
   bounded by memory bandwidth (about 4.75 GB read per token). It has NOT been measured.
 - The AVX2 build path has not been run yet, and no real checkpoint has been loaded.
@@ -22,7 +21,7 @@ The full plan, with the normative model equations and the test gates, is in
 | model | params (text) | checkpoint | order | why |
 |---|---:|---:|---|---|
 | Qwen3.5-4B | ~4.2 B | 9.32 GB bf16, 2 shards | **phase 1** | its Gated DeltaNet layers are the closest thing to the reference repo's KDA code, so the most transfers |
-| Gemma 4 E4B | ~4 B core + per-layer embeddings | 15.99 GB bf16, 1 file | phase 2 | needs pieces the reference has none of: per-layer embeddings, KV sharing across layers, logit softcap |
+| Gemma 4 E4B | ~4 B core + per-layer embeddings | 15.99 GB bf16, 1 file | phase 2 (implemented, unmeasured) | needs pieces the reference has none of: per-layer embeddings, KV sharing across layers, logit softcap |
 
 Both are Apache-2.0 and ungated. Vision, audio and Qwen's MTP head are out of scope;
 the engine is text only.

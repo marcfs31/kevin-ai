@@ -9,6 +9,7 @@ GIB=1073741824
 TWO_GIB=$((2 * GIB))
 Q8_NAME=model.q8.safetensors
 Q8_MIN_AVAIL_KIB=$((5 * 1048576))     # q8 Qwen keeps about 5 GiB resident
+GEMMA_Q8_MIN_AVAIL_KIB=$((11 * 524288))  # q8 Gemma: about 5.5 GiB hot (estimate, not measured)
 BF16_QWEN_BYTES=9319828096            # bf16 Qwen checkpoint, both shards
 
 usage() {
@@ -257,7 +258,7 @@ fi
 # --- q8 file ---------------------------------------------------------------------
 Q8="$MODEL_DIR/$Q8_NAME"
 case "$model_id" in
-  qwen3.5-4b)
+  qwen3.5-4b|gemma-4-e4b)
     if [ -e "$Q8" ]; then
       q8_size=$(file_size "$Q8")
       if [ "$q8_size" -gt 0 ]; then
@@ -268,9 +269,6 @@ case "$model_id" in
     else
       report NOTE "q8 file" "not made yet. From the repo root (after make): bin/lm-quant --model $MODEL_DIR --out $Q8"
     fi
-    ;;
-  gemma-4-e4b)
-    report NOTE "q8 file" "not used: the engine does not run Gemma 4 yet (phase 2)"
     ;;
   *)
     report UNKNOWN "q8 file" "model type not known"
@@ -300,7 +298,16 @@ case "$model_id" in
     fi
     ;;
   gemma-4-e4b)
-    report NOTE "RAM for model" "not evaluated: the engine does not run Gemma 4 yet (phase 2)"
+    if is_uint "$mem_avail_kb"; then
+      if [ "$mem_avail_kb" -ge "$GEMMA_Q8_MIN_AVAIL_KIB" ]; then
+        report OK "RAM for q8" "$(kb_to_gib "$mem_avail_kb") available; q8 Gemma needs about 5.5 GiB hot (estimate)"
+      else
+        report FAIL "RAM for q8" "only $(kb_to_gib "$mem_avail_kb") available; q8 Gemma needs about 5.5 GiB hot (estimate). Stop other programs, then retry"
+      fi
+    else
+      report UNKNOWN "RAM for q8" "MemAvailable unknown"
+    fi
+    report NOTE "RAM for bf16" "bf16 Gemma is 16 GB; bf16 (exact) mode streams from disk and is very slow on this machine"
     ;;
   *)
     report UNKNOWN "RAM for model" "model type not known"
