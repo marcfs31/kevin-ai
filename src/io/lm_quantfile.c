@@ -161,7 +161,8 @@ int lm_quantize_checkpoint(const char *model, const char *outp, LmQuantStats *st
         } else {
             const int64_t rows = t->shape[0], in = t->shape[1], ng = in / LM_Q8_GROUP;
             if (in > BLOCK_ELEMS) { lm_fail(err, errlen, "%s: row of %lld inputs is wider than the block buffer", t->name, (long long)in); goto out; }
-            float *scales = (float *)malloc((size_t)(rows * ng ? rows * ng : 1) * sizeof(float));
+            const int64_t nscales = rows * ng;
+            float *scales = (float *)malloc((size_t)(nscales > 0 ? nscales : 1) * sizeof(float));
             Pending *np = (Pending *)realloc(pend, (size_t)(npend + 1) * sizeof *np);
             char *sn = scale_name(t->name);
             if (np) pend = np;
