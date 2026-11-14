@@ -17,6 +17,34 @@ A C99 CPU inference engine for small language models, written from scratch for a
 The full plan, with the normative model equations and test gates, is in
 [docs/PLAN.md](docs/PLAN.md).
 
+## Target machine
+
+The engine is developed and measured on one machine. Every number in this README is for it.
+
+| part | spec |
+|---|---|
+| system | Dell OptiPlex 3050 |
+| CPU | Intel Core i5-6500T, 4 cores, no hyper-threading, AVX2 and FMA, no AVX-512 |
+| memory | 8 GB (the OS reports 7308 MB usable; about 6700 MB available when the tests ran) |
+| GPU | Intel HD Graphics 530, not used |
+| system and weights disk | Samsung MZVLB256HAHQ, 238.5 GB NVMe SSD |
+| bulk disk | Toshiba MQ04ABF100, 931.5 GB 5400 rpm HDD, not used by the engine |
+| network | Realtek RTL8111/8168 gigabit Ethernet, Intel Wireless 8265/8275 (unused) |
+| OS | Ubuntu Server 26.04.1 LTS, kernel 7.0.0-43-generic, x86-64 |
+| toolchain | gcc 15.2.0, GNU make 4.4.1, Python 3.14.3 |
+
+What this means for the engine:
+
+- **Memory is the limit.** The q8 Qwen3.5-4B file is about 4.8 GB and is read once per
+  generated token, so speed is bounded by memory bandwidth, not by the four cores.
+- **No GPU path, no AVX-512.** The kernels use AVX2 with FMA (and NEON on ARM, for
+  development on a Mac). On this CPU the kernel test reports `kernel path: avx2`.
+- **Gemma 4 E4B is tight.** Its q8 file is about 8.5 GB, larger than RAM; only the
+  per-token working set (about 5.3 GB) stays hot, the rest is read from the SSD on demand.
+- **Verified on this machine (first run, 2026-11-14):** the build, all unit tests and both
+  golden gates pass under gcc 15 with OpenMP and the AVX2 kernels. Model downloads, real
+  weights and tokens per second have not been measured yet.
+
 ## The two models
 
 | model | params (text) | checkpoint | status | notes |
@@ -33,15 +61,15 @@ These are the choices made on the OptiPlex during the Ubuntu Server installer. U
 as written, or adapt them, but keep the disk layout: the OS and model weights on the SSD,
 the HDD free.
 
-### Hardware
+### Disk roles
 
-| part | device | use |
-|---|---|---|
-| system and weights | Samsung MZVLB256HAHQ, 238.5 GB NVMe SSD | Ubuntu, `/`, `/boot`, `/boot/efi`, `~/models` |
-| bulk storage | Toshiba MQ04ABF100, 931.5 GB 5400 rpm HDD | not used by the engine; keep for backups or other data |
-| installer | SanDisk USB stick | boot media only; do not partition or use it afterwards |
+Full machine specs are in [Target machine](#target-machine). The disks are used like this:
 
-The Intel HD 530 graphics is not used by the engine.
+| disk | use |
+|---|---|
+| Samsung 238.5 GB NVMe SSD | Ubuntu, `/`, `/boot`, `/boot/efi`, and the models in `~/models` |
+| Toshiba 931.5 GB HDD | not used by the engine; keep for backups or other data |
+| SanDisk USB stick | installer media only; do not partition or use it afterwards |
 
 ### Installer steps
 
