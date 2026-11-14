@@ -324,6 +324,178 @@ static void test_linear_attention(int as_bf16)
     json_free_tree(r);
 }
 
+/* ---- Gemma 4 ops ---- */
+
+static void test_gemma_norm_gelu_softcap(void)
+{
+    jval *r = load("gemma_rmsnorm.json");
+    if (r) {
+        const float eps = (float)dnum(r, "eps");
+        jval *cs = K(r, "cases");
+        for (int i = 0; i < cs->len; i++) {
+            jval *c = cs->kids[i];
+            int n;
+            float *x = flat(K(c, "x"), &n), *w = flat(K(c, "w"), NULL), *y = flat(K(c, "y"), NULL), *o = (float *)malloc((size_t)n * 4);
+            lm_rmsnorm_plain(o, x, w, n, eps);
+            cmp("gemma rmsnorm", o, y, n);
+            lm_rmsnorm_plain(x, x, w, n, eps);              /* in place gives the same */
+            CHECK(!memcmp(x, o, (size_t)n * 4));
+            free(x); free(w); free(y); free(o);
+        }
+        CHECK(cs->len >= 8);
+        cs = K(r, "cases_noweight");
+        for (int i = 0; i < cs->len; i++) {
+            jval *c = cs->kids[i];
+            int n;
+            float *x = flat(K(c, "x"), &n), *y = flat(K(c, "y"), NULL), *o = (float *)malloc((size_t)n * 4);
+            lm_rmsnorm_plain(o, x, NULL, n, eps);
+            cmp("gemma rmsnorm without weight", o, y, n);
+            free(x); free(y); free(o);
+        }
+        CHECK(cs->len >= 5);
+        json_free_tree(r);
+    }
+
+    r = load("gelu_tanh.json");
+    if (r) {
+        jval *cs = K(r, "cases");
+        for (int i = 0; i < cs->len; i++) {
+            int n;
+            float *x = flat(K(cs->kids[i], "x"), &n), *y = flat(K(cs->kids[i], "y"), NULL), *o = (float *)malloc((size_t)n * 4);
+            for (int j = 0; j < n; j++) o[j] = lm_gelu_tanh(x[j]);
+            cmp("gelu_tanh", o, y, n);
+            free(x); free(y); free(o);
+        }
+        json_free_tree(r);
+    }
+
+    r = load("gelu_tanh_mul.json");
+    if (r) {
+        jval *cs = K(r, "cases");
+        for (int i = 0; i < cs->len; i++) {
+            int n;
+            float *g = flat(K(cs->kids[i], "gate"), &n), *u = flat(K(cs->kids[i], "up"), NULL), *y = flat(K(cs->kids[i], "y"), NULL);
+            float *o = (float *)malloc((size_t)n * 4);
+            lm_gelu_tanh_mul(o, g, u, n);
+            cmp("gelu_tanh_mul", o, y, n);
+            lm_gelu_tanh_mul(g, g, u, n);                   /* out aliasing gate gives the same */
+            CHECK(!memcmp(g, o, (size_t)n * 4));
+            free(g); free(u); free(y); free(o);
+        }
+        json_free_tree(r);
+    }
+
+    r = load("logit_softcap.json");
+    if (r) {
+        jval *cs = K(r, "cases");
+        for (int i = 0; i < cs->len; i++) {
+            int n;
+            float *x = flat(K(cs->kids[i], "x"), &n), *y = flat(K(cs->kids[i], "y"), NULL);
+            lm_logit_softcap(x, n, (float)dnum(cs->kids[i], "cap"));
+            cmp("logit softcap", x, y, n);
+            free(x); free(y);
+        }
+        json_free_tree(r);
+    }
+}
+
+static void test_gemma_rope(void)
+{
+    jval *r = load("gemma_rope.json");
+    if (!r) return;
+    jval *gs = K(r, "groups");
+    int ncase = 0, nprop = 0;
+    for (int gi = 0; gi < gs->len; gi++) {
+        jval *g = gs->kids[gi];
+        const int hd = (int)dnum(g, "head_dim");
+        const double theta = dnum(g, "theta"), partial = dnum(g, "partial_rotary_factor");
+        const int prop = !strcmp(K(g, "rope_type")->str, "proportional");
+        double *f = (double *)malloc((size_t)(hd / 2) * sizeof(double));
+        CHECK(lm_rope_freqs(f, hd, theta, partial) == 0);
+        jval *fr = K(g, "freqs");
+        CHECK(fr->len == hd / 2);
+        for (int i = 0; i < hd / 2; i++) CHECK_NEAR(f[i], fr->kids[i]->num, 1e-15 * fabs(fr->kids[i]->num));
+        if (prop) nprop++;
+        jval *cs = K(g, "cases");
+        for (int i = 0; i < cs->len; i++) {
+            jval *c = cs->kids[i];
+            float *x = flat(K(c, "x"), NULL), *y = flat(K(c, "y"), NULL);
+            CHECK(lm_rope_freqs_apply(x, 1, hd, f, (int)dnum(c, "pos")) == 0);
+            cmp("gemma rope", x, y, hd);
+            ncase++;
+            free(x); free(y);
+        }
+        free(f);
+    }
+    CHECK(gs->len >= 5 && nprop >= 3 && ncase >= 20);
+    /* negatives: an odd head, a bad partial factor, a bad theta */
+    double f[8];
+    CHECK(lm_rope_freqs(f, 15, 1e4, 1.0) == -1);
+    CHECK(lm_rope_freqs(f, 16, 1e4, 0.0) == -1);
+    CHECK(lm_rope_freqs(f, 16, 1e4, 1.5) == -1);
+    CHECK(lm_rope_freqs(f, 16, 0.0, 1.0) == -1);
+    json_free_tree(r);
+}
+
+static void test_sliding_attention(void)
+{
+    jval *r = load("sliding_attention.json");
+    if (!r) return;
+    const float scaling = (float)dnum(r, "scaling");
+    jval *cs = K(r, "cases");
+    int ring_cases = 0, wrapped = 0;
+    for (int i = 0; i < cs->len; i++) {
+        jval *c = cs->kids[i];
+        const int H = (int)dnum(c, "heads"), KV = (int)dnum(c, "kv_heads"), D = (int)dnum(c, "head_dim");
+        const int pos = (int)dnum(c, "pos"), first_ref = (int)dnum(c, "first_visible");
+        jval *wj = K(c, "window");
+        const int window = wj->t == J_NUM ? (int)wj->num : 0;
+        const int first = window > 0 && pos - window + 1 > 0 ? pos - window + 1 : 0;
+        CHECK_MSG(first == first_ref, "case %d: first_visible %d, formula %d", i, first_ref, first);
+        const size_t kvd = (size_t)KV * D;
+        float *q = flat(K(c, "q"), NULL), *k = flat(K(c, "k"), NULL), *v = flat(K(c, "v"), NULL), *y = flat(K(c, "y"), NULL);
+        float *o = (float *)malloc((size_t)H * D * 4), *sc = (float *)malloc((size_t)H * (pos + 1) * 4);
+
+        /* a linear cache of every position, window applied by the mask */
+        CHECK(lm_attn_window(o, q, k, v, pos, window, pos + 1, H, KV, D, scaling, sc) == 0);
+        cmp("sliding attention (linear cache)", o, y, H * D);
+
+        /* a ring cache of min(window, pos+1) slots, filled exactly as lm_feed fills it */
+        const int slots = window > 0 && window < pos + 1 ? window : pos + 1;
+        float *rk = (float *)calloc((size_t)slots * kvd, 4), *rv = (float *)calloc((size_t)slots * kvd, 4);
+        for (int j = 0; j <= pos; j++) {
+            memcpy(rk + (size_t)(j % slots) * kvd, k + (size_t)j * kvd, kvd * 4);
+            memcpy(rv + (size_t)(j % slots) * kvd, v + (size_t)j * kvd, kvd * 4);
+        }
+        memset(o, 0, (size_t)H * D * 4);
+        CHECK(lm_attn_window(o, q, rk, rv, pos, window, slots, H, KV, D, scaling, sc) == 0);
+        cmp("sliding attention (ring cache)", o, y, H * D);
+        if (window > 0) { ring_cases++; if (pos >= window) wrapped++; }
+
+        /* NEGATIVE: a cache one slot too small must be refused, not read wrongly */
+        if (slots > 1) {
+            const int nvis = pos - first + 1;
+            CHECK(lm_attn_window(o, q, rk, rv, pos, window, nvis - 1, H, KV, D, scaling, sc) == -1);
+        }
+        free(q); free(k); free(v); free(y); free(o); free(sc); free(rk); free(rv);
+    }
+    CHECK_MSG(ring_cases >= 7 && wrapped >= 4, "fixture has %d windowed cases, %d beyond the window", ring_cases, wrapped);
+    /* NEGATIVE: a different window must change the answer on a case beyond the window (the mask is live) */
+    {
+        jval *c = cs->kids[4];                              /* window 8 at pos 20 */
+        const int H = (int)dnum(c, "heads"), KV = (int)dnum(c, "kv_heads"), D = (int)dnum(c, "head_dim"), pos = (int)dnum(c, "pos");
+        float *q = flat(K(c, "q"), NULL), *k = flat(K(c, "k"), NULL), *v = flat(K(c, "v"), NULL), *y = flat(K(c, "y"), NULL);
+        float *o = (float *)malloc((size_t)H * D * 4), *sc = (float *)malloc((size_t)H * (pos + 1) * 4);
+        CHECK(pos == 20 && (int)dnum(c, "window") == 8);
+        CHECK(lm_attn_window(o, q, k, v, pos, 0, pos + 1, H, KV, D, 1.0f, sc) == 0);
+        double d = 0;
+        for (int i = 0; i < H * D; i++) d = fmax(d, fabs((double)o[i] - (double)y[i]));
+        CHECK_MSG(d > 1e-3, "unwindowed attention equals the windowed answer (%g): the fixture does not exercise the mask", d);
+        free(q); free(k); free(v); free(y); free(o); free(sc);
+    }
+    json_free_tree(r);
+}
+
 /* ---- q8 quantiser: exact ---- */
 
 static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
@@ -377,6 +549,9 @@ int main(void)
         test_full_attention(bf);
         test_linear_attention(bf);
     }
+    test_gemma_norm_gelu_softcap();
+    test_gemma_rope();
+    test_sliding_attention();
     test_q8();
     printf("test_ops_fixtures: worst err / tolerance = %.3f (tolerance 2e-6 * max(1,max|ref|))\n", worst_ratio);
     return lt_finish("test_ops_fixtures");

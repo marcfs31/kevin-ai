@@ -108,6 +108,54 @@ void lm_mul_sigmoid(float *y, const float *gate, int n);
 /* out[i] = silu(gate[i]) * up[i]: the SiLU-gated MLP combine. out may alias gate or up. */
 void lm_silu_mul(float *out, const float *gate, const float *up, int n);
 
+
+/* ======================================================================== Gemma 4 ops
+ * Semantics per docs/PLAN.md "Phase 2" and transformers modeling_gemma4.py; the oracle is
+ * tools/ref_gemma4.py, the values tests/fixtures/ops/{gemma_rmsnorm,gelu_tanh,gelu_tanh_mul,
+ * gemma_rope,logit_softcap,sliding_attention}.json. */
+
+/* Gemma RMSNorm: y = x * rsqrt(mean(x^2) + eps) * w with PLAIN w (NOT 1 + w). w == NULL is
+ * the weightless norm (v_norm, w = 1). y may alias x. */
+void lm_rmsnorm_plain(float *y, const float *x, const float *w, int n, float eps);
+
+/* gelu_pytorch_tanh: 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3))). */
+static inline float lm_gelu_tanh(float x)
+{
+    const float k = 0.7978845608028654f;       /* sqrt(2/pi) */
+    return 0.5f * x * (1.0f + tanhf(k * (x + 0.044715f * x * x * x)));
+}
+
+/* out[i] = gelu_tanh(gate[i]) * up[i]: the Gemma MLP combine. out may alias gate or up. */
+void lm_gelu_tanh_mul(float *out, const float *gate, const float *up, int n);
+
+/* Per-pair RoPE frequencies for rotate-half over the WHOLE head (pairs i, i + head_dim/2):
+ * freqs[head_dim/2]. r = (int)(partial * head_dim / 2); freqs[i] = theta^(-2i/head_dim) for
+ * i < r, 0 for i >= r (those dims pass through). partial = 1 is the default rope. The
+ * exponent denominator is head_dim, not the rotated width (differs from lm_rope). Returns -1
+ * for an odd or non-positive head_dim, theta <= 0 or partial outside (0, 1]. */
+int lm_rope_freqs(double *freqs, int head_dim, double theta, double partial);
+
+/* Rotate-half RoPE with explicit frequencies for the n_heads vectors of one position, in
+ * place: angle = pos * freqs[i] computed in double, o[i] = a cos - b sin, o[i+d/2] = b cos + a sin.
+ * A zero frequency leaves the pair unchanged exactly. Returns -1 on a bad shape. */
+int lm_rope_freqs_apply(float *x, int n_heads, int head_dim, const double *freqs, int pos);
+
+/* x[i] = cap * tanh(x[i] / cap), in place (the final logit softcap). cap > 0. */
+void lm_logit_softcap(float *x, int n, float cap);
+
+/* One attention step for the query at position pos over a KV cache of `slots` positions
+ * (position j lives in slot j % slots, so a ring of the last `window` positions and a plain
+ * linear cache are the same call). Keys j with first <= j <= pos are visible, where first =
+ * 0 when window <= 0 and max(0, pos - window + 1) otherwise; the cache must hold all of them
+ * (slots >= pos - first + 1). Scores are q.k * scaling (Gemma: 1.0, no 1/sqrt(d)), softmax,
+ * then the weighted sum of v. Query head h uses KV head h / (n_heads / n_kv_heads).
+ *   out [n_heads*head_dim]; q [n_heads*head_dim]; k_cache, v_cache [slots][n_kv_heads*head_dim];
+ *   scores scratch of n_heads * min(pos+1, window > 0 ? window : pos+1) floats.
+ * Returns -1 on a bad shape or a cache too small. */
+int lm_attn_window(float *out, const float *q, const float *k_cache, const float *v_cache,
+                   int pos, int window, int slots, int n_heads, int n_kv_heads, int head_dim,
+                   float scaling, float *scores);
+
 #ifdef __cplusplus
 }
 #endif
