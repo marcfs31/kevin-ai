@@ -124,5 +124,8 @@ make sanitize   # unit tests under ASan and UBSan
 make portable   # x86-64 build with -mavx2 -mfma
 ```
 
-`scripts/download-model.sh --model gemma-4-e4b` fetches the Gemma 4 E4B checkpoint. The
-engine does not run Gemma 4 yet (phase 2).
+`scripts/download-model.sh --model gemma-4-e4b` fetches the Gemma 4 E4B checkpoint (16 GB).
+The engine runs it the same way as Qwen (`bin/lm-quant`, then `bin/lm-chat`); it is
+implemented and passes its tiny-model gate, but has not been run on the real weights.
+q8 Gemma is about 8.5 GB on disk; only about 5.5 GB is read on every token, because the
+per-layer embedding table is read one row at a time. Speed is unmeasured.
