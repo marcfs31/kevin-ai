@@ -4,7 +4,7 @@
     make_ops.py            write the fixtures
     make_ops.py --check    regenerate in memory, fail unless byte-identical to the files on disk
 
-All expected values come from the float64 oracle in ref_qwen35.py. Inputs (activations) are
+All expected values come from the float64 oracles in ref_qwen35.py and ref_gemma4.py. Inputs (activations) are
 rounded to f32 and weights to bf16, so a C test reads exactly the numbers the oracle used;
 expected outputs are float64 (compare an f32 engine with a tolerance, see the README).
 """
@@ -18,10 +18,12 @@ import struct
 import sys
 
 import quant_ref
+import ref_gemma4 as gem
 import ref_qwen35 as ref
 import safetensors as st
 
 SEED = 20261113
+GEMMA_SEED = 20261114  # separate stream: adding Gemma ops must not move any Qwen file
 EPS = 1e-6
 
 
@@ -263,6 +265,104 @@ def q8(rng):
             "group": 32, "groups": groups, "matrix": matrix}
 
 
+def gemma_rmsnorm(rng):
+    cases, noweight = [], []
+    for n in (1, 7, 16, 33, 64, 256):
+        x, w = rng.act(n, 2.0), [st.round_bf16(1.0 + v) for v in rng.wt(n, 0.4)]
+        cases.append({"x": x, "w": w, "y": gem.rmsnorm(x, w, EPS)})
+    cases.append({"x": [0.0] * 8, "w": rng.wt(8, 0.3), "y": [0.0] * 8})
+    x, w = rng.act(16, 1e-4), rng.wt(16, 0.3)
+    cases.append({"x": x, "w": w, "y": gem.rmsnorm(x, w, EPS)})
+    for n in (1, 8, 33, 256):
+        x = rng.act(n, 3.0)
+        noweight.append({"x": x, "y": gem.rmsnorm(x, None, EPS)})
+    noweight.append({"x": [0.0] * 8, "y": [0.0] * 8})
+    return {"op": "gemma_rmsnorm",
+            "formula": "y = x * (mean(x^2) + eps)^(-1/2) * w  (PLAIN w, not 1 + w); "
+                       "`cases_noweight` is the weightless norm (v_norm): w = 1",
+            "eps": EPS, "cases": cases, "cases_noweight": noweight}
+
+
+def gelu_inputs(rng, n):
+    edge = [0.0, -0.0, 1e-8, -1e-8, 0.5, -0.5, 1.0, -1.0, 3.0, -3.0, 6.0, -6.0, 10.0, -10.0, 30.0, -30.0,
+            100.0, -100.0]
+    return [f32(v) for v in edge] + rng.act(n, 2.0)
+
+
+def gelu_tanh(rng):
+    cases = []
+    for n in (14, 64):
+        x = gelu_inputs(rng, n)
+        cases.append({"x": x, "y": [gem.gelu_tanh(v) for v in x]})
+    return {"op": "gelu_tanh",
+            "formula": "y = 0.5 x (1 + tanh(sqrt(2/pi) (x + 0.044715 x^3)))  (gelu_pytorch_tanh)",
+            "cases": cases}
+
+
+def gelu_mul(rng):
+    cases = []
+    for n in (1, 7, 32, 100):
+        gate = gelu_inputs(rng, n)
+        up = rng.act(len(gate), 1.5)
+        cases.append({"gate": gate, "up": up, "y": [gem.gelu_tanh(g) * u for g, u in zip(gate, up)]})
+    return {"op": "gelu_tanh_mul", "formula": "y = gelu_tanh(gate) * up", "cases": cases}
+
+
+def gemma_rope(rng):
+    groups = []
+    for head_dim, rtype, theta, partial, positions in (
+            (16, "default", 10000.0, 1.0, (0, 1, 5, 100, 4093, 100000)),
+            (256, "default", 10000.0, 1.0, (0, 1, 7, 511, 512, 100000)),
+            (32, "proportional", 1000000.0, 0.25, (0, 1, 9, 77, 1000, 100000)),
+            (512, "proportional", 1000000.0, 0.25, (0, 1, 3, 4096, 131071)),
+            (16, "proportional", 100.0, 0.5, (0, 2, 31))):
+        freqs = gem.rope_freqs(head_dim, theta, rtype, partial)
+        cases = []
+        for pos in positions:
+            x = rng.act(head_dim, 1.5)
+            cases.append({"pos": pos, "x": x, "y": gem.rope_apply(x, pos, freqs)})
+        groups.append({"head_dim": head_dim, "rope_type": rtype, "theta": theta,
+                       "partial_rotary_factor": partial, "freqs": freqs, "cases": cases})
+    return {"op": "gemma_rope",
+            "formula": "rotate-half over the WHOLE head, pairs (i, i+d/2), angle = pos*f[i], i < d/2. "
+                       "default: f[i] = theta^(-2i/d). proportional: r = int(partial*d/2); f[i] = theta^(-2i/d) "
+                       "for i < r else 0 (dims i and i+d/2 with i >= r pass through unchanged). "
+                       "y[i] = x[i]cos a - x[i+d/2]sin a; y[i+d/2] = x[i+d/2]cos a + x[i]sin a",
+            "groups": groups}
+
+
+def logit_softcap(rng):
+    cases = []
+    for cap, n, std in ((30.0, 40, 20.0), (12.0, 24, 6.0), (1.0, 16, 2.0)):
+        x = rng.act(n, std) + [0.0, 1e-7, -1e-7, cap, -cap, 10 * cap, -10 * cap, 1000.0, -1000.0]
+        cases.append({"cap": cap, "x": x, "y": gem.softcap(x, cap)})
+    return {"op": "logit_softcap", "formula": "y = cap * tanh(x / cap)", "cases": cases}
+
+
+def sliding_attention(rng):
+    cases = []
+    for heads, kvh, hd, window, pos in (
+            (4, 2, 16, 8, 0), (4, 2, 16, 8, 5), (4, 2, 16, 8, 7), (4, 2, 16, 8, 8), (4, 2, 16, 8, 20),
+            (8, 2, 8, 4, 17), (4, 4, 8, 3, 9), (4, 2, 32, None, 12), (2, 1, 8, 1, 6)):
+        q = rng.act(heads * hd, 0.6)
+        ks = [rng.act(kvh * hd, 0.6) for _ in range(pos + 1)]
+        vs = [rng.act(kvh * hd, 1.0) for _ in range(pos + 1)]
+        split = lambda vec: [vec[h * hd:(h + 1) * hd] for h in range(kvh)]
+        y = gem.attention_context([q[h * hd:(h + 1) * hd] for h in range(heads)],
+                                  [split(k) for k in ks], [split(v) for v in vs], pos, window)
+        cases.append({"heads": heads, "kv_heads": kvh, "head_dim": hd, "window": window, "pos": pos,
+                      "first_visible": 0 if window is None else max(0, pos - window + 1),
+                      "q": q, "k": ks, "v": vs, "y": y})
+    return {"op": "sliding_attention_step",
+            "note": "one query position `pos` (q is already q_norm'ed and roped; k is k_norm'ed and roped; v is "
+                    "v_norm'ed). k and v hold ALL positions 0..pos (pos+1 rows of kv_heads*head_dim); the query "
+                    "sees keys j with first_visible <= j <= pos, i.e. j > pos - window (window null: all "
+                    "j <= pos). Scaling is 1.0 (no 1/sqrt(d)), no softcap; head h uses KV head h/(heads/kv_heads). "
+                    "y = concatenated per-head contexts, before o_proj. An engine with a window-sized ring "
+                    "cache must give the same y from the last min(window, pos+1) rows.",
+            "scaling": 1.0, "cases": cases}
+
+
 def build():
     rng = R(SEED)
     out = {}
@@ -271,6 +371,12 @@ def build():
                      ("full_attention_layer", full_attention),
                      ("linear_attention_layer", linear_attention), ("mlp", mlp), ("q8_quantize", q8)):
         text = json.dumps(fn(rng), separators=(",", ":"), allow_nan=False) + "\n"
+        out[name + ".json"] = text.encode("ascii")
+    grng = R(GEMMA_SEED)
+    for name, fn in (("gemma_rmsnorm", gemma_rmsnorm), ("gelu_tanh", gelu_tanh), ("gelu_tanh_mul", gelu_mul),
+                     ("gemma_rope", gemma_rope), ("logit_softcap", logit_softcap),
+                     ("sliding_attention", sliding_attention)):
+        text = json.dumps(fn(grng), separators=(",", ":"), allow_nan=False) + "\n"
         out[name + ".json"] = text.encode("ascii")
     return out
 

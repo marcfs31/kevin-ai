@@ -2,6 +2,10 @@
 """Gate 2 of docs/PLAN.md: compare the C engine against the oracle fixtures.
 
     check_golden.py --run BIN/lm-run --quant BIN/lm-quant --fixtures tests/fixtures/qwen35-tiny
+    check_golden.py --run BIN/lm-run --quant BIN/lm-quant --fixtures tests/fixtures/gemma4-tiny
+
+The family comes from config.json (`model_type`); both fixtures use the same checks, the vocab and
+row count come from the fixture, and a gemma4 fixture must also hold a single `model.safetensors`.
 
 For bf16 (weights from the fixture dir) and q8 (`--weights model.q8.safetensors`):
   1. `lm-run --model DIR [--weights F] --tokens <golden tokens> --logits-out TMP`: exit 0, empty
@@ -174,8 +178,11 @@ def check(run_bin, quant_bin, fixtures, timeout):
         with open(cfg_path) as f:
             cfg = json.load(f)
         vocab = cfg.get("text_config", cfg)["vocab_size"]
-    except (ValueError, KeyError, TypeError) as e:
+        family = cfg.get("model_type", "")
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise Failure("config.json is malformed: %s" % e)
+    if family == "gemma4":  # single-file bf16 checkpoint (docs/PLAN.md phase 2); Qwen is sharded
+        need_file(os.path.join(fixtures, "model.safetensors"), "model.safetensors")
     q8 = os.path.join(fixtures, "model.q8.safetensors")
     need_file(q8, "q8 fixture")
     parts = []
@@ -186,14 +193,15 @@ def check(run_bin, quant_bin, fixtures, timeout):
                                    os.path.join(fixtures, "golden_q8.json"), vocab, timeout, tmp))
         size = check_quantiser(quant_bin, fixtures, q8, timeout, tmp)
     parts.append("quantiser byte-identical (%d bytes)" % size)
-    return "check_golden OK: " + "; ".join(parts)
+    tag = " [gemma4]" if family == "gemma4" else ""
+    return "check_golden OK%s: " % tag + "; ".join(parts)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="gate 2: engine vs oracle fixtures")
     ap.add_argument("--run", required=True, help="path to lm-run")
     ap.add_argument("--quant", required=True, help="path to lm-quant")
-    ap.add_argument("--fixtures", required=True, help="tests/fixtures/qwen35-tiny")
+    ap.add_argument("--fixtures", required=True, help="tests/fixtures/qwen35-tiny or tests/fixtures/gemma4-tiny")
     ap.add_argument("--timeout", type=float, default=600.0, help="seconds per engine invocation")
     a = ap.parse_args(argv)
     try:
