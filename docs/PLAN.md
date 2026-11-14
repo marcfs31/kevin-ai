@@ -259,7 +259,7 @@ same verbatim-history default and `--strict-template` option as Qwen.
 K/V tensors of shared layers): 12 layers, `layer_types` 5 sliding + 1 full twice,
 `num_kv_shared_layers` 4 (store layers 7 sliding and 5 full; layers 8–11 reuse),
 hidden 64, intermediate 128, 4 heads, 2 KV heads, `head_dim` 16, `global_head_dim` 32,
-`sliding_window` 8, `hidden_size_per_layer_input` 8, vocab 384 for both vocab sizes,
+`sliding_window` 8, `hidden_size_per_layer_input` 32 (the smallest P the q8 group of 32 allows), vocab 384 for both vocab sizes,
 `layer_scalar` random in [0.5, 1.5], `final_logit_softcapping` chosen so the cap bites
 (max pre-cap |logit| at least cap/2), real rope params. Golden prompt longer than 2 x
 window. Same golden files, q8 file and gate as Qwen.
