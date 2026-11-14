@@ -1,5 +1,6 @@
 /* test_sampler.c -- lm_sampler: PCG32 reference vector, determinism, greedy ties, top-k,
  * top-p, error cases. */
+#include "lm_test.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

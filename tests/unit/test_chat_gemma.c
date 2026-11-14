@@ -8,6 +8,7 @@
  * exactly as the Hugging Face tokenizer does on the rendered jinja output (and is pinned to
  * the Python reference by test_tok_gemma), so a pass means "the template builds the ids HF
  * would build from the jinja's string". */
+#include "lm_test.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +18,6 @@
 #include "chat/lm_profile.h"
 #include "chat/lm_template.h"
 #include "lm/lm.h"
-#include "lm_test.h"
 
 #define FIX "tests/fixtures/tok/gemma-tokenizer.json"
 
