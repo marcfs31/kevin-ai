@@ -110,11 +110,7 @@ int lm_stw_declare(LmStWriter *w, const char *name, LmDtype dtype, int ndim, con
         if (shape[i] < 0) return lm_fail(err, errlen, "tensor %s has a negative dimension", name);
         t.shape[i] = shape[i];
     }
-    LmTensor tmp;
-    memset(&tmp, 0, sizeof tmp);
-    tmp.ndim = ndim;
-    memcpy(tmp.shape, t.shape, sizeof t.shape);
-    const int64_t numel = lm_st_numel(&tmp);
+    const int64_t numel = lm_shape_numel(ndim, t.shape);
     if (numel > INT64_MAX / lm_dtype_size(dtype))
         return lm_fail(err, errlen, "tensor %s is impossibly large", name);
     t.nbytes = numel * lm_dtype_size(dtype);

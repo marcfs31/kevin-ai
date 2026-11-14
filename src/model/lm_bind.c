@@ -27,6 +27,7 @@ const LmTensor *lm_bind_need(LmBind *b, const char *name, int ndim, int64_t d0, 
 {
     const LmTensor *t = lm_st_find(&b->st, name);
     if (!t) { lm_fail(err, n, "tensor %s is missing from the weights", name); return NULL; }
+    if (t->rank_overflow) { lm_fail(err, n, "tensor %s has rank above 4; the engine supports at most 4", name); return NULL; }
     int ok = t->ndim == ndim;
     if (ok && ndim >= 1) ok = t->shape[0] == d0;
     if (ok && ndim >= 2) ok = t->shape[1] == d1;

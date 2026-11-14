@@ -49,14 +49,17 @@ const char *lm_dtype_name(LmDtype d)
 
 int64_t lm_st_numel(const LmTensor *t)
 {
-    /* Saturate instead of wrap: a hostile shape near INT64_MAX must not wrap to a small
-     * number that then matches a small byte span. */
+    return t->numel;
+}
+
+int64_t lm_shape_numel(int ndim, const int64_t *shape)
+{
     int64_t n = 1;
-    for (int i = 0; i < t->ndim; i++) {
-        if (t->shape[i] < 0) return INT64_MAX;
-        if (t->shape[i] == 0) return 0;
-        if (n > INT64_MAX / t->shape[i]) return INT64_MAX;
-        n *= t->shape[i];
+    for (int i = 0; i < ndim; i++) {
+        if (shape[i] < 0) return INT64_MAX;
+        if (shape[i] == 0) return 0;
+        if (n > INT64_MAX / shape[i]) return INT64_MAX;
+        n *= shape[i];
     }
     return n;
 }
@@ -296,19 +299,28 @@ static int parse_entry(Scan *sc, LmTensor *t, int64_t *o0, int64_t *o1, const ch
             if (have_shape) PFAIL("duplicate shape");
             if (!lit(sc, '[')) PFAIL("shape is not an array");
             ws(sc);
-            t->ndim = 0;
+            /* Any rank is accepted here: a tensor the engine never uses (a vision tower, say)
+             * must not stop the file from opening. Users of a tensor check rank_overflow. */
+            int rank = 0;
+            int64_t nall = 1;
             if (sc->p < sc->end && *sc->p == ']') sc->p++;      /* scalar */
             else for (;;) {
                 int64_t d;
                 if (!i64_(sc, &d)) PFAIL("shape entry is not an integer");
                 if (d < 0) return lm_fail(err, errlen, "tensor %s has a negative dimension %lld",
                                           name, (long long)d);
-                if (t->ndim >= 4) return lm_fail(err, errlen, "tensor %s has rank above 4", name);
-                t->shape[t->ndim++] = d;
+                if (rank < 4) t->shape[rank] = d;
+                rank++;
+                if (d == 0) nall = 0;                           /* zero wins over saturation */
+                else if (nall != 0 && nall > INT64_MAX / d) nall = INT64_MAX;
+                else if (nall != 0) nall *= d;
                 if (lit(sc, ',')) continue;
                 if (lit(sc, ']')) break;
                 PFAIL("expected ',' or ']' in shape");
             }
+            t->ndim = rank < 4 ? rank : 4;
+            t->rank_overflow = rank > 4;
+            t->numel = nall;
             have_shape = 1;
         } else if (!strcmp(key, "data_offsets")) {
             if (have_off) PFAIL("duplicate data_offsets");

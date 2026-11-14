@@ -35,7 +35,7 @@ static void test_single_file(int use_mmap)
 {
     /* data region: bf16[2,3] (12 B) | f32[2] (8) | f16[2] (4) | i8[2,2] (4) | u8[3] (3) |
      * scalar f32 (4) | f32[1,1,1,2] (8) */
-    unsigned char d[43];
+    unsigned char d[51];
     memset(d, 0, sizeof d);
     const uint16_t bf[6] = { 0x3fc0 /*1.5*/, 0xc000 /*-2*/, 0x0000, 0x8000 /*-0*/, 0x3f80, 0x7f80 /*inf*/ };
     const float f2[2] = { 3.25f, -0.5f };
@@ -55,7 +55,8 @@ static void test_single_file(int use_mmap)
         "\"e.u8\":{\"dtype\":\"U8\",\"shape\":[3],\"data_offsets\":[28,31]},"
         "\"f.scalar\":{\"dtype\":\"F32\",\"shape\":[],\"data_offsets\":[31,35]},"
         "\"g.rank4\":{\"dtype\":\"F32\",\"shape\":[1,1,1,2],\"data_offsets\":[35,43]},"
-        "\"h.empty\":{\"dtype\":\"F32\",\"shape\":[0,5],\"data_offsets\":[43,43]}}", d, sizeof d);
+        "\"h.empty\":{\"dtype\":\"F32\",\"shape\":[0,5],\"data_offsets\":[43,43]},"
+        "\"i.rank5\":{\"dtype\":\"F32\",\"shape\":[1,1,1,1,2],\"data_offsets\":[43,51]}}", d, sizeof d);
 
     char err[256];
     LmSt s;
@@ -74,7 +75,7 @@ static void test_single_file(int use_mmap)
         lm_st_close(&s);
     }
     CHECK_MSG(lm_st_open(&s, P("one.safetensors"), use_mmap, err, sizeof err) == 0, "%s", err);
-    CHECK(s.nt == 8 && s.nfiles == 1);
+    CHECK(s.nt == 9 && s.nfiles == 1);   /* 8 entries plus i.rank5 */
     CHECK(s.files[0].map != NULL ? use_mmap == 1 : use_mmap == 0);
     CHECK(lm_st_meta(&s, "format") && !strcmp(lm_st_meta(&s, "format"), "pt"));
     CHECK(lm_st_meta(&s, "note") && !strcmp(lm_st_meta(&s, "note"), "hi"));
@@ -103,6 +104,12 @@ static void test_single_file(int use_mmap)
     CHECK(t && t->ndim == 4 && lm_st_numel(t) == 2);
     t = lm_st_find(&s, "h.empty");
     CHECK(t && lm_st_numel(t) == 0 && t->nbytes == 0 && lm_st_read(&s, t, f, err, sizeof err) == 0);
+    /* rank above 4 opens (a tensor the engine never uses must not block the file); the
+     * element count covers every dim and the overflow flag is set for users to check */
+    t = lm_st_find(&s, "i.rank5");
+    CHECK(t && t->rank_overflow == 1 && lm_st_numel(t) == 2 && t->nbytes == 8);
+    t = lm_st_find(&s, "g.rank4");
+    CHECK(t && t->rank_overflow == 0);
     CHECK(lm_st_find(&s, "nope") == NULL);
 
     /* slice reads and their bounds */
@@ -200,9 +207,10 @@ static void test_rejections(void)
     lt_write_st_raw(P("i64.st"), "{\"a\":{\"dtype\":\"I64\",\"shape\":[1],\"data_offsets\":[0,8]}}", z, 8);
     rc = try_open(P("i64.st"), 1, err, sizeof err);
     CHECK_ERR(rc, err, "unsupported dtype 'I64'");
+    /* rank above 4 is accepted at open (see i.rank5 above): only a tensor that is used fails */
     lt_write_st_raw(P("rank5.st"), "{\"a\":{\"dtype\":\"F32\",\"shape\":[1,1,1,1,1],\"data_offsets\":[0,4]}}", z, 4);
     rc = try_open(P("rank5.st"), 1, err, sizeof err);
-    CHECK_ERR(rc, err, "rank above 4");
+    CHECK(rc == 0);
     lt_write_st_raw(P("negdim.st"), "{\"a\":{\"dtype\":\"F32\",\"shape\":[-1],\"data_offsets\":[0,4]}}", z, 4);
     rc = try_open(P("negdim.st"), 1, err, sizeof err);
     CHECK_ERR(rc, err, "negative dimension");
