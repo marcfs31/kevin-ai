@@ -543,6 +543,27 @@ static void test_multiblock(void)
 
 /* Byte-identical to the Python reference (tools/quant_ref.py) on its tiny fixture. The
  * fixture is read in place, never copied; absence is a FAILURE, not a skip. */
+/* Regression: a checkpoint's vision tower has rank-5 tensors (Conv3d). The text-only quantiser
+ * drops them, so they must not stop it. Before the fix the reader rejected them at open. */
+static void test_rank_above_four_is_ignored(void)
+{
+    char err[256];
+    mkdir(P("r5"), 0755);
+    unsigned char data[88];
+    memset(data, 0, sizeof data);
+    const uint16_t one = 0x3f80;                       /* bf16 1.0 */
+    for (int i = 0; i < 32; i++) memcpy(data + 24 + 2 * i, &one, 2);
+    lt_write_st_raw8(P("r5/model.safetensors"),
+        "{\"model.visual.patch_embed.proj.weight\":{\"dtype\":\"F32\",\"shape\":[1,1,1,2,2],\"data_offsets\":[0,16]},"
+        "\"model.language_model.norm.weight\":{\"dtype\":\"F32\",\"shape\":[2],\"data_offsets\":[16,24]},"
+        "\"model.language_model.layers.0.mlp.weight\":{\"dtype\":\"BF16\",\"shape\":[1,32],\"data_offsets\":[24,88]}}",
+        data, sizeof data);
+    LmQuantStats st;
+    int rc = lm_quantize_checkpoint(P("r5"), P("r5.q8.safetensors"), &st, err, sizeof err);
+    CHECK_MSG(rc == 0, "%s", err);
+    CHECK(st.n_quantised == 1 && st.n_copied == 1 && st.n_ignored == 1);
+}
+
 static void test_reference_fixture(void)
 {
     static const char *const cands[] = { "tests/fixtures/qwen35-tiny" };
@@ -580,6 +601,7 @@ int main(void)
     test_checkpoint();
     test_failures();
     test_multiblock();
+    test_rank_above_four_is_ignored();
     test_reference_fixture();
     lt_rmtree(g_dir);
     return lt_finish("test_quant");

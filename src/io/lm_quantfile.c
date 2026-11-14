@@ -95,6 +95,10 @@ int lm_quantize_checkpoint(const char *model, const char *outp, LmQuantStats *st
             goto out;
         }
         if (!quantised(t)) {
+            if (t->rank_overflow) {
+                lm_fail(err, errlen, "tensor %s has rank above 4; the q8 format supports at most 4", t->name);
+                goto out;
+            }
             if (lm_stw_declare(w, t->name, t->dtype, t->ndim, t->shape, err, errlen) != 0) goto out;
             ls.n_copied++;
             continue;

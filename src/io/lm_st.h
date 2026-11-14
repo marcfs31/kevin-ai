@@ -53,6 +53,8 @@ typedef struct {
     char     *name;
     LmDtype   dtype;
     int       ndim;           /* 0..4; 0 is a scalar */
+    int       rank_overflow;  /* true rank > 4: shape holds the first 4 dims only */
+    int64_t   numel;          /* product of ALL dims, saturating; set by the parser */
     int64_t   shape[4];
     int64_t   off;            /* ABSOLUTE byte offset within its file */
     int64_t   nbytes;         /* == numel * element size, verified at open */
@@ -93,6 +95,8 @@ const LmTensor *lm_st_find(const LmSt *s, const char *name);
 const char *lm_st_meta(const LmSt *s, const char *key);
 
 int64_t     lm_st_numel(const LmTensor *t);
+/* Product of the dims, saturating at INT64_MAX; a zero dim gives 0. Negative dims give INT64_MAX. */
+int64_t     lm_shape_numel(int ndim, const int64_t *shape);
 int         lm_dtype_size(LmDtype d);        /* 0 for LM_DT_UNKNOWN */
 const char *lm_dtype_name(LmDtype d);        /* "BF16", "F16", "F32", "I8", "U8" */
 
