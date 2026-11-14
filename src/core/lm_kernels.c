@@ -27,6 +27,18 @@
 #define LM_HAVE_NEON 1
 #endif
 
+/* The q8 kernels stream a memory-mapped file. The hardware prefetcher stops at every 4 KiB
+ * page boundary, so one thread waits on memory far more than it computes (measured on the
+ * i5-6500T: 2.2 GB/s per thread against a 17.5 GB/s memory limit). An explicit prefetch
+ * a fixed distance ahead keeps loads in flight across pages and rows. It never faults and
+ * never changes a result. */
+#if defined(__GNUC__) || defined(__clang__)
+#define LM_PREFETCH(p) __builtin_prefetch((const void *)(p), 0, 0)
+#else
+#define LM_PREFETCH(p) ((void)(p))
+#endif
+#define LM_Q8_PREFETCH_BYTES 1024 /* weight bytes ahead of the group being summed */
+
 const char *lm_kernel_isa(void)
 {
 #if defined(LM_HAVE_AVX2)
@@ -244,6 +256,8 @@ int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales,
         for (int g = 0; g < ng; g++) {
             const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
             const float *xg = x + (size_t)g * LM_Q8_GROUP;
+            LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
+            LM_PREFETCH(sr + g + 64);
             __m256 t = _mm256_setzero_ps();
             for (int j = 0; j < 4; j++) {
                 const __m128i b = _mm_loadl_epi64((const __m128i *)(qg + 8 * j));
@@ -261,6 +275,8 @@ int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales,
         for (int g = 0; g < ng; g++) {
             const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
             const float *xg = x + (size_t)g * LM_Q8_GROUP;
+            LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
+            LM_PREFETCH(sr + g + 64);
             float32x4_t tlo = vdupq_n_f32(0.0f), thi = vdupq_n_f32(0.0f);
             for (int j = 0; j < 4; j++) {
                 const int16x8_t s = vmovl_s8(vld1_s8(qg + 8 * j));
