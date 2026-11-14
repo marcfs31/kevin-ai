@@ -173,6 +173,170 @@ the caches come to about 168 MiB.
 [NOTICE](NOTICE)): the safetensors reader, bf16 and int8 kernels, the delta-rule
 recurrence, the sampler, and vendored tokenizer headers.
 
+## Architecture
+
+Three layers sit between the command-line tools and the weights file. The public API in
+[include/lm/lm.h](include/lm/lm.h) is the only thing the tools call: token ids in, logits
+out. The engine knows nothing about text; the chat and tokenizer code wrap it.
+
+### Module map
+
+```mermaid
+flowchart TD
+  subgraph CLI["src/cli: binaries"]
+    run["lm-run: token ids to logits"]
+    chat["lm-chat: interactive and one-shot chat"]
+    quant["lm-quant: bf16 to q8 file"]
+  end
+
+  subgraph CHAT["src/chat: text layer"]
+    lchat["lm_chat: turn loop, reuses the fed prefix"]
+    tmpl["lm_template: Qwen3.5 and Gemma 4 templates"]
+    prof["lm_profile: model_type and generation_config"]
+    samp["lm_sampler: temperature, top-k, top-p"]
+  end
+
+  subgraph TOK["src/tokenizer"]
+    tok["lm_tok: byte-level BPE, both families"]
+    nfc["lm_nfc: Unicode NFC tables"]
+  end
+
+  api["include/lm/lm.h: lm_open, lm_feed, lm_reset"]
+
+  subgraph MODEL["src/model: forward passes"]
+    model["lm_model: dispatch on model_type"]
+    layers["lm_layers: Qwen3.5, linear and full attention"]
+    gemma["lm_gemma: Gemma 4, PLE and KV sharing"]
+    cfg["lm_config, lm_gemma_config: strict readers"]
+    bind["lm_bind: tensor lookup and binding"]
+  end
+
+  subgraph CORE["src/core: maths"]
+    kern["lm_kernels: matvec for bf16, f32, q8 (scalar, AVX2, NEON)"]
+    ops["lm_ops: norms, RoPE, conv, delta rule, attention"]
+    qt["lm_quant: q8 quantiser"]
+  end
+
+  subgraph IO["src/io: files and memory"]
+    st["lm_st: mmap safetensors, sharded"]
+    stw["lm_stw: streaming writer"]
+    qf["lm_quantfile: q8 file format"]
+    misc["lm_sysmem, lm_io, lm_sha256"]
+  end
+
+  tpi["third_party: json.h, tok.h, tok_unicode"]
+
+  run --> api
+  chat --> lchat
+  chat --> prof
+  quant --> qf
+  lchat --> tmpl
+  lchat --> samp
+  lchat --> tok
+  lchat --> api
+  tmpl --> tok
+  tok --> nfc
+  tok --> tpi
+  api --> model
+  model --> cfg
+  model --> bind
+  model --> layers
+  model --> gemma
+  layers --> kern
+  layers --> ops
+  gemma --> kern
+  gemma --> ops
+  bind --> st
+  kern --> st
+  qf --> qt
+  stw --> misc
+  st --> misc
+```
+
+### What each part does
+
+- **Public API (`lm.h`).** Six calls: `lm_open`, `lm_close`, `lm_feed` (one token, optional
+  logits), `lm_reset`, `lm_pos` and the two size queries. Errors are small integer codes
+  (`LM_ERR_CTX`, `LM_ERR_TOKEN`, `LM_ERR_IO`). A model is never truncated, because
+  linear-attention state cannot be rewound; a caller that changes the prompt resets and
+  re-feeds.
+- **`src/model`.** `lm_open` reads `config.json` and dispatches on `model_type`: `qwen3_5`
+  goes to `lm_layers`, `gemma4` to `lm_gemma`. Each reader is strict: a missing field is an
+  error, never a default. `lm_bind` looks up tensors by name, and it is the only place that
+  decides whether a weight is bf16 or q8.
+- **`src/core`.** The arithmetic. `lm_kernels` holds the matrix-vector products for each
+  weight format; the AVX2 and NEON paths are checked bit-for-bit against the scalar path.
+  `lm_ops` holds the per-token operations: normalisation, rotary embeddings, the causal
+  convolution, the delta-rule step and attention over a cache.
+- **`src/io`.** Files and memory. `lm_st` maps safetensors files (including sharded ones)
+  without copying them, so the OS page cache decides what stays in RAM. `lm_quantfile`
+  defines the q8 layout, and `lm_stw` writes files as they are produced rather than
+  buffering them.
+- **`src/chat` and `src/tokenizer`.** Text in and text out, kept outside the engine.
+  `lm_chat` extends the fed prefix when the conversation grows and only re-feeds from
+  scratch when it must. `lm_template` renders each family's chat format. `lm_tok` does the
+  byte-level BPE; for Gemma it uses a heap-ordered merge, so long words stay fast.
+- **`third_party`.** Vendored headers (JSON parser, tokenizer, Unicode tables) with their
+  modifications recorded in [NOTICE](NOTICE).
+
+### Repository layout
+
+```mermaid
+flowchart LR
+  root["small-llm-in-c/"]
+  root --> inc["include/lm/: public API"]
+  root --> src["src/"]
+  src --> cli["cli/: lm-run, lm-chat, lm-quant"]
+  src --> model["model/: forward passes, config readers"]
+  src --> core["core/: kernels, ops, quantiser"]
+  src --> io["io/: safetensors, q8 file, memory"]
+  src --> chat["chat/: templates, sampler, profile"]
+  src --> tokz["tokenizer/: BPE, NFC"]
+  root --> tp["third_party/: vendored headers"]
+  root --> tools["tools/: Python oracles and fixture generators"]
+  root --> tests["tests/: unit tests and fixtures"]
+  tests --> unit["unit/: test_*.c"]
+  tests --> fix["fixtures/: synthetic models, ops, tokenizers"]
+  root --> scripts["scripts/: install, download, doctor, CI"]
+  root --> docs["docs/: PLAN, QUICKSTART"]
+```
+
+The Makefile discovers sources with wildcards, so a new file under `src/` or a
+`tests/unit/test_*.c` needs no Makefile change.
+
+### One token, end to end
+
+```mermaid
+sequenceDiagram
+  participant U as lm-chat
+  participant C as lm_chat
+  participant E as lm_model via lm.h
+  participant L as layer forward
+  participant K as kernels and ops
+  participant S as lm_st or q8 file
+
+  U->>C: user text
+  C->>C: template, tokenize, reuse fed prefix
+  loop each new token
+    C->>E: lm_feed(token, logits)
+    E->>S: read one embedding row (per-layer row for Gemma)
+    loop each layer
+      E->>L: hidden state
+      L->>K: norms, projections, RoPE, attention over cache
+      K->>S: read weight rows as needed
+      L-->>E: updated hidden state and caches
+    end
+    E-->>C: logits (vocab floats)
+    C->>C: sample with temperature, top-k, top-p
+  end
+  C-->>U: text, optional stats to stderr
+```
+
+Every token reads each layer's weights once, so speed is bounded by how fast those bytes
+can be read (see the speed estimate above). KV caches exist only where a layer owns one
+(Gemma's shared layers reuse their producer's cache), so memory grows with context only
+through those caches.
+
 ## Usage
 
 ### bin/lm-chat
