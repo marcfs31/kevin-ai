@@ -2,8 +2,8 @@
  * everything above it (CLI, chat, tests). Token ids in, logits out; the engine knows
  * nothing about text.
  *
- * Supported model families (read from config.json): Qwen3.5 text (qwen3_5), with
- * Gemma 4 text (gemma4) planned. Weights are either the original bf16 safetensors
+ * Supported model families (read from config.json model_type): Qwen3.5 text (qwen3_5)
+ * and Gemma 4 text (gemma4). Weights are either the original bf16 safetensors
  * (exact, streamed through the page cache) or a group-quantised q8 file written by
  * bin/lm-quant (resident on an 8 GB machine). */
 #ifndef LM_H

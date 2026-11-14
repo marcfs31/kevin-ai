@@ -1,5 +1,6 @@
-/* lm_model.c - include/lm/lm.h for Qwen3.5 text models: open (config + weight binding),
- * state, lm_feed. Original code.
+/* lm_model.c - include/lm/lm.h: the family dispatch (config.json model_type: qwen3_5 here,
+ * gemma4 in lm_gemma.c) and the Qwen3.5 text model: open (config + weight binding), state,
+ * lm_feed. Original code.
  *
  * WEIGHTS. Two sources, chosen by LmOpts.weights:
  *   NULL  the bf16 checkpoint in model_dir (single file or sharded), read through mmap.
@@ -31,7 +32,9 @@
 #include "core/lm_ops.h"
 #include "io/lm_io.h"
 #include "io/lm_st.h"
+#include "model/lm_bind.h"
 #include "model/lm_config.h"
+#include "model/lm_gemma.h"
 #include "model/lm_layers.h"
 
 typedef struct {
@@ -43,15 +46,13 @@ typedef struct {
 } Layer;
 
 struct LmModel {
+    LmGemma *gemma;                          /* non-NULL: a Gemma 4 model, every other field unused */
     LmCfg    cfg;
     int      ctx, pos;
-    LmSt     st;
-    int      q8;
+    LmBind   b;                              /* the weight set and every buffer lm_open allocated */
     Layer   *layers;
     LmMat    embed, head;                    /* head == embed when tied */
     const float *final_norm;
-    void   **owned;                          /* every buffer lm_open allocated */
-    int      nowned, capowned;
 
     /* state */
     float  **conv;                           /* per layer, NULL for full layers */
@@ -64,119 +65,23 @@ struct LmModel {
     LmAttnDims ad;
 };
 
-/* ------------------------------------------------------------------ binding helpers */
-
-static void *own(LmModel *m, void *p)
-{
-    if (!p) return NULL;
-    if (m->nowned == m->capowned) {
-        const int nc = m->capowned ? m->capowned * 2 : 256;
-        void **np = (void **)realloc(m->owned, (size_t)nc * sizeof *np);
-        if (!np) { free(p); return NULL; }
-        m->owned = np;
-        m->capowned = nc;
-    }
-    m->owned[m->nowned++] = p;
-    return p;
-}
-
-static const LmTensor *need(LmModel *m, const char *name, int ndim, int64_t d0, int64_t d1,
-                            char *err, size_t n)
-{
-    const LmTensor *t = lm_st_find(&m->st, name);
-    if (!t) { lm_fail(err, n, "tensor %s is missing from the weights", name); return NULL; }
-    int ok = t->ndim == ndim;
-    if (ok && ndim >= 1) ok = t->shape[0] == d0;
-    if (ok && ndim >= 2) ok = t->shape[1] == d1;
-    if (!ok) {
-        lm_fail(err, n, "tensor %s has shape rank %d [%lld,%lld], the config needs rank %d [%lld,%lld]", name,
-                t->ndim, (long long)t->shape[0], (long long)(t->ndim > 1 ? t->shape[1] : 0), ndim,
-                (long long)d0, (long long)d1);
-        return NULL;
-    }
-    return t;
-}
-
-/* A float vector of numel elements from any float dtype, widened into an owned buffer. */
-static const float *bind_vec(LmModel *m, const char *name, int64_t numel, int ndim, int64_t d0, int64_t d1,
-                             char *err, size_t n)
-{
-    const LmTensor *t = need(m, name, ndim, d0, d1, err, n);
-    if (!t) return NULL;
-    if (t->dtype != LM_DT_BF16 && t->dtype != LM_DT_F32 && t->dtype != LM_DT_F16) {
-        lm_fail(err, n, "tensor %s has dtype %s; BF16, F16 or F32 expected", name, lm_dtype_name(t->dtype));
-        return NULL;
-    }
-    float *buf = (float *)own(m, malloc((size_t)(numel ? numel : 1) * sizeof(float)));
-    if (!buf) { lm_fail(err, n, "out of memory binding %s", name); return NULL; }
-    if (lm_st_read_f32(&m->st, t, buf, err, n) != 0) return NULL;
-    return buf;
-}
-
-static int bind_mat(LmModel *m, const char *name, int rows, int cols, LmMat *out, char *err, size_t n)
-{
-    const LmTensor *t = need(m, name, 2, rows, cols, err, n);
-    if (!t) return -1;
-    memset(out, 0, sizeof *out);
-    out->rows = rows;
-    out->cols = cols;
-    if (m->q8) {
-        if (t->dtype != LM_DT_I8) return lm_fail(err, n, "tensor %s has dtype %s; a q8 file stores matrices as I8", name, lm_dtype_name(t->dtype));
-        if (cols % LM_Q8_GROUP) return lm_fail(err, n, "tensor %s: %d inputs is not a multiple of %d", name, cols, LM_Q8_GROUP);
-        char sn[512];
-        snprintf(sn, sizeof sn, "%s.q8scale", name);
-        const LmTensor *s = need(m, sn, 2, rows, cols / LM_Q8_GROUP, err, n);
-        if (!s) return -1;
-        if (s->dtype != LM_DT_F32) return lm_fail(err, n, "tensor %s has dtype %s; F32 expected", sn, lm_dtype_name(s->dtype));
-        float *sc = (float *)own(m, malloc((size_t)rows * (cols / LM_Q8_GROUP) * sizeof(float)));
-        if (!sc) return lm_fail(err, n, "out of memory binding %s", sn);
-        if (lm_st_read(&m->st, s, sc, err, n) != 0) return -1;
-        const int8_t *q = (const int8_t *)lm_st_data(&m->st, t);
-        if (!q) {
-            int8_t *cp = (int8_t *)own(m, malloc((size_t)t->nbytes));
-            if (!cp) return lm_fail(err, n, "out of memory binding %s", name);
-            if (lm_st_read(&m->st, t, cp, err, n) != 0) return -1;
-            q = cp;
-        }
-        out->kind = LM_MAT_Q8;
-        out->q = q;
-        out->sc = sc;
-        return 0;
-    }
-    if (t->dtype == LM_DT_I8)
-        return lm_fail(err, n, "tensor %s is I8: this is a q8 file, pass it as the weights file instead of a bf16 checkpoint", name);
-    if (t->dtype != LM_DT_BF16 && t->dtype != LM_DT_F32)
-        return lm_fail(err, n, "matrix %s has dtype %s; BF16 or F32 expected", name, lm_dtype_name(t->dtype));
-    const void *p = lm_st_data(&m->st, t);
-    if (!p) {                                 /* misaligned in the file: one owned copy */
-        void *cp = own(m, malloc((size_t)(t->nbytes ? t->nbytes : 1)));
-        if (!cp) return lm_fail(err, n, "out of memory binding %s", name);
-        if (lm_st_read(&m->st, t, cp, err, n) != 0) return -1;
-        p = cp;
-    }
-    if (t->dtype == LM_DT_BF16) { out->kind = LM_MAT_BF16; out->bf = (const uint16_t *)p; }
-    else { out->kind = LM_MAT_F32; out->f = (const float *)p; }
-    return 0;
-}
-
 #define BIND_MAT(var, rows, cols, ...) do { char nm_[512]; snprintf(nm_, sizeof nm_, __VA_ARGS__); \
-    if (bind_mat(m, nm_, (rows), (cols), &(var), err, errlen) != 0) goto fail; } while (0)
+    if (lm_bind_mat(&m->b, nm_, (rows), (cols), &(var), err, errlen) != 0) goto fail; } while (0)
 #define BIND_VEC(var, numel, ndim, d0, d1, ...) do { char nm_[512]; snprintf(nm_, sizeof nm_, __VA_ARGS__); \
-    (var) = bind_vec(m, nm_, (numel), (ndim), (d0), (d1), err, errlen); if (!(var)) goto fail; } while (0)
+    (var) = lm_bind_vec(&m->b, nm_, (numel), (ndim), (d0), (d1), err, errlen); if (!(var)) goto fail; } while (0)
 
 #define PFX "model.language_model."
 
 void lm_close(LmModel *m)
 {
     if (!m) return;
+    if (m->gemma) { lm_gemma_close(m->gemma); free(m); return; }
     const int L = m->cfg.layers;
     for (int i = 0; i < L && m->conv; i++) { free(m->conv[i]); free(m->S[i]); free(m->kc[i]); free(m->vc[i]); }
     free(m->conv); free(m->S); free(m->kc); free(m->vc);
-    for (int i = 0; i < m->nowned; i++) free(m->owned[i]);
-    free(m->owned);
     free(m->layers);
     free(m->h); free(m->n); free(m->mix); free(m->mlp_out); free(m->scratch); free(m->mlp_scratch);
-    lm_st_close(&m->st);
+    lm_bind_free(&m->b);
     lm_config_free(&m->cfg);
     free(m);
 }
@@ -194,19 +99,29 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
     if (opts && opts->threads > 0) omp_set_num_threads(opts->threads);
 #endif
 
+    /* family dispatch on config.json model_type; anything that is not a string falls
+     * through to the Qwen reader, which reports the missing or malformed field */
+    {
+        char mt[64] = "";
+        if (lm_config_model_type(model_dir, mt, sizeof mt) == 0) {
+            if (!strcmp(mt, "gemma4")) {
+                m->gemma = lm_gemma_open(model_dir, weights, ctx, err, errlen);
+                if (!m->gemma) { free(m); return NULL; }
+                m->ctx = ctx;
+                return m;
+            }
+            if (strcmp(mt, "qwen3_5") != 0) {
+                lm_fail(err, errlen, "model_type \"%s\" is not supported (supported: qwen3_5, gemma4)", mt);
+                free(m);
+                return NULL;
+            }
+        }
+    }
+
     if (lm_config_load(model_dir, &m->cfg, err, errlen) != 0) { free(m); return NULL; }
     const LmCfg *c = &m->cfg;
 
-    if (lm_st_open(&m->st, weights ? weights : model_dir, 1, err, errlen) != 0) goto fail;
-    m->q8 = weights != NULL;
-    if (m->q8) {
-        const char *f = lm_st_meta(&m->st, "format"), *g = lm_st_meta(&m->st, "group");
-        if (!f || strcmp(f, "lm-q8") || !g || strcmp(g, "32")) {
-            lm_fail(err, errlen, "%s is not an lm-q8 group-32 file (metadata format=%s group=%s)", weights,
-                    f ? f : "(none)", g ? g : "(none)");
-            goto fail;
-        }
-    }
+    if (lm_bind_open(&m->b, weights ? weights : model_dir, weights != NULL, err, errlen) != 0) goto fail;
 
     m->layers = (Layer *)calloc((size_t)c->layers, sizeof(Layer));
     if (!m->layers) { lm_fail(err, errlen, "out of memory"); goto fail; }
@@ -243,13 +158,13 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
             {
                 char nm[512];
                 snprintf(nm, sizeof nm, PFX "layers.%d.linear_attn.conv1d.weight", i);
-                const LmTensor *t = lm_st_find(&m->st, nm);
+                const LmTensor *t = lm_st_find(&m->b.st, nm);
                 if (!t) { lm_fail(err, errlen, "tensor %s is missing from the weights", nm); goto fail; }
                 if (t->ndim != 3 || t->shape[0] != c->conv_dim || t->shape[1] != 1 || t->shape[2] != c->conv_k) {
                     lm_fail(err, errlen, "tensor %s must have shape [%d,1,%d]", nm, c->conv_dim, c->conv_k);
                     goto fail;
                 }
-                L->lin.conv_w = bind_vec(m, nm, (int64_t)c->conv_dim * c->conv_k, 3, c->conv_dim, 1, err, errlen);
+                L->lin.conv_w = lm_bind_vec(&m->b, nm, (int64_t)c->conv_dim * c->conv_k, 3, c->conv_dim, 1, err, errlen);
                 if (!L->lin.conv_w) goto fail;
             }
             BIND_VEC(L->lin.dt_bias, c->lv_heads, 1, c->lv_heads, 0, PFX "layers.%d.linear_attn.dt_bias", i);
@@ -297,12 +212,13 @@ fail:
     return NULL;
 }
 
-int  lm_n_vocab(const LmModel *m) { return m->cfg.vocab; }
-int  lm_n_ctx(const LmModel *m)   { return m->ctx; }
-int  lm_pos(const LmModel *m)     { return m->pos; }
+int  lm_n_vocab(const LmModel *m) { return m->gemma ? lm_gemma_n_vocab(m->gemma) : m->cfg.vocab; }
+int  lm_n_ctx(const LmModel *m)   { return m->gemma ? lm_gemma_n_ctx(m->gemma) : m->ctx; }
+int  lm_pos(const LmModel *m)     { return m->gemma ? lm_gemma_pos(m->gemma) : m->pos; }
 
 void lm_reset(LmModel *m)
 {
+    if (m->gemma) { lm_gemma_reset(m->gemma); return; }
     const LmCfg *c = &m->cfg;
     const size_t kvd = (size_t)c->kv_heads * c->head_dim;
     for (int i = 0; i < c->layers; i++) {
@@ -316,6 +232,7 @@ void lm_reset(LmModel *m)
 
 int lm_feed(LmModel *m, int token, float *logits)
 {
+    if (m->gemma) return lm_gemma_feed(m->gemma, token, logits);
     const LmCfg *c = &m->cfg;
     if (token < 0 || token >= c->vocab) return LM_ERR_TOKEN;
     if (m->pos >= m->ctx) return LM_ERR_CTX;

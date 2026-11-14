@@ -24,6 +24,15 @@ typedef struct {
     int    key_dim, value_dim, conv_dim;   /* derived */
 } LmCfg;
 
+/* config.json of a model directory (or the file itself) parsed into a JSON object tree the
+ * caller frees with json_free_tree (json.h). NULL with a message in err when the file is
+ * missing, implausibly sized or not a JSON object. Shared by every model family. */
+struct jval *lm_config_read_json(const char *path, char *err, size_t errlen);
+
+/* The string config.json's top-level "model_type" into out (n bytes). 0, or -1 when the file
+ * cannot be read, the key is missing, is not a string, or does not fit. */
+int lm_config_model_type(const char *path, char *out, size_t n);
+
 /* path: the model directory (config.json inside it) or the config file itself. Returns 0
  * or -1 with a message in err. On failure *c holds nothing to free. */
 int  lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen);

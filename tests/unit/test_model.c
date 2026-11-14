@@ -144,7 +144,7 @@ static void test_config_rejections(void)
 {
     /* a config-only directory: every failure below must come from the config, before any weights */
     mutate("\"model_type\": \"qwen3_5\",\n    \"text_config\"", "\"model_type\": \"llama\",\n    \"text_config\"");
-    expect_open_fail(P("cfg"), NULL, "model_type \"llama\" is not supported", "wrong model_type");
+    expect_open_fail(P("cfg"), NULL, "model_type \"llama\" is not supported (supported: qwen3_5, gemma4)", "wrong model_type");
     mutate("\"model_type\": \"qwen3_5\",\n    \"text_config\"", "\"text_config\"");
     expect_open_fail(P("cfg"), NULL, "\"model_type\"", "missing model_type");
     static const char *const fields[] = { "hidden_size", "intermediate_size", "num_hidden_layers", "vocab_size",
