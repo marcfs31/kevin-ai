@@ -61,6 +61,7 @@ struct LmModel {
 
     /* scratch */
     float *h, *n, *mix, *mlp_out, *scratch, *mlp_scratch;
+    float *bh, *bn, *bmix, *bscratch;        /* prefill: LM_PREFILL_CHUNK tokens of hidden, normed, mixer output; layer scratch */
     LmLinDims ld;
     LmAttnDims ad;
 };
@@ -81,6 +82,7 @@ void lm_close(LmModel *m)
     free(m->conv); free(m->S); free(m->kc); free(m->vc);
     free(m->layers);
     free(m->h); free(m->n); free(m->mix); free(m->mlp_out); free(m->scratch); free(m->mlp_scratch);
+    free(m->bh); free(m->bn); free(m->bmix); free(m->bscratch);
     lm_bind_free(&m->b);
     lm_config_free(&m->cfg);
     free(m);
@@ -210,6 +212,22 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
         lm_fail(err, errlen, "out of memory allocating scratch");
         goto fail;
     }
+    {   /* prefill buffers: one chunk of tokens, sized for the largest of the three sub-layers */
+        size_t bs = lm_linear_batch_scratch(&m->ld, LM_PREFILL_CHUNK);
+        const size_t ba = lm_attn_batch_scratch(&m->ad, ctx, LM_PREFILL_CHUNK);
+        const size_t bm = lm_mlp_batch_scratch(c->inter, LM_PREFILL_CHUNK);
+        if (ba > bs) bs = ba;
+        if (bm > bs) bs = bm;
+        const size_t bt = (size_t)LM_PREFILL_CHUNK * c->hidden;
+        m->bh = (float *)calloc(bt, sizeof(float));
+        m->bn = (float *)calloc(bt, sizeof(float));
+        m->bmix = (float *)calloc(bt, sizeof(float));
+        m->bscratch = (float *)calloc(bs, sizeof(float));
+        if (!m->bh || !m->bn || !m->bmix || !m->bscratch) {
+            lm_fail(err, errlen, "out of memory allocating prefill buffers");
+            goto fail;
+        }
+    }
     return m;
 fail:
     lm_close(m);
@@ -257,6 +275,50 @@ int lm_feed(LmModel *m, int token, float *logits)
     m->pos++;
     if (logits) {
         lm_rmsnorm(m->n, m->h, m->final_norm, c->hidden, c->eps);
+        lm_mat_mul(&m->head, logits, m->n);
+    }
+    return LM_OK;
+}
+
+int lm_prefill(LmModel *m, const int *tokens, int n, float *logits)
+{
+    if (n < 0 || (n > 0 && !tokens)) return LM_ERR_TOKEN;
+    const int V = lm_n_vocab(m);
+    for (int i = 0; i < n; i++)
+        if (tokens[i] < 0 || tokens[i] >= V) return LM_ERR_TOKEN;
+    if (n > lm_n_ctx(m) - lm_pos(m)) return LM_ERR_CTX;
+    if (n == 0) return LM_OK;
+    if (m->gemma) {
+        for (int i = 0; i < n; i++) {
+            const int rc = lm_gemma_feed(m->gemma, tokens[i], i == n - 1 ? logits : NULL);
+            if (rc != LM_OK) return rc;
+        }
+        return LM_OK;
+    }
+
+    const LmCfg *c = &m->cfg;
+    const int H = c->hidden;
+    int last_T = 0;
+    for (int s = 0; s < n; s += LM_PREFILL_CHUNK) {
+        const int T = n - s < LM_PREFILL_CHUNK ? n - s : LM_PREFILL_CHUNK;
+        last_T = T;
+        for (int t = 0; t < T; t++) lm_mat_row(&m->embed, tokens[s + t], m->bh + (size_t)t * H);
+        for (int i = 0; i < c->layers; i++) {
+            const Layer *L = &m->layers[i];
+            for (int t = 0; t < T; t++) lm_rmsnorm(m->bn + (size_t)t * H, m->bh + (size_t)t * H, L->in_norm, H, c->eps);
+            if (L->full)
+                lm_attn_mixer_batch(m->bmix, m->bn, &L->attn, &m->ad, m->kc[i], m->vc[i], m->pos, m->ctx, m->bscratch, T);
+            else
+                lm_linear_mixer_batch(m->bmix, m->bn, &L->lin, &m->ld, m->conv[i], m->S[i], m->bscratch, T);
+            for (size_t j = 0; j < (size_t)T * H; j++) m->bh[j] += m->bmix[j];
+            for (int t = 0; t < T; t++) lm_rmsnorm(m->bn + (size_t)t * H, m->bh + (size_t)t * H, L->post_norm, H, c->eps);
+            lm_mlp_batch(m->bmix, m->bn, &L->mlp, m->bscratch, T);
+            for (size_t j = 0; j < (size_t)T * H; j++) m->bh[j] += m->bmix[j];
+        }
+        m->pos += T;
+    }
+    if (logits) {
+        lm_rmsnorm(m->n, m->bh + (size_t)(last_T - 1) * H, m->final_norm, H, c->eps);
         lm_mat_mul(&m->head, logits, m->n);
     }
     return LM_OK;

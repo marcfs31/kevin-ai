@@ -55,6 +55,15 @@ void lm_reset(LmModel *m);
  * norm and unembedding, which is what prompt prefill wants. Returns an LM_* code. */
 int  lm_feed(LmModel *m, int token, float *logits);
 
+/* Append n tokens, exactly as n calls of lm_feed would (the model state and the logits are
+ * BIT-IDENTICAL), but faster for a prompt: the Qwen path runs them in chunks so each weight
+ * is read once per chunk instead of once per token. logits (may be NULL) receives the
+ * next-token distribution after the LAST token only. n == 0 is a no-op returning LM_OK.
+ * Nothing is fed and the model is unchanged when it returns LM_ERR_TOKEN (an id outside
+ * [0, lm_n_vocab()), n < 0, or tokens NULL with n > 0) or LM_ERR_CTX (the tokens do not all
+ * fit in the context window). Gemma 4 models feed one token at a time for now. */
+int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
+
 #ifdef __cplusplus
 }
 #endif

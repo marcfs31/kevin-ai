@@ -63,4 +63,29 @@ size_t lm_attn_scratch(const LmAttnDims *d, int ctx);   /* floats */
 void   lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnDims *d,
                      float *k_cache, float *v_cache, int pos, int ctx, float *scratch);
 
+/* ---- batched forms for prompt prefill ----
+ * Each *_batch function does for T consecutive tokens exactly what T calls of its
+ * single-token twin do, with BIT-IDENTICAL results: the matrix multiplies (independent
+ * across tokens) run once over all T tokens, so each weight is read once per chunk, and the
+ * parts that carry state from one token to the next (conv state, delta-rule state, KV cache,
+ * RoPE position) run token by token in order, with the same code as the single-token path.
+ * x and out are [T][hidden] row-major. */
+#define LM_PREFILL_CHUNK 32     /* tokens per batch: scratch grows with it, the gain flattens */
+
+/* Y[T][rows] = M X[T][cols]. q8 with exact activations runs lm_matmul_q8; every other kind
+ * (f32, bf16, q8 with the int8 fast path) is T single-token multiplies. */
+void   lm_mat_mul_batch(const LmMat *m, float *Y, const float *X, int T);
+
+size_t lm_mlp_batch_scratch(int inter, int T);                       /* floats */
+void   lm_mlp_batch(float *out, const float *x, const LmMlpW *w, float *scratch, int T);
+
+size_t lm_linear_batch_scratch(const LmLinDims *d, int T);           /* floats */
+void   lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const LmLinDims *d,
+                             float *conv_state, float *S, float *scratch, int T);
+
+/* pos0 is the position of the first of the T tokens; they go to cache slots pos0..pos0+T-1. */
+size_t lm_attn_batch_scratch(const LmAttnDims *d, int ctx, int T);   /* floats */
+void   lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmAttnDims *d,
+                           float *k_cache, float *v_cache, int pos0, int ctx, float *scratch, int T);
+
 #endif /* LM_LAYERS_H */
