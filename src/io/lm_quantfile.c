@@ -17,10 +17,12 @@
 
 #define TEXT_PREFIX "model.language_model."
 
-/* Only text-model tensors are kept; visual, mtp and anything else is dropped. */
+#define MTP_PREFIX "mtp."
+
+/* Only the text model and its MTP head are kept; visual and anything else is dropped. */
 static int ignored(const char *name)
 {
-    return strncmp(name, TEXT_PREFIX, strlen(TEXT_PREFIX)) != 0;
+    return strncmp(name, TEXT_PREFIX, strlen(TEXT_PREFIX)) != 0 && strncmp(name, MTP_PREFIX, strlen(MTP_PREFIX)) != 0;
 }
 
 static int ends_with(const char *s, const char *suffix)

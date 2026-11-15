@@ -11,8 +11,13 @@ versions for `random()`, `gauss()` and `randrange()` as used here) plus the floa
 ref_qwen35.py, so the output is byte-for-byte reproducible. The seed is a constant in this
 file (SEED); the golden files carry no seed.
 
+The MTP head (mtp.*) is complete: the three tensors drawn with the model keep their place in
+the stream, the rest come from a second stream seeded MTP_SEED after the golden tokens, so
+adding them changed neither the model nor the tokens. The goldens carry its draft logits
+("mtp": one row per golden position but the last, ref_qwen35.Model.mtp_rows).
+
 Margins asserted for BOTH goldens (bf16 and q8): top-1 minus top-2 logit > MIN_GAP at each of
-the 24 golden positions and at each of the 16 greedy steps; the 24 positions and the greedy
+the 24 golden positions, at each of the 16 greedy steps and at each MTP row; the 24 positions and the greedy
 ids are not degenerate (distinct argmaxes); and the q8 logits differ from the bf16 logits by
 more than 3x the gate tolerance, so a q8 golden cannot be satisfied by the bf16 path.
 """
@@ -31,6 +36,7 @@ import ref_qwen35 as ref
 import safetensors as st
 
 SEED = 8
+MTP_SEED = 2
 MIN_GAP = 5e-2  # stricter than the 1e-2 the plan asks for
 GATE_REL_TOL = 2e-4  # docs/PLAN.md gate 2: |engine - oracle| <= 2e-4 * max|logit|
 N_TOKENS, N_PROMPT, N_GREEDY = 24, 8, 16
@@ -178,6 +184,25 @@ def build_tensors(rng):
     return g.t
 
 
+def mtp_tensors(rng, g):
+    """The rest of the MTP head: a full-attention decoder layer and the two pre-fc norms."""
+    m = "mtp."
+    g.bf16(m + "pre_fc_norm_embedding.weight", (HIDDEN,), 0.25)
+    g.bf16(m + "pre_fc_norm_hidden.weight", (HIDDEN,), 0.25)
+    p = m + "layers.0."
+    g.bf16(p + "post_attention_layernorm.weight", (HIDDEN,), 0.25)
+    a = p + "self_attn."
+    g.bf16(a + "q_proj.weight", (HEADS * HEAD_DIM * 2, HIDDEN), 1.2 / math.sqrt(HIDDEN))
+    g.bf16(a + "k_proj.weight", (KV_HEADS * HEAD_DIM, HIDDEN), 1.2 / math.sqrt(HIDDEN))
+    g.bf16(a + "v_proj.weight", (KV_HEADS * HEAD_DIM, HIDDEN), 1.0 / math.sqrt(HIDDEN))
+    g.bf16(a + "o_proj.weight", (HIDDEN, HEADS * HEAD_DIM), 0.9 / math.sqrt(HEADS * HEAD_DIM))
+    g.bf16(a + "q_norm.weight", (HEAD_DIM,), 0.3)
+    g.bf16(a + "k_norm.weight", (HEAD_DIM,), 0.3)
+    g.bf16(p + "mlp.gate_proj.weight", (INTER, HIDDEN), 1.0 / math.sqrt(HIDDEN))
+    g.bf16(p + "mlp.up_proj.weight", (INTER, HIDDEN), 1.0 / math.sqrt(HIDDEN))
+    g.bf16(p + "mlp.down_proj.weight", (HIDDEN, INTER), 0.8 / math.sqrt(INTER))
+
+
 def split_shards(tensors):
     """Layers 0-3 and the embedding in shard 1; the rest (incl. visual/mtp) in shard 2."""
     s1 = {}
@@ -195,10 +220,11 @@ def jdump(obj, **kw):
     return (json.dumps(obj, **kw) + "\n").encode("ascii")
 
 
-def golden(tokens, rows, ids):
-    rounded = [[float("%.9g" % v) for v in r] for r in rows]
-    return jdump({"tokens": tokens, "logits": rounded,
-                  "greedy": {"prompt": tokens[:N_PROMPT], "out": ids}}, separators=(",", ":"))
+def golden(tokens, rows, ids, mtp):
+    def rnd(rs):
+        return [[float("%.9g" % v) for v in r] for r in rs]
+    return jdump({"tokens": tokens, "logits": rnd(rows),
+                  "greedy": {"prompt": tokens[:N_PROMPT], "out": ids}, "mtp": rnd(mtp)}, separators=(",", ":"))
 
 
 class MarginError(Exception):
@@ -215,7 +241,13 @@ def run_model(model, tokens, label):
         raise MarginError("%s: fewer than 8 distinct argmax ids in the golden positions" % label)
     if len(set(ids)) < 3:
         raise MarginError("%s: greedy output is degenerate" % label)
-    return full, ids, min(gaps)
+    mtp = model.mtp_rows(tokens)
+    mgap = min(ref.top_gap(r) for r in mtp)
+    if mgap <= MIN_GAP:
+        raise MarginError("%s: MTP top-1/top-2 gap %.3g <= %g" % (label, mgap, MIN_GAP))
+    if len({ref.argmax(r) for r in mtp}) < 8:
+        raise MarginError("%s: fewer than 8 distinct MTP argmax ids" % label)
+    return full, ids, min(gaps + [mgap]), mtp
 
 
 def build(seed):
@@ -223,6 +255,9 @@ def build(seed):
     rng = random.Random(seed)
     tensors = build_tensors(rng)
     tokens = [rng.randrange(VOCAB) for _ in range(N_TOKENS)]
+    g = Gen(random.Random(MTP_SEED))
+    mtp_tensors(g.rng, g)
+    tensors.update(g.t)
     s1, s2 = split_shards(tensors)
     files = {"config.json": jdump(config(), indent=4)}
     files[SHARD1] = st.serialize(s1, metadata={"format": "pt"})
@@ -241,14 +276,14 @@ def build(seed):
             d, os.path.join(d, "model.q8.safetensors"))
         bf = ref.Model.load(d)
         q8 = ref.Model.load(d, os.path.join(d, "model.q8.safetensors"))
-        bf_rows, bf_ids, bf_gap = run_model(bf, tokens, "bf16")
-        q8_rows, q8_ids, q8_gap = run_model(q8, tokens, "q8")
+        bf_rows, bf_ids, bf_gap, bf_mtp = run_model(bf, tokens, "bf16")
+        q8_rows, q8_ids, q8_gap, q8_mtp = run_model(q8, tokens, "q8")
     top = max(abs(v) for r in bf_rows for v in r)
     diff = max(abs(a - b) for r1, r2 in zip(bf_rows, q8_rows) for a, b in zip(r1, r2))
     if diff <= 3 * GATE_REL_TOL * top:
         raise MarginError("q8 logits are too close to bf16 (max diff %.3g)" % diff)
-    files["golden_bf16.json"] = golden(tokens, bf_rows, bf_ids)
-    files["golden_q8.json"] = golden(tokens, q8_rows, q8_ids)
+    files["golden_bf16.json"] = golden(tokens, bf_rows, bf_ids, bf_mtp)
+    files["golden_q8.json"] = golden(tokens, q8_rows, q8_ids, q8_mtp)
     info = {"seed": seed, "min_gap_bf16": bf_gap, "min_gap_q8": q8_gap,
             "max_abs_logit": top, "max_q8_vs_bf16": diff,
             "gate_tolerance": GATE_REL_TOL * top,

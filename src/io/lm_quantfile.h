@@ -6,8 +6,8 @@
  *   - every 2-D tensor whose name ends in ".weight" is quantised: "<name>" as I8
  *     [out, in] and "<name>.q8scale" as F32 [out, in/32] (see src/core/lm_quant.h)
  *   - every other tensor is copied byte for byte with its name, dtype and shape
- *   - only tensors named "model.language_model.*" are kept; everything else (visual, mtp)
- *     is DROPPED, as tools/quant_ref.py does
+ *   - only tensors named "model.language_model.*" or "mtp.*" (Qwen3.5's multi-token-prediction
+ *     head) are kept; everything else (visual) is DROPPED, as tools/quant_ref.py does
  *   - __metadata__ {"format":"lm-q8","group":"32","source":"<sha256>"} where source is
  *     the SHA-256 of model.safetensors.index.json when the checkpoint directory has one,
  *     else of the single safetensors file
@@ -23,7 +23,7 @@
 typedef struct {
     int n_quantised;   /* 2-D .weight tensors written as I8 + .q8scale */
     int n_copied;      /* everything else, byte for byte */
-    int n_ignored;     /* visual / mtp tensors dropped */
+    int n_ignored;     /* visual and other non-text tensors dropped */
 } LmQuantStats;
 
 /* model: a checkpoint directory (index.json or model.safetensors) or a safetensors file.

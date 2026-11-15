@@ -237,8 +237,9 @@ class QuantTests(unittest.TestCase):
     def test_quantised_set_copies_and_layout(self):
         q8 = quant_ref.load_q8(os.path.join(TINY, "model.q8.safetensors"))
         src = st.open_checkpoint(TINY)
-        text = [n for n in src.names() if n.startswith("model.language_model.")]
-        self.assertFalse(any(n.startswith(("model.visual.", "mtp.")) for n in q8.names()))
+        text = [n for n in src.names() if n.startswith(("model.language_model.", "mtp."))]
+        self.assertTrue(any(n.startswith("mtp.") for n in text))     # the MTP head is kept
+        self.assertFalse(any(n.startswith("model.visual.") for n in q8.names()))
         self.assertEqual(q8.metadata, {"format": "lm-q8", "group": "32", "source": src.source_sha256})
         self.assertEqual(list(q8.metadata), ["format", "group", "source"])
         self.assertEqual(q8.names(), sorted(q8.info))
