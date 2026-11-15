@@ -211,9 +211,11 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
         c->dirty = 0;
     }
 
-    /* Prefill: ids without logits, the last one with. */
+    /* Prefill: ids without logits, the last one with. A backend with prefill takes chunks, polling
+     * cancellation between them; one without is fed token by token. */
     double t0 = now_s();
-    for (int i = start; i < prompt.n; i++) {
+    const int chunk = be->prefill ? LM_CHAT_PREFILL_CHUNK : 1;
+    for (int i = start; i < prompt.n; i += chunk) {
         if (opts->cancelled && opts->cancelled(opts->cancel_user)) {
             res->stop = LM_STOP_CANCEL;
             res->prefill_s = now_s() - t0;
@@ -221,8 +223,10 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
             pop_user(c); /* what was fed stays a valid prefix if the same message is sent again */
             return LM_OK;
         }
-        int last = i == prompt.n - 1;
-        int frc = be->feed(be->ctx, prompt.ids[i], last ? c->logits : NULL);
+        const int n = prompt.n - i < chunk ? prompt.n - i : chunk;
+        const int last = i + n == prompt.n;
+        int frc = be->prefill ? be->prefill(be->ctx, prompt.ids + i, n, last ? c->logits : NULL)
+                              : be->feed(be->ctx, prompt.ids[i], last ? c->logits : NULL);
         if (frc != LM_OK) {
             if (frc != LM_ERR_CTX) c->dirty = 1;
             else res->stop = LM_STOP_CTX;
@@ -231,14 +235,16 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
             pop_user(c);
             return frc;
         }
-        if (lm_ids_push(&c->fed, prompt.ids[i])) {
-            c->dirty = 1; /* the backend advanced but we lost count */
-            lm_ids_free(&prompt);
-            pop_user(c);
-            set_err(err, errlen, "out of memory");
-            return -1;
+        for (int k = 0; k < n; k++) {
+            if (lm_ids_push(&c->fed, prompt.ids[i + k])) {
+                c->dirty = 1; /* the backend advanced but we lost count */
+                lm_ids_free(&prompt);
+                pop_user(c);
+                set_err(err, errlen, "out of memory");
+                return -1;
+            }
         }
-        res->n_prefill++;
+        res->n_prefill += n;
     }
     res->prefill_s = now_s() - t0;
     lm_ids_free(&prompt);

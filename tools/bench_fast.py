@@ -6,7 +6,8 @@
 
 Speed: wall time of lm-run for a prompt and for prompt + N generated tokens, minimum over the
 repeats; the difference removes the model load and the prompt, so generation tok/s is N over
-that difference. Prompt tok/s is the same difference between a 2P-token and a P-token prompt.
+that difference. Prompt tok/s is the same difference between a 2P-token and a P-token prompt,
+measured twice: one token at a time (lm-run --no-prefill) and batched (lm_prefill, the default).
 
 Accuracy: the exact path generates N tokens greedily; both paths are then fed that sequence
 (teacher forcing, so one early disagreement cannot cascade) and, at each generated position,
@@ -139,7 +140,11 @@ def bench(a):
         t_p = best(base + extra + ["--tokens", csv(prompt)])
         t_pg = best(base + extra + ["--tokens", csv(prompt), "--greedy", str(a.gen)])
         t_2p = best(base + extra + ["--tokens", csv(prompt2)])
-        speed[mode] = (rate(a.gen, t_pg, t_p, mode + " generation"), rate(a.prompt, t_2p, t_p, mode + " prompt"))
+        t_pf = best(base + extra + ["--no-prefill", "--tokens", csv(prompt)])
+        t_2pf = best(base + extra + ["--no-prefill", "--tokens", csv(prompt2)])
+        speed[mode] = (rate(a.gen, t_pg, t_p, mode + " generation"),
+                       rate(a.prompt, t_2pf, t_pf, mode + " prompt one token at a time"),
+                       rate(a.prompt, t_2p, t_p, mode + " prompt batched"))
 
     full = prompt + ids
     with tempfile.TemporaryDirectory() as tmp:
@@ -154,14 +159,16 @@ def bench(a):
         raise Failure("exact and fast logits have different vocabularies: %d and %d" % (vocab, vocab2))
     m = compare(ex, fa, vocab, len(prompt) - 1, ids)
 
-    g_e, p_e = speed["exact"]
-    g_f, p_f = speed["fast"]
+    g_e, f_e, p_e = speed["exact"]
+    g_f, f_f, p_f = speed["fast"]
     lines = [
         cpu_context(),
         "model: %s (%d prompt tokens, %d generated, %d repeats, threads %s)"
         % (a.model, a.prompt, a.gen, a.repeats, a.threads or "default"),
         "generation: exact %.2f tok/s, fast %.2f tok/s (%.2fx)" % (g_e, g_f, g_f / g_e),
-        "prompt:     exact %.2f tok/s, fast %.2f tok/s (%.2fx)" % (p_e, p_f, p_f / p_e),
+        "prompt, one token at a time: exact %.2f tok/s, fast %.2f tok/s (%.2fx)" % (f_e, f_f, f_f / f_e),
+        "prompt, batched (lm_prefill): exact %.2f tok/s (%.2fx), fast %.2f tok/s (%.2fx)"
+        % (p_e, p_e / f_e, p_f, p_f / f_f),
         "accuracy over %d generated positions (teacher-forced on the exact path's text):" % m["n"],
         "  fast picks the exact path's top token at %d/%d positions (%.1f%%)"
         % (m["top1"], m["n"], 100.0 * m["top1"] / m["n"]),
@@ -178,7 +185,7 @@ def main(argv=None):
     ap.add_argument("--model", required=True, help="model directory (config.json, tokenizer)")
     ap.add_argument("--weights", required=True, help="the q8 weights file (--fast needs one)")
     ap.add_argument("--gen", type=int, default=96, help="tokens to generate (default 96)")
-    ap.add_argument("--prompt", type=int, default=16, help="prompt tokens (default 16)")
+    ap.add_argument("--prompt", type=int, default=32, help="prompt tokens (default 32, one prefill chunk)")
     ap.add_argument("--repeats", type=int, default=3, help="timing repeats, the minimum counts (default 3)")
     ap.add_argument("--threads", type=int, default=0, help="lm-run --threads (default: its default)")
     ap.add_argument("--timeout", type=float, default=1800.0, help="seconds per lm-run invocation")

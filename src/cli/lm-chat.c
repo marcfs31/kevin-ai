@@ -53,6 +53,7 @@ static int cancelled(void *user) { (void)user; return g_cancel != 0; }
 /* ---- LmModel as an LmBackend (lm.h only) ----------------------------------------- */
 
 static int be_feed(void *ctx, int token, float *logits) { return lm_feed((LmModel *)ctx, token, logits); }
+static int be_prefill(void *ctx, const int *ids, int n, float *logits) { return lm_prefill((LmModel *)ctx, ids, n, logits); }
 static void be_reset(void *ctx) { lm_reset((LmModel *)ctx); }
 static int be_pos(void *ctx) { return lm_pos((const LmModel *)ctx); }
 
@@ -211,6 +212,7 @@ int main(int argc, char **argv)
     cc.backend.feed = be_feed;
     cc.backend.reset = be_reset;
     cc.backend.pos = be_pos;
+    cc.backend.prefill = be_prefill;
     cc.temperature = temperature;
     cc.top_p = top_p;
     cc.top_k = (int)top_k;

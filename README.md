@@ -512,8 +512,12 @@ but token ids goes to stdout.
 
 ```
 bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
-           [--greedy N] [--ctx N] [--threads N] [--fast]
+           [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill]
 ```
+
+The prompt goes through `lm_prefill` (chunks of 32 tokens, each weight read once per chunk)
+unless `--logits-out` wants a row per token or `--no-prefill` is given; the results are
+bit-identical either way, `--no-prefill` is for timing the difference.
 
 ### bin/lm-quant
 

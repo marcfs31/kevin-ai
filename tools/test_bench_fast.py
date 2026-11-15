@@ -147,7 +147,8 @@ class EndToEndTests(unittest.TestCase):
         with mock.patch.object(bench_fast, "rate", lambda n, tl, ts, what: float(n)), contextlib.redirect_stdout(out):
             self.assertEqual(bench_fast.main(self.args()), 0)
         text = out.getvalue()
-        for needle in ("generation: exact", "prompt:     exact", "top token at", "top 5 at", "logit error vs exact"):
+        for needle in ("generation: exact", "prompt, one token at a time: exact", "prompt, batched (lm_prefill): exact",
+                       "top token at", "top 5 at", "logit error vs exact"):
             self.assertIn(needle, text)
         top1 = int(text.split("top token at ")[1].split("/")[0])
         self.assertTrue(0 <= top1 <= 8)

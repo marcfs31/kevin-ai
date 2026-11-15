@@ -56,6 +56,7 @@ typedef struct {
     int script[256], ns, cursor;                  /* argmax of the k-th logits row handed out */
     int feeds, fail_at;                           /* fail_at: the feed() call (0-based) returning LM_ERR_IO */
     int calls;
+    int pf_calls, pf_max;                         /* prefill backend: calls and the largest chunk handed to it */
 } Fake;
 
 static int fk_feed(void *c, int token, float *logits)
@@ -75,6 +76,19 @@ static int fk_feed(void *c, int token, float *logits)
     }
     return LM_OK;
 }
+/* a prefill backend is n feeds, logits after the last id only; it records how it was called */
+static int fk_prefill(void *c, const int *ids, int n, float *logits)
+{
+    Fake *f = (Fake *)c;
+    f->pf_calls++;
+    if (n > f->pf_max) f->pf_max = n;
+    for (int i = 0; i < n; i++) {
+        const int rc = fk_feed(c, ids[i], i == n - 1 ? logits : NULL);
+        if (rc != LM_OK) return rc;
+    }
+    return LM_OK;
+}
+static int g_use_prefill; /* mk() gives the backend the prefill call when set */
 static void fk_reset(void *c) { Fake *f = (Fake *)c; f->pos = 0; f->resets++; f->nlog = 0; }
 static int fk_pos(void *c) { return ((Fake *)c)->pos; }
 
@@ -102,7 +116,7 @@ static LmChat *mk(Fake *f, int thinking, int strict, const char *system)
     memset(&cc, 0, sizeof cc);
     cc.tok = g_tok;
     cc.tpl = g_tpl;
-    cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos };
+    cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos, g_use_prefill ? fk_prefill : NULL };
     cc.temperature = 0;
     cc.top_p = 1;
     cc.seed = 1;
@@ -291,8 +305,15 @@ static void test_backend_error(void)
     lm_chat_free(c);
 }
 
+/* A prompt long enough for several prefill chunks: "Hello" 40 times. */
+static const char *LONG_MSG =
+    "Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello "
+    "Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello Hello "
+    "Hello Hello Hello Hello Hello Hello Hello Hello";
+
 typedef struct { int after, seen; } Cancel;
 static int cancel_after(void *u) { Cancel *c = (Cancel *)u; return ++c->seen > c->after; }
+static int cancel_after_x(void *u) { return cancel_after(u); }
 
 static void test_cancel_and_max(void)
 {
@@ -322,6 +343,72 @@ static void test_cancel_and_max(void)
     script(&f, "Yes", "<|im_end|>", NULL);
     CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && t.reprefill == 0 && f.log[0] == pid("Hello") && f.log[1] == pid("<|im_end|>"));
     lm_chat_free(c);
+}
+
+static int cancel_after_x(void *u);
+
+static void test_prefill_backend(void)
+{
+    /* the same turn with and without a prefill backend: identical ids fed, identical logits flags,
+     * identical text; the prefill calls are chunks of at most LM_CHAT_PREFILL_CHUNK */
+    Fake a, b;
+    LmTurn ta, tb;
+    char ans_a[512];
+    g_use_prefill = 0;
+    fake_init(&a, 4096);
+    LmChat *ca = mk(&a, 0, 0, NULL);
+    script(&a, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(ca, LONG_MSG, 0, &ta, NULL, NULL) == LM_OK);
+    snprintf(ans_a, sizeof ans_a, "%s", g_ans);
+    g_use_prefill = 1;
+    fake_init(&b, 4096);
+    LmChat *cb = mk(&b, 0, 0, NULL);
+    script(&b, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(cb, LONG_MSG, 0, &tb, NULL, NULL) == LM_OK);
+    CHECK(ta.n_prompt > 3 * LM_CHAT_PREFILL_CHUNK);                       /* the test needs several chunks */
+    CHECK(ta.n_prompt == tb.n_prompt && ta.n_prefill == tb.n_prefill && ta.n_gen == tb.n_gen);
+    CHECK(a.nlog == b.nlog && !memcmp(a.log, b.log, (size_t)a.nlog * sizeof(int)));
+    CHECK(!memcmp(a.null_logits, b.null_logits, (size_t)a.nlog * sizeof(int)));
+    CHECK(!strcmp(ans_a, g_ans));
+    CHECK(a.pf_calls == 0);
+    CHECK(b.pf_calls == (tb.n_prompt + LM_CHAT_PREFILL_CHUNK - 1) / LM_CHAT_PREFILL_CHUNK && b.pf_max == LM_CHAT_PREFILL_CHUNK);
+
+    /* the second turn's tail is one short prefill call */
+    b.nlog = 0;
+    const int calls_before = b.pf_calls;
+    script(&b, "Yes", "<|im_end|>", NULL);
+    CHECK(turn(cb, "Hi", 0, &tb, NULL, NULL) == LM_OK && tb.reprefill == 0);
+    CHECK(b.pf_calls == calls_before + (tb.n_prefill + LM_CHAT_PREFILL_CHUNK - 1) / LM_CHAT_PREFILL_CHUNK);
+    lm_chat_free(ca);
+    lm_chat_free(cb);
+
+    /* cancellation is polled between chunks: after the first chunk, exactly one chunk is fed,
+     * and sending the same message again continues from there without a reset */
+    fake_init(&b, 4096);
+    cb = mk(&b, 0, 0, NULL);
+    script(&b, "Hello", "<|im_end|>", NULL);
+    Cancel cn = { 1, 0 };
+    CHECK(turn(cb, LONG_MSG, 0, &tb, cancel_after_x, &cn) == LM_OK);
+    CHECK(tb.stop == LM_STOP_CANCEL && tb.n_prefill == LM_CHAT_PREFILL_CHUNK && b.pf_calls == 1);
+    CHECK(b.pos == LM_CHAT_PREFILL_CHUNK && lm_chat_fed(cb) == LM_CHAT_PREFILL_CHUNK);
+    script(&b, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(cb, LONG_MSG, 0, &tb, NULL, NULL) == LM_OK);
+    CHECK(tb.reprefill == 0 && b.resets == 0 && tb.n_prefill == tb.n_prompt - LM_CHAT_PREFILL_CHUNK);
+    lm_chat_free(cb);
+
+    /* NEGATIVE: a failure inside a chunk leaves the state unknown: the next turn resets and re-feeds
+     * everything, like a failed single feed */
+    fake_init(&b, 4096);
+    cb = mk(&b, 0, 0, NULL);
+    script(&b, "Hello", "<|im_end|>", NULL);
+    b.fail_at = 20; /* inside the second chunk */
+    CHECK(turn(cb, LONG_MSG, 0, &tb, NULL, NULL) == LM_ERR_IO);
+    b.fail_at = -1;
+    script(&b, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(cb, LONG_MSG, 0, &tb, NULL, NULL) == LM_OK);
+    CHECK(b.resets == 1 && tb.reprefill == 1 && tb.n_prefill == tb.n_prompt);
+    lm_chat_free(cb);
+    g_use_prefill = 0;
 }
 
 static void test_thinking_and_tools(void)
@@ -364,7 +451,7 @@ static void test_same_seed_same_text(void)
         LmChatConfig cc;
         memset(&cc, 0, sizeof cc);
         cc.tok = g_tok; cc.tpl = g_tpl;
-        cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos };
+        cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL };
         cc.temperature = 1.0; cc.top_p = 0.9; cc.top_k = 5; cc.seed = 42;
         char err[100];
         LmChat *c = lm_chat_new(&cc, err, sizeof err);
@@ -392,6 +479,7 @@ int main(void)
     test_ctx_full();
     test_backend_error();
     test_cancel_and_max();
+    test_prefill_backend();
     test_thinking_and_tools();
     test_same_seed_same_text();
 
