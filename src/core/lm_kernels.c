@@ -242,6 +242,29 @@ int lm_matvec_q8_scalar(float *y, const float *x, const int8_t *q, const float *
     return 0;
 }
 
+#if defined(LM_HAVE_AVX2)
+#define LM_FORCE_INLINE static inline __attribute__((always_inline))
+/* Eight int8 weights widened to f32. */
+LM_FORCE_INLINE __m256 q8_w8_avx2(const int8_t *p)
+{
+    return _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)p)));
+}
+
+/* The single-token sum of one group of 32: t = fma(w3,x3, fma(w2,x2, fma(w1,x1, fma(w0,x0, 0)))).
+ * Written without a loop on purpose: perf on the target machine measured about 41 instructions per
+ * group (and 37 in the batched kernel) when gcc -O2 left the four-step loop rolled, with the widened
+ * weights going through the stack; straight-line code keeps them in registers. Same operations in
+ * the same order, so the results are bit-identical to the loop. */
+LM_FORCE_INLINE __m256 q8_group_avx2(const int8_t *qg, const float *xg)
+{
+    __m256 t = _mm256_fmadd_ps(q8_w8_avx2(qg), _mm256_loadu_ps(xg), _mm256_setzero_ps());
+    t = _mm256_fmadd_ps(q8_w8_avx2(qg + 8), _mm256_loadu_ps(xg + 8), t);
+    t = _mm256_fmadd_ps(q8_w8_avx2(qg + 16), _mm256_loadu_ps(xg + 16), t);
+    t = _mm256_fmadd_ps(q8_w8_avx2(qg + 24), _mm256_loadu_ps(xg + 24), t);
+    return t;
+}
+#endif
+
 int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales, int in, int out)
 {
     if (in < 0 || in % LM_Q8_GROUP != 0) return -1;
@@ -259,13 +282,7 @@ int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales,
             const float *xg = x + (size_t)g * LM_Q8_GROUP;
             LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
             LM_PREFETCH(sr + g + 64);
-            __m256 t = _mm256_setzero_ps();
-            for (int j = 0; j < 4; j++) {
-                const __m128i b = _mm_loadl_epi64((const __m128i *)(qg + 8 * j));
-                t = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(b)),
-                                    _mm256_loadu_ps(xg + 8 * j), t);
-            }
-            acc = _mm256_fmadd_ps(t, _mm256_set1_ps(sr[g]), acc);
+            acc = _mm256_fmadd_ps(q8_group_avx2(qg, xg), _mm256_set1_ps(sr[g]), acc);
         }
         __m128 lo = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
         lo = _mm_add_ps(lo, _mm_movehl_ps(lo, lo));
@@ -334,12 +351,7 @@ static inline float q8_row_avx2(const int8_t *qr, const float *sr, const float *
     for (int g = 0; g < ng; g++) {
         const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
         const float *xg = x + (size_t)g * LM_Q8_GROUP;
-        __m256 t = _mm256_setzero_ps();
-        for (int j = 0; j < 4; j++) {
-            const __m128i b = _mm_loadl_epi64((const __m128i *)(qg + 8 * j));
-            t = _mm256_fmadd_ps(_mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(b)), _mm256_loadu_ps(xg + 8 * j), t);
-        }
-        acc = _mm256_fmadd_ps(t, _mm256_set1_ps(sr[g]), acc);
+        acc = _mm256_fmadd_ps(q8_group_avx2(qg, xg), _mm256_set1_ps(sr[g]), acc);
     }
     return hsum8_avx2(acc);
 }
@@ -356,15 +368,16 @@ static inline void q8_tile4_avx2(float *Y, const float *X, int t0, int in, int o
         const size_t off = (size_t)g * LM_Q8_GROUP;
         LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
         LM_PREFETCH(sr + g + 64);
-        __m256 w[4];
-        for (int j = 0; j < 4; j++)
-            w[j] = _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(qg + 8 * j))));
+        const __m256 w0 = q8_w8_avx2(qg), w1 = q8_w8_avx2(qg + 8), w2 = q8_w8_avx2(qg + 16), w3 = q8_w8_avx2(qg + 24);
         const __m256 sv = _mm256_set1_ps(sr[g]);
-#define LM_TOKEN_STEP(xt, acc)                                                                           \
-    do {                                                                                                 \
-        __m256 t_ = _mm256_setzero_ps();                                                                 \
-        for (int j = 0; j < 4; j++) t_ = _mm256_fmadd_ps(w[j], _mm256_loadu_ps((xt) + off + 8 * j), t_); \
-        (acc) = _mm256_fmadd_ps(t_, sv, (acc));                                                          \
+#define LM_TOKEN_STEP(xt, acc)                                                               \
+    do {                                                                                     \
+        const float *xp_ = (xt) + off;                                                       \
+        __m256 t_ = _mm256_fmadd_ps(w0, _mm256_loadu_ps(xp_), _mm256_setzero_ps());          \
+        t_ = _mm256_fmadd_ps(w1, _mm256_loadu_ps(xp_ + 8), t_);                              \
+        t_ = _mm256_fmadd_ps(w2, _mm256_loadu_ps(xp_ + 16), t_);                             \
+        t_ = _mm256_fmadd_ps(w3, _mm256_loadu_ps(xp_ + 24), t_);                             \
+        (acc) = _mm256_fmadd_ps(t_, sv, (acc));                                              \
     } while (0)
         LM_TOKEN_STEP(x0, a0);
         LM_TOKEN_STEP(x1, a1);
