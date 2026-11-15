@@ -232,6 +232,22 @@ static int common_prefix(const LmIds *a, const LmIds *b)
     return n;
 }
 
+/* Where the system message ends in a rendered prompt, the next turn's header included: where
+ * two conversations of the system message and one different user message each part. 0 if the
+ * template refuses them. */
+static int system_end(const LmChat *c, const LmRenderOpts *ro)
+{
+    LmMsg a[2] = { { LM_ROLE_SYSTEM, c->system, NULL, NULL, 0, 0 }, { LM_ROLE_USER, "a", NULL, NULL, 0, 0 } };
+    LmMsg b[2] = { { LM_ROLE_SYSTEM, c->system, NULL, NULL, 0, 0 }, { LM_ROLE_USER, "b", NULL, NULL, 0, 0 } };
+    LmIds x = { 0 }, y = { 0 };
+    int n = 0;
+    if (!c->cfg.tpl->render(c->cfg.tpl, a, 2, ro, &x, NULL, 0) && !c->cfg.tpl->render(c->cfg.tpl, b, 2, ro, &y, NULL, 0))
+        n = common_prefix(&x, &y);
+    lm_ids_free(&x);
+    lm_ids_free(&y);
+    return n;
+}
+
 /* The backend is at position 0. Restore the cache if it covers a prefix of the prompt (leaving
  * at least the last id to feed); returns the ids now held, 0 if none. */
 static int restore_cache(LmChat *c, const LmIds *prompt)
@@ -249,16 +265,18 @@ static int restore_cache(LmChat *c, const LmIds *prompt)
     return n;
 }
 
-/* Replace the cache with a snapshot of the state, which holds c->fed. A failure keeps the old one. */
+/* Replace the cache with a snapshot of the state, which holds c->fed. A failure leaves it empty. */
 static void save_cache(LmChat *c)
 {
     const LmBackend *be = &c->cfg.backend;
     LmIds ids = { 0 };
     if (lm_ids_append(&ids, c->fed.ids, c->fed.n)) return;
+    /* the old one goes first: two snapshots alive at once could be what exhausts memory */
+    if (c->snap) be->drop(be->ctx, c->snap);
+    c->snap = NULL;
+    lm_ids_free(&c->snap_ids);
     void *s = be->save(be->ctx);
     if (!s) { lm_ids_free(&ids); return; }
-    if (c->snap) be->drop(be->ctx, c->snap);
-    lm_ids_free(&c->snap_ids);
     c->snap = s;
     c->snap_ids = ids;
 }
@@ -304,8 +322,12 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
     int start = reuse ? c->fed.n : 0;
     /* where to snapshot: the longest prefix the new prompt shares with the old ids */
     int save_at = 0;
-    if (be->save && !(reuse && c->fed.n > 0)) {
+    if (be->save && c->system && !(reuse && c->fed.n > 0)) {
         save_at = common_prefix(c->fed.n > 0 ? &c->fed : &c->prev, &prompt);
+        /* never past the system message: the snapshot stays small and is what the next
+         * conversation needs, not the tail of this one */
+        int sys_end = system_end(c, &ro);
+        if (save_at > sys_end) save_at = sys_end;
         if (save_at >= prompt.n) save_at = prompt.n - 1;
         if (save_at < LM_CHAT_CACHE_MIN) save_at = 0;
     }
@@ -324,6 +346,7 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
     }
     if (be->save && c->fed.n == 0) {
         start = res->n_cached = restore_cache(c, &prompt);
+        if (start > 0 && res->reprefill) { res->reprefill = 0; c->reprefills--; } /* not from scratch */
         if (save_at <= start) save_at = 0;
     }
 

@@ -141,7 +141,7 @@ static int run_turn(Session *s, const char *text)
     }
     if (s->stats)
         fprintf(stderr, "[prompt %d tokens, %d from cache, fed %d%s: %.2f tok/s | generated %d tokens: %.2f tok/s]\n",
-                t.n_prompt, t.n_cached, t.n_prefill, t.reprefill && !t.n_cached ? " (re-fed from scratch)" : "",
+                t.n_prompt, t.n_cached, t.n_prefill, t.reprefill ? " (re-fed from scratch)" : "",
                 t.prefill_s > 0 ? t.n_prefill / t.prefill_s : 0.0, t.n_gen, t.decode_s > 0 ? t.n_gen / t.decode_s : 0.0);
     return 0;
 }

@@ -12,13 +12,15 @@
  * template's own history rendering instead (reasoning dropped), which costs a full
  * re-feed on every turn after the first. lm_chat_reprefills() counts them.
  *
- * Prefix cache. A backend with save/restore/drop keeps one snapshot of the state. When a turn
- * cannot extend the fed ids (another conversation, a /reset, an edited history) and the
- * snapshot's ids are a prefix of the new prompt, the state is restored from it and only the
- * rest is fed. When the old ids (fed, or fed before the last lm_chat_reset) and the new prompt
- * share a longer prefix than the cache covers, the turn snapshots the state as its prefill
- * passes that point, replacing the cache: the second conversation that starts with the same
- * system prompt pays for it once, every later one restores it. A shared prefix shorter than
+ * Prefix cache. A backend with save/restore/drop keeps one snapshot of the state, taken at the
+ * end of the system message. When a turn cannot extend the fed ids (another conversation, a
+ * /reset, an edited history) and the snapshot's ids are a prefix of the new prompt, the state
+ * is restored from it and only the rest is fed. When the old ids (fed, or fed before the last
+ * lm_chat_reset) and the new prompt share the system message and the cache does not cover it,
+ * the turn snapshots the state as its prefill passes that point, replacing the cache: the
+ * second conversation that starts with the same system prompt pays for it once, every later
+ * one restores it. One slot: clients alternating between two system prompts replace it each
+ * time (a copy of the state, never a wrong answer). No system message, no cache. A shared prefix shorter than
  * LM_CHAT_CACHE_MIN ids (a template's opening tokens) does not replace the cache: it would
  * evict a snapshot that saves more than it does. Restoring is bit-identical to
  * feeding (lm_restore), so the cache changes speed, never output.
@@ -82,7 +84,8 @@ void    lm_chat_free(LmChat *c);
  * cache stays, and what was fed is remembered for its next snapshot. */
 void lm_chat_reset(LmChat *c);
 
-/* How many turns had to reset the backend and re-feed a non-empty state. */
+/* How many turns had to reset the backend and re-feed a non-empty state from scratch (a turn
+ * restored from the prefix cache is not counted). */
 int lm_chat_reprefills(const LmChat *c);
 /* Ids the backend currently holds, i.e. the prompt prefix known to be fed. */
 int lm_chat_fed(const LmChat *c);
@@ -124,7 +127,7 @@ typedef struct {
     int n_prompt;           /* ids in this turn's rendered prompt */
     int n_prefill;          /* ids actually fed for it */
     int n_cached;           /* ids restored from the prefix cache instead of fed */
-    int reprefill;          /* 1 if the backend was reset and the state re-fed */
+    int reprefill;          /* 1 if the backend was reset and the state re-fed from scratch */
     int n_gen;              /* generated ids, stop id excluded */
     int tool_calls;
     int thinking_open;      /* the turn ended inside an unclosed think block */
