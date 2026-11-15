@@ -11,10 +11,13 @@ A C99 CPU inference engine for small language models, written from scratch for a
   oracle agrees with Hugging Face transformers to 5e-9.
 - **Qwen3.5-4B runs on the real checkpoint** (first run 2026-11-14, re-measured 2026-11-15 with
   `tools/bench_fast.py`, on the target machine). It answers correctly. With the q8 weights:
-  about **2.3 tokens/s** generating and about **4.6 tokens/s** on a 32-token prompt, with the
+  about **2.3 tokens/s** generating and about **5.2 tokens/s** on a 32-token prompt, with the
   CPU still held at 800 MHz of its 2.5 GHz (see Troubleshooting, "cpu clock"). The first run
   gave 1.7 and 1.9: the AVX2 kernels were compiled to about three times more instructions
-  than needed, and the prompt now goes through in batches. Replies read about 4.75 GB per
+  than needed, and the prompt now goes through in batches whose inputs stay in the L1 cache
+  (4.6 tokens/s before that; the batched multiply itself got 1.35x faster, with 73% fewer L1
+  misses). About half of the prompt time is now in the parts that run one token at a time.
+  Replies read about 4.75 GB per
   token, so at about 11 GB/s they are bounded by memory bandwidth. Gemma 4 E4B has not been
   run on the real checkpoint yet.
 
@@ -507,7 +510,7 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
   Measured on the real Qwen3.5-4B (96 generated tokens, teacher-forced): the same top token
   as the exact path at 96 of 96 positions, logit error 1.0% on average (1.3% worst). But
   once the exact kernels were fixed it is only 1.05x faster for replies (2.44 against 2.31
-  tokens/s) and slower for prompts (3.1 against 4.6 tokens/s batched), so it is **not
+  tokens/s) and slower for prompts (3.1 against 5.2 tokens/s batched), so it is **not
   recommended**; the flag stays for experiments. `make gate-fast` reports its distance from
   the oracle on the tiny fixtures (not a gate). `python3 tools/bench_fast.py --run bin/lm-run
   --model DIR --weights FILE` reproduces the numbers above.
