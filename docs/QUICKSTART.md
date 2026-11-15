@@ -99,6 +99,16 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 
 Thinking is off by default (`--no-think`). With `--prompt` it answers once and exits.
 
+`bin/lm-serve` (OpenAI-compatible HTTP endpoint on 127.0.0.1:8080):
+
+```
+bin/lm-serve --model DIR --weights FILE [--host ADDR] [--port N] [--max-tokens N]
+```
+
+To keep it running across reboots, install `scripts/lm-serve.service` as a systemd user
+service (the steps are in the file's comments) and check it with
+`curl -s http://127.0.0.1:8080/health`.
+
 `bin/lm-run` (feeds token ids, writes logits, generates by argmax):
 
 ```

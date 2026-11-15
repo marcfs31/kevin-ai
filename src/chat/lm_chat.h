@@ -68,6 +68,20 @@ int lm_chat_reprefills(const LmChat *c);
 /* Ids the backend currently holds, i.e. the prompt prefix known to be fed. */
 int lm_chat_fed(const LmChat *c);
 
+/* Replace the conversation with msgs[0..n): an optional system message first, then user and
+ * assistant messages (content only; reasoning and gen_ids are ignored). This is how a client
+ * that sends the whole conversation each time (lm-serve) talks to the chat. Leading messages
+ * that equal the chat's own history (same role and text, in order) keep what the chat knows
+ * about them, so an answer it generated is rendered from its exact ids and the next turn's
+ * prompt still extends the fed state. Returns 0, or -1 with a message in err (a system
+ * message that is not first, a message without text, allocation failure); on -1 the
+ * conversation is unchanged. The backend is not touched: the next turn decides what to feed. */
+int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen);
+
+/* New sampling settings from the next turn on, with the random stream re-seeded. Checked
+ * when sampling (an invalid combination makes the turn fail), like LmChatConfig's. */
+void lm_chat_set_sampling(LmChat *c, double temperature, double top_p, int top_k, uint64_t seed);
+
 enum {
     LM_STOP_EOS = 1,    /* the model ended its turn */
     LM_STOP_MAX,        /* max_tokens reached */

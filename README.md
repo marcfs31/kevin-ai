@@ -338,6 +338,7 @@ flowchart TD
   subgraph CLI["src/cli: binaries"]
     run["lm-run: token ids to logits"]
     chat["lm-chat: interactive and one-shot chat"]
+    serve["lm-serve: OpenAI-compatible HTTP endpoint"]
     quant["lm-quant: bf16 to q8 file"]
   end
 
@@ -438,7 +439,7 @@ flowchart LR
   root["small-llm-in-c/"]
   root --> inc["include/lm/: public API"]
   root --> src["src/"]
-  src --> cli["cli/: lm-run, lm-chat, lm-quant"]
+  src --> cli["cli/: lm-run, lm-chat, lm-serve, lm-quant"]
   src --> model["model/: forward passes, config readers"]
   src --> core["core/: kernels, ops, quantiser"]
   src --> io["io/: safetensors, q8 file, memory"]
@@ -516,6 +517,32 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
   the oracle on the tiny fixtures (not a gate). `python3 tools/bench_fast.py --run bin/lm-run
   --model DIR --weights FILE` reproduces the numbers above.
 - Sampling defaults come from `generation_config.json` for Gemma; flags override them.
+
+### bin/lm-serve
+
+An OpenAI-compatible HTTP endpoint, so other programs (editors, chat front ends, scripts) can
+use the model. One request at a time; others wait their turn.
+
+```
+bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
+             [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N] [--fast]
+```
+
+- `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (with `"stream": true` too).
+  Text chat only: tools, stop strings, `n` > 1, logprobs, penalties and JSON modes get a 400
+  instead of being ignored.
+- Without `max_tokens` a reply runs until the model stops or the context fills.
+- It listens on 127.0.0.1:8080. To reach it from the network, pass `--host 0.0.0.0` and set
+  `LM_SERVE_API_KEY` in the environment; `/v1` then needs `Authorization: Bearer <key>`.
+- The model state cannot be rewound, so it is reused only when a request continues the last
+  conversation with the previous answer sent back unchanged (what chat clients do). Then only
+  the new message is fed; anything else feeds the whole prompt again.
+- `scripts/lm-serve.service` runs it as a systemd user service; its comments say how to install it.
+
+```bash
+curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":64}'
+```
 
 ### bin/lm-run
 

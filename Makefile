@@ -57,7 +57,7 @@ $(B)/tests/unit/%: $(B)/tests/unit/%.o $(LIB_OBJS)
 	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 # A test target with nothing to run must fail, not pass.
-test: $(TESTS) bin/lm-run
+test: $(TESTS) bin/lm-run bin/lm-serve
 	@test -n "$(TESTS)" || { echo "make test: no tests/unit/test_*.c found"; exit 1; }
 	@fail=0; for t in $(TESTS); do echo "== $$t"; ./$$t || { echo "FAILED: $$t"; fail=1; }; done; \
 	for s in $(TEST_SH); do echo "== $$s"; bash $$s || { echo "FAILED: $$s"; fail=1; }; done; exit $$fail
