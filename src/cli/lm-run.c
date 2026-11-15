@@ -1,8 +1,9 @@
 /* lm-run.c - bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
- *                       [--greedy N] [--ctx N] [--threads N] [--fast]
+ *                       [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill]
  *
- * Feeds the token ids, writes one little-endian f32 row of `vocab` logits per fed token
- * to F, then generates N tokens by argmax (lowest id wins a tie) and prints one id per
+ * Feeds the token ids (through lm_prefill when no logits are written, token by token with
+ * --no-prefill or --logits-out: the results are bit-identical), writes one little-endian f32
+ * row of `vocab` logits per fed token to F, then generates N tokens by argmax (lowest id wins a tie) and prints one id per
  * line on stdout. Nothing else goes to stdout; errors go to stderr with a non-zero exit.
  * Original code; contract in docs/PLAN.md. */
 #include <errno.h>
@@ -16,7 +17,7 @@
 static int usage(void)
 {
     fprintf(stderr, "usage: lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]\n"
-                    "              [--greedy N] [--ctx N] [--threads N] [--fast]\n");
+                    "              [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill]\n");
     return 2;
 }
 
@@ -43,7 +44,7 @@ static const char *code_name(int rc)
 int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *tokstr = NULL, *outp = NULL;
-    int greedy = 0, ctx = 0, threads = 0, fast = 0;
+    int greedy = 0, ctx = 0, threads = 0, fast = 0, no_prefill = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         const int has = i + 1 < argc;
@@ -54,6 +55,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--greedy") && has) { if (parse_int(argv[++i], 0, &greedy)) { fprintf(stderr, "lm-run: bad --greedy\n"); return 2; } }
         else if (!strcmp(a, "--ctx") && has) { if (parse_int(argv[++i], 1, &ctx)) { fprintf(stderr, "lm-run: bad --ctx\n"); return 2; } }
         else if (!strcmp(a, "--fast")) fast = 1;
+        else if (!strcmp(a, "--no-prefill")) no_prefill = 1;
         else if (!strcmp(a, "--threads") && has) { if (parse_int(argv[++i], 1, &threads)) { fprintf(stderr, "lm-run: bad --threads\n"); return 2; } }
         else return usage();
     }
@@ -87,13 +89,18 @@ int main(int argc, char **argv)
         if (!fo) { fprintf(stderr, "lm-run: cannot create %s: %s\n", outp, strerror(errno)); goto done; }
     }
 
-    for (int i = 0; i < ntok; i++) {
-        const int want = fo != NULL || (greedy > 0 && i == ntok - 1);
-        const int r = lm_feed(m, tok[i], want ? logits : NULL);
-        if (r != LM_OK) { fprintf(stderr, "lm-run: token %d (id %d): %s\n", i, tok[i], code_name(r)); goto done; }
-        if (fo && fwrite(logits, sizeof(float), (size_t)vocab, fo) != (size_t)vocab) {
-            fprintf(stderr, "lm-run: write to %s failed\n", outp);
-            goto done;
+    if (!fo && !no_prefill) {   /* no per-token rows wanted: the prompt goes in as chunks */
+        const int r = lm_prefill(m, tok, ntok, greedy > 0 ? logits : NULL);
+        if (r != LM_OK) { fprintf(stderr, "lm-run: prompt of %d tokens: %s\n", ntok, code_name(r)); goto done; }
+    } else {
+        for (int i = 0; i < ntok; i++) {
+            const int want = fo != NULL || (greedy > 0 && i == ntok - 1);
+            const int r = lm_feed(m, tok[i], want ? logits : NULL);
+            if (r != LM_OK) { fprintf(stderr, "lm-run: token %d (id %d): %s\n", i, tok[i], code_name(r)); goto done; }
+            if (fo && fwrite(logits, sizeof(float), (size_t)vocab, fo) != (size_t)vocab) {
+                fprintf(stderr, "lm-run: write to %s failed\n", outp);
+                goto done;
+            }
         }
     }
     for (int k = 0; k < greedy; k++) {

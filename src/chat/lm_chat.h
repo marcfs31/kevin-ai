@@ -33,7 +33,14 @@ typedef struct {
     int  (*feed)(void *ctx, int token, float *logits);
     void (*reset)(void *ctx);
     int  (*pos)(void *ctx);
+    /* Optional (NULL = feed token by token). Appends n ids as n feeds would, logits (may be NULL)
+     * after the last one only, like lm_prefill. The loop hands it chunks of at most
+     * LM_CHAT_PREFILL_CHUNK ids and polls cancellation between them; an error code other than
+     * LM_ERR_CTX leaves the backend state unknown (the next turn re-feeds from scratch). */
+    int  (*prefill)(void *ctx, const int *ids, int n, float *logits);
 } LmBackend;
+
+#define LM_CHAT_PREFILL_CHUNK 16   /* ids per prefill call: most of the batching gain, Ctrl-C answers in a chunk */
 
 typedef struct {
     const LmTok *tok;           /* borrowed; must outlive the chat */
