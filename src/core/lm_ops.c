@@ -93,29 +93,35 @@ int lm_gated_delta_step(float *S, float *o, const float *q, const float *k, cons
         const float decay = expf(g[h]);
         const float bt = beta[h];
 
-        /* 1. decay the whole state */
-        for (size_t i = 0; i < (size_t)dk * dv; i++) Sh[i] *= decay;
-        /* 2. kv = S^T k, accumulated in oh (free until step 5) */
-        for (int j = 0; j < dv; j++) oh[j] = 0.0f;
+        /* Two row-wise passes over S instead of five whole-state ones: a head's state
+         * (dk*dv floats, 64 KiB at 128x128) does not fit in L1. Each element sees the
+         * same operations in the same order as decay / kv / delta / update / read, so
+         * the result is bit-identical (test_gated_delta_bitexact). */
+        /* pass 1: decay row i, then kv += k_i * row_i, accumulated in o */
+        float *restrict acc = oh;     /* o is written only here, never through S, q, k or v */
+        for (int j = 0; j < dv; j++) acc[j] = 0.0f;
         for (int i = 0; i < dk; i++) {
             const float ki = kk[i];
-            const float *row = Sh + (size_t)i * dv;
-            for (int j = 0; j < dv; j++) oh[j] += ki * row[j];
+            float *restrict row = Sh + (size_t)i * dv;
+            for (int j = 0; j < dv; j++) {
+                row[j] *= decay;
+                acc[j] += ki * row[j];
+            }
         }
-        /* 3. delta = (v - kv) * beta, in place over kv */
-        for (int j = 0; j < dv; j++) oh[j] = (vh[j] - oh[j]) * bt;
-        /* 4. S += k outer delta */
-        for (int i = 0; i < dk; i++) {
-            const float ki = kk[i];
-            float *row = Sh + (size_t)i * dv;
-            for (int j = 0; j < dv; j++) row[j] += ki * oh[j];
+        /* delta = (v - kv) * beta, moved to the stack so oh can take o */
+        float delta[dv];
+        for (int j = 0; j < dv; j++) {
+            delta[j] = (vh[j] - acc[j]) * bt;
+            acc[j] = 0.0f;
         }
-        /* 5. o = S^T q, from the UPDATED state */
-        for (int j = 0; j < dv; j++) oh[j] = 0.0f;
+        /* pass 2: row_i += k_i * delta, then o += q_i * row_i from the UPDATED row */
         for (int i = 0; i < dk; i++) {
-            const float qi = qh[i];
-            const float *row = Sh + (size_t)i * dv;
-            for (int j = 0; j < dv; j++) oh[j] += qi * row[j];
+            const float ki = kk[i], qi = qh[i];
+            float *restrict row = Sh + (size_t)i * dv;
+            for (int j = 0; j < dv; j++) {
+                row[j] += ki * delta[j];
+                acc[j] += qi * row[j];
+            }
         }
     }
     return 0;

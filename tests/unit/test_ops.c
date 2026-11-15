@@ -3,6 +3,8 @@
  * wrong delta-rule order, non-causal attention) does NOT produce the same numbers. The
  * oracle fixtures under tests/fixtures/ops/ are wired in by the model tests, not here.
  * Style follows kimi-k3-in-c tests/unit/test_ops.c (Apache-2.0). */
+#include <string.h>
+
 #include "lm_test.h"
 
 #include "core/lm_ops.h"
@@ -232,6 +234,56 @@ static void test_gated_delta_gqa(void)
     CHECK(lm_gated_delta_step(S, o, q, k, v, g, beta, 4, 2, 2, 1) == -1);
 }
 
+/* The five-pass delta rule as first written, kept as a bit-exact oracle for the fused kernel. */
+static void delta_ref(float *S, float *o, const float *q, const float *k, const float *v,
+                      const float *g, const float *beta, int n_k, int n_v, int dk, int dv)
+{
+    const int group = n_v / n_k;
+    for (int h = 0; h < n_v; h++) {
+        const float *qh = q + (size_t)(h / group) * dk, *kk = k + (size_t)(h / group) * dk;
+        const float *vh = v + (size_t)h * dv;
+        float *Sh = S + (size_t)h * dk * dv, *oh = o + (size_t)h * dv;
+        const float decay = expf(g[h]), bt = beta[h];
+        for (size_t i = 0; i < (size_t)dk * dv; i++) Sh[i] *= decay;
+        for (int j = 0; j < dv; j++) oh[j] = 0.0f;
+        for (int i = 0; i < dk; i++)
+            for (int j = 0; j < dv; j++) oh[j] += kk[i] * Sh[(size_t)i * dv + j];
+        for (int j = 0; j < dv; j++) oh[j] = (vh[j] - oh[j]) * bt;
+        for (int i = 0; i < dk; i++)
+            for (int j = 0; j < dv; j++) Sh[(size_t)i * dv + j] += kk[i] * oh[j];
+        for (int j = 0; j < dv; j++) oh[j] = 0.0f;
+        for (int i = 0; i < dk; i++)
+            for (int j = 0; j < dv; j++) oh[j] += qh[i] * Sh[(size_t)i * dv + j];
+    }
+}
+
+static float urand(unsigned *s)
+{
+    *s = *s * 1664525u + 1013904223u;
+    return (float)(*s >> 8) / 16777216.0f * 2.0f - 1.0f;
+}
+
+/* Qwen3.5-4B shape (dk = dv = 128, GQA 2) with fewer heads, over several steps: the
+ * fused kernel must match the five-pass order bit for bit, state and output. */
+static void test_gated_delta_bitexact(void)
+{
+    enum { NK = 2, NV = 4, DK = 128, DV = 128, STEPS = 5 };
+    static float S[NV * DK * DV], Sr[NV * DK * DV], o[NV * DV], orf[NV * DV];
+    float q[NK * DK], k[NK * DK], v[NV * DV], g[NV], beta[NV];
+    unsigned seed = 12345u;
+    for (int i = 0; i < NV * DK * DV; i++) S[i] = Sr[i] = urand(&seed) * 0.1f;
+    int ok = 1;
+    for (int t = 0; t < STEPS; t++) {
+        for (int i = 0; i < NK * DK; i++) { q[i] = urand(&seed) * 0.09f; k[i] = urand(&seed) * 0.09f; }
+        for (int i = 0; i < NV * DV; i++) v[i] = urand(&seed);
+        for (int h = 0; h < NV; h++) { g[h] = -0.5f + 0.4f * urand(&seed); beta[h] = 0.5f + 0.4f * urand(&seed); }
+        CHECK(lm_gated_delta_step(S, o, q, k, v, g, beta, NK, NV, DK, DV) == 0);
+        delta_ref(Sr, orf, q, k, v, g, beta, NK, NV, DK, DV);
+        ok &= memcmp(S, Sr, sizeof S) == 0 && memcmp(o, orf, sizeof o) == 0;
+    }
+    CHECK(ok);
+}
+
 static void test_attention(void)
 {
     /* head_dim 2, 4 query heads over 2 KV heads (group 2), 2 cached positions */
@@ -303,6 +355,7 @@ int main(void)
     test_gates();
     test_gated_delta();
     test_gated_delta_gqa();
+    test_gated_delta_bitexact();
     test_attention();
     test_elementwise();
     return lt_finish("test_ops");
