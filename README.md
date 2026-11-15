@@ -506,6 +506,8 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 
 - Thinking is off by default (`--no-think`). A thinking block costs many tokens at this speed.
 - `--stats` prints tokens/s to stderr.
+- Without `--max-tokens` an answer runs until the model stops or the context fills; Ctrl-C
+  ends it early.
 - `--fast` (experimental, needs a q8 `--weights` file) rounds the activations of every matrix
   multiply to int8 so the CPU can multiply int8 pairs directly. It is NOT bit-identical to
   the default and slightly less exact: the default stays the one the golden gate checks.

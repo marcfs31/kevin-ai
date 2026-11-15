@@ -16,6 +16,7 @@
  * and keeps the process (at the prompt it quits).
  *
  * Thinking is off by default: a think block costs hundreds of tokens at a few tokens/s.
+ * Without --max-tokens an answer runs until the model stops or the context fills.
  * Sampling defaults when a flag is absent: for Qwen3.5 temperature 0.7, top-p 0.8 without
  * thinking; 0.6, 0.95 with; top-k 20. For Gemma 4 the temperature, top_k and top_p of
  * generation_config.json (1.0, 64, 0.95 in the release), the Qwen numbers for any key it
@@ -157,7 +158,7 @@ int main(int argc, char **argv)
     const char *model = NULL, *weights = NULL, *prompt = NULL, *system = NULL;
     int think = 0, show_thinking = 0, stats = 0, strict = 0, fast = 0;
     double temperature = -1, top_p = -1;
-    long top_k = -1, seed = 1, max_tokens = 512, ctx = 0, threads = 0;
+    long top_k = -1, seed = 1, max_tokens = 0, ctx = 0, threads = 0;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
