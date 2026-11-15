@@ -36,6 +36,7 @@
 #include "model/lm_config.h"
 #include "model/lm_gemma.h"
 #include "model/lm_layers.h"
+#include "model/lm_times.h"
 
 typedef struct {
     int          full;
@@ -252,7 +253,7 @@ void lm_reset(LmModel *m)
     m->pos = 0;
 }
 
-int lm_feed(LmModel *m, int token, float *logits)
+static int feed(LmModel *m, int token, float *logits)
 {
     if (m->gemma) return lm_gemma_feed(m->gemma, token, logits);
     const LmCfg *c = &m->cfg;
@@ -280,7 +281,7 @@ int lm_feed(LmModel *m, int token, float *logits)
     return LM_OK;
 }
 
-int lm_prefill(LmModel *m, const int *tokens, int n, float *logits)
+static int prefill(LmModel *m, const int *tokens, int n, float *logits)
 {
     if (n < 0 || (n > 0 && !tokens)) return LM_ERR_TOKEN;
     const int V = lm_n_vocab(m);
@@ -316,4 +317,20 @@ int lm_prefill(LmModel *m, const int *tokens, int n, float *logits)
         lm_mat_mul(&m->head, logits, m->n);
     }
     return LM_OK;
+}
+
+int lm_feed(LmModel *m, int token, float *logits)
+{
+    LM_TIMES_T0(t0);
+    const int r = feed(m, token, logits);
+    LM_TIMES_ADD(total, t0);
+    return r;
+}
+
+int lm_prefill(LmModel *m, const int *tokens, int n, float *logits)
+{
+    LM_TIMES_T0(t0);
+    const int r = prefill(m, tokens, n, logits);
+    LM_TIMES_ADD(total, t0);
+    return r;
 }

@@ -6,8 +6,9 @@
 #include "core/lm_kernels.h"
 #include "core/lm_ops.h"
 #include "model/lm_layers.h"
+#include "model/lm_times.h"
 
-void lm_mat_mul(const LmMat *m, float *y, const float *x)
+static void mat_mul(const LmMat *m, float *y, const float *x)
 {
     switch (m->kind) {
     case LM_MAT_F32:  lm_matvec_f32(y, x, m->f, m->cols, m->rows); break;
@@ -24,6 +25,13 @@ void lm_mat_mul(const LmMat *m, float *y, const float *x)
         break;
     default: break;
     }
+}
+
+void lm_mat_mul(const LmMat *m, float *y, const float *x)
+{
+    LM_TIMES_T0(t0);
+    mat_mul(m, y, x);
+    LM_TIMES_ADD(matmul, t0);
 }
 
 void lm_mat_row(const LmMat *m, int r, float *out)
@@ -68,6 +76,8 @@ void lm_linear_mixer(float *out, const float *x, const LmLinW *w, const LmLinDim
     const int kd = d->n_k * d->dk, vd = d->n_v * d->dv, conv_dim = 2 * kd + vd;
     float *qkv = scratch, *z = qkv + conv_dim, *o = z + vd;
     float *b = o + vd, *a = b + d->n_v, *g = a + d->n_v, *beta = g + d->n_v;
+    LM_TIMES_T0(t0);
+    const double mm0 = lm_times_acc.matmul;
 
     lm_mat_mul(&w->qkv, qkv, x);
     lm_mat_mul(&w->z, z, x);
@@ -89,6 +99,7 @@ void lm_linear_mixer(float *out, const float *x, const LmLinW *w, const LmLinDim
     for (int h = 0; h < d->n_v; h++)
         lm_rmsnorm_gated(o + h * d->dv, o + h * d->dv, z + h * d->dv, w->norm_w, d->dv, d->eps);
     lm_mat_mul(&w->out, out, o);
+    LM_TIMES_ADD_OWN(linear, t0, mm0);
 }
 
 /* ------------------------------------------------------------------ full attention */
@@ -107,6 +118,8 @@ void lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnDim
     const int hd = d->head_dim, qd = d->heads * hd, kvd = d->kv_heads * hd;
     float *qg = scratch, *q = qg + 2 * qd, *gate = q + qd, *k = gate + qd, *v = k + kvd;
     float *attn = v + kvd, *scores = attn + qd;
+    LM_TIMES_T0(t0);
+    const double mm0 = lm_times_acc.matmul;
 
     lm_mat_mul(&w->q, qg, x);
     lm_mat_mul(&w->k, k, x);
@@ -126,17 +139,19 @@ void lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnDim
     (void)lm_attn_step(attn, q, k_cache, v_cache, pos + 1, d->heads, d->kv_heads, hd, scores);
     lm_mul_sigmoid(attn, gate, qd);
     lm_mat_mul(&w->o, out, attn);
+    LM_TIMES_ADD_OWN(attention, t0, mm0);
 }
 
 /* ------------------------------------------------------------------ batched (prefill) */
 
 void lm_mat_mul_batch(const LmMat *m, float *Y, const float *X, int T)
 {
-    if (m->kind == LM_MAT_Q8 && !m->int8_acts) {
+    LM_TIMES_T0(t0);
+    if (m->kind == LM_MAT_Q8 && !m->int8_acts)
         (void)lm_matmul_q8(Y, X, T, m->q, m->sc, m->cols, m->rows);
-        return;
-    }
-    for (int t = 0; t < T; t++) lm_mat_mul(m, Y + (size_t)t * m->rows, X + (size_t)t * m->cols);
+    else
+        for (int t = 0; t < T; t++) mat_mul(m, Y + (size_t)t * m->rows, X + (size_t)t * m->cols);
+    LM_TIMES_ADD(matmul, t0);
 }
 
 size_t lm_mlp_batch_scratch(int inter, int T) { return 2 * (size_t)inter * (size_t)T; }
@@ -163,6 +178,8 @@ void lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const Lm
     const int kd = d->n_k * d->dk, vd = d->n_v * d->dv, conv_dim = 2 * kd + vd;
     float *qkv = scratch, *z = qkv + (size_t)T * conv_dim, *o = z + (size_t)T * vd;
     float *b = o + (size_t)T * vd, *a = b + (size_t)T * d->n_v, *g = a + (size_t)T * d->n_v, *beta = g + d->n_v;
+    LM_TIMES_T0(t0);
+    const double mm0 = lm_times_acc.matmul;
 
     lm_mat_mul_batch(&w->qkv, qkv, x, T);
     lm_mat_mul_batch(&w->z, z, x, T);
@@ -185,6 +202,7 @@ void lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const Lm
             lm_rmsnorm_gated(o_t + h * d->dv, o_t + h * d->dv, z_t + h * d->dv, w->norm_w, d->dv, d->eps);
     }
     lm_mat_mul_batch(&w->out, out, o, T);
+    LM_TIMES_ADD_OWN(linear, t0, mm0);
 }
 
 size_t lm_attn_batch_scratch(const LmAttnDims *d, int ctx, int T)
@@ -200,6 +218,8 @@ void lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmA
     const int hd = d->head_dim, qd = d->heads * hd, kvd = d->kv_heads * hd;
     float *qgb = scratch, *kb = qgb + (size_t)T * 2 * qd, *vb = kb + (size_t)T * kvd;
     float *attnb = vb + (size_t)T * kvd, *q = attnb + (size_t)T * qd, *gate = q + qd, *scores = gate + qd;
+    LM_TIMES_T0(t0);
+    const double mm0 = lm_times_acc.matmul;
 
     lm_mat_mul_batch(&w->q, qgb, x, T);
     lm_mat_mul_batch(&w->k, kb, x, T);
@@ -222,4 +242,5 @@ void lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmA
         lm_mul_sigmoid(attn, gate, qd);
     }
     lm_mat_mul_batch(&w->o, out, attnb, T);
+    LM_TIMES_ADD_OWN(attention, t0, mm0);
 }

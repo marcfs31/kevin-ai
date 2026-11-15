@@ -105,7 +105,7 @@ Symbols `lm_`, files `lm_*.c/h`, headers included relative to `src/`. The Makefi
 discovers sources by wildcard; nobody edits it to add a file.
 
 `bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F] [--greedy N]
-[--ctx N] [--threads N]` feeds the tokens, writes one little-endian f32 row of `vocab`
+[--ctx N] [--threads N] [--profile]` feeds the tokens, writes one little-endian f32 row of `vocab`
 logits per fed token to `F`, then generates `N` tokens by argmax (lowest id wins a tie)
 and prints one id per line on stdout. Nothing else goes to stdout.
 

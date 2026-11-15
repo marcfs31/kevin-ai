@@ -65,6 +65,22 @@ int  lm_feed(LmModel *m, int token, float *logits);
  * return LM_ERR_IO if a per-layer embedding row cannot be read. */
 int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
 
+/* Where the time goes (lm-run --profile). Process-wide and OFF by default; while on, every
+ * lm_feed and lm_prefill adds wall-clock seconds to these counters. Results are unchanged by
+ * it. Not thread-safe: profile one model at a time, from one thread. total minus the other
+ * three is the rest: embeddings, layer norms, residual adds, the MLP activation and Gemma's
+ * per-layer inputs. */
+typedef struct {
+    double total;     /* inside lm_feed and lm_prefill */
+    double matmul;    /* weight matrix multiplies, the unembedding included */
+    double linear;    /* Qwen linear-attention mixers outside their multiplies: conv, q/k norms,
+                         gates, the delta rule and the gated norm */
+    double attention; /* attention mixers outside their multiplies: q/k norms, RoPE, the cache
+                         write, scores, softmax and the weighted sum of values */
+} LmTimes;
+void lm_times_enable(int on);    /* 1: zero the counters and start; 0: stop, keeping them */
+void lm_times_get(LmTimes *out);
+
 #ifdef __cplusplus
 }
 #endif
