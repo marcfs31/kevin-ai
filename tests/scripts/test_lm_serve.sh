@@ -76,7 +76,14 @@ start() { # start the server with extra args; sets $pid and $url
     [ -n "$url" ] || { echo "  FAIL lm-serve did not start: $(cat "$tmp/serve.err")"; exit 1; }
 }
 stop() { kill "$pid" 2> /dev/null; wait "$pid" 2> /dev/null; rc_stop=$?; pid=; }
-chat() { post -d "$1" "$url/v1/chat/completions"; }
+# chat JSON: POST to chat completions, print the status, and wait for the request's log line
+# (the server logs after the reply is sent, so a check of the log could otherwise race it)
+chat() {
+    local n
+    n=$(wc -l < "$tmp/serve.err")
+    post -d "$1" "$url/v1/chat/completions"
+    for _ in $(seq 50); do [ "$(wc -l < "$tmp/serve.err")" -gt "$n" ] && break; sleep 0.1; done
+}
 # expect STATUS JSON WHAT: POST JSON to chat completions and check the status
 expect() {
     local got
@@ -104,12 +111,23 @@ check '[ "$(j "json.dumps(d[\"choices\"][0][\"message\"][\"content\"])")" = "$an
 # the client sends the answer back with a new message: only the new part is fed
 req2='{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":'"$answer"'},{"role":"user","content":"more"}],"max_tokens":3,"temperature":0}'
 check '[ "$(chat "$req2")" = 200 ]' "follow-up status: $(cat "$tmp/body")"
-check 'tail -1 "$tmp/serve.err" | grep -q "prompt [0-9]*, fed [0-9]* at" && ! tail -1 "$tmp/serve.err" | grep -q "re-fed"' \
+check 'tail -1 "$tmp/serve.err" | grep -q "prompt [0-9]*, 0 from cache, fed [0-9]* at" && ! tail -1 "$tmp/serve.err" | grep -q "re-fed"' \
       "the follow-up re-fed the conversation: $(tail -1 "$tmp/serve.err")"
 check '[ "$(j "d[\"usage\"][\"prompt_tokens\"]")" -gt "$p1" ]' "the follow-up prompt is not longer than the first"
 # NEGATIVE: an edited answer cannot reuse the state
 chat '{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"edited"},{"role":"user","content":"more"}],"max_tokens":3}' > /dev/null
 check 'tail -1 "$tmp/serve.err" | grep -q "(re-fed)"' "an edited history was not re-fed: $(tail -1 "$tmp/serve.err")"
+
+# prefix cache: conversation C, then D with the same system prompt (snapshotted at the shared
+# prefix), then C again restored from it -- the same answer as without the cache
+creq='{"messages":[{"role":"system","content":"You answer in one short line."},{"role":"user","content":"gamma"}],"max_tokens":6,"temperature":0}'
+dreq='{"messages":[{"role":"system","content":"You answer in one short line."},{"role":"user","content":"delta"}],"max_tokens":6,"temperature":0}'
+check '[ "$(chat "$creq")" = 200 ] && tail -1 "$tmp/serve.err" | grep -q " 0 from cache"' "conversation C: $(tail -1 "$tmp/serve.err")"
+cans=$(j 'json.dumps(d["choices"][0]["message"]["content"])')
+check '[ "$(chat "$dreq")" = 200 ] && tail -1 "$tmp/serve.err" | grep -q " 0 from cache"' "conversation D: $(tail -1 "$tmp/serve.err")"
+check '[ "$(chat "$creq")" = 200 ] && tail -1 "$tmp/serve.err" | grep -q " [1-9][0-9]* from cache, fed [0-9]* at"' \
+      "conversation C again was not restored from the cache: $(tail -1 "$tmp/serve.err")"
+check '[ "$(j "json.dumps(d[\"choices\"][0][\"message\"][\"content\"])")" = "$cans" ]' "the cached conversation answered differently"
 
 # streaming: a role chunk, content chunks, a finish chunk, the usage chunk, [DONE]
 sreq='{"messages":[{"role":"system","content":"be brief"},{"role":"user","content":"hi"}],"max_tokens":4,"stream":true,"stream_options":{"include_usage":true}}'
@@ -247,6 +265,13 @@ check '[ $rc -eq 0 ] && grep -q "context full" "$tmp/chat.err" && ! grep -q "max
 bin/lm-chat --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --ctx 1024 --temperature 0 \
     --prompt hi --max-tokens 5 > /dev/null 2> "$tmp/chat.err"
 check 'grep -q "max-tokens reached" "$tmp/chat.err"' "lm-chat --max-tokens 5 did not stop: $(cat "$tmp/chat.err")"
+
+# lm-chat's prefix cache: after /reset a second conversation snapshots the shared system
+# prompt, and a third is restored from it (the stats line counts the ids)
+printf 'gamma\n/reset\ndelta\n/reset\ngamma\n' | bin/lm-chat --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" \
+    --ctx 256 --temperature 0 --max-tokens 4 --stats --system "You answer in one short line." > /dev/null 2> "$tmp/chat.err"
+check '[ "$(grep -c " 0 from cache" "$tmp/chat.err")" = 2 ] && [ "$(grep "from cache" "$tmp/chat.err" | tail -1 | grep -c " [1-9][0-9]* from cache")" = 1 ]' \
+      "lm-chat did not restore the third conversation from the cache: $(grep "from cache" "$tmp/chat.err")"
 
 if [ "$fails" -ne 0 ]; then echo "test_lm_serve: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_lm_serve: $checks checks passed"

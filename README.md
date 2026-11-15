@@ -412,7 +412,8 @@ flowchart TD
   logits), `lm_reset`, `lm_pos` and the two size queries. Errors are small integer codes
   (`LM_ERR_CTX`, `LM_ERR_TOKEN`, `LM_ERR_IO`). A model is never truncated, because
   linear-attention state cannot be rewound; a caller that changes the prompt resets and
-  re-feeds.
+  re-feeds, or restores a snapshot: `lm_snapshot` copies the state at the current position
+  and `lm_restore` puts it back bit-identically.
 - **`src/model`.** `lm_open` reads `config.json` and dispatches on `model_type`: `qwen3_5`
   goes to `lm_layers`, `gemma4` to `lm_gemma`. Each reader is strict: a missing field is an
   error, never a default. `lm_bind` looks up tensors by name, and it is the only place that
@@ -427,7 +428,8 @@ flowchart TD
   buffering them.
 - **`src/chat` and `src/tokenizer`.** Text in and text out, kept outside the engine.
   `lm_chat` extends the fed prefix when the conversation grows and only re-feeds from
-  scratch when it must. `lm_template` renders each family's chat format. `lm_tok` does the
+  scratch when it must; then a one-snapshot prefix cache saves feeding a shared system
+  prompt again. `lm_template` renders each family's chat format. `lm_tok` does the
   byte-level BPE; for Gemma it uses a heap-ordered merge, so long words stay fast.
 - **`third_party`.** Vendored headers (JSON parser, tokenizer, Unicode tables) with their
   modifications recorded in [NOTICE](NOTICE).
@@ -543,7 +545,13 @@ bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
   `LM_SERVE_API_KEY` in the environment; `/v1` then needs `Authorization: Bearer <key>`.
 - The model state cannot be rewound, so it is reused only when a request continues the last
   conversation with the previous answer sent back unchanged (what chat clients do). Then only
-  the new message is fed; anything else feeds the whole prompt again.
+  the new message is fed.
+- Otherwise a prefix cache helps: when two conversations in a row share at least 16 tokens
+  (typically the system prompt), the server keeps a snapshot of the state there, and a later
+  conversation that starts the same way is restored from it and feeds only the rest. The log
+  line says `N from cache`. The answer is the same as without the cache. One snapshot is kept;
+  for Qwen3.5-4B it takes about 50 MiB plus 64 KiB per cached token (about 82 MiB for a
+  500-token system prompt). `lm-chat` uses the same cache after `/reset`.
 - `scripts/lm-serve.service` runs it as a systemd user service; its comments say how to install it.
 
 ```bash
