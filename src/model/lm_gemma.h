@@ -48,4 +48,11 @@ size_t   lm_gemma_state_bytes(const LmGemmaCfg *c, int ctx);
  * then not applied, as with lm_gemma_feed, but earlier chunks are). */
 int      lm_gemma_prefill(LmGemma *g, const int *tokens, int n, float *logits);
 
+/* The state regions at position pos, in a fixed order: for every cache-owning layer its K and
+ * V rows in use (min(pos, slots) of them; a ring once it wrapped is all of its slots). With
+ * lm_gemma_set_pos this is what lm_snapshot / lm_restore copy. */
+typedef void (*LmRegionFn)(void *user, float *p, size_t n);
+void     lm_gemma_state_regions(LmGemma *g, int pos, LmRegionFn fn, void *user);
+void     lm_gemma_set_pos(LmGemma *g, int pos);
+
 #endif /* LM_GEMMA_H */
