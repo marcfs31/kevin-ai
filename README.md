@@ -16,7 +16,8 @@ A C99 CPU inference engine for small language models, written from scratch for a
   gave 1.7 and 1.9: the AVX2 kernels were compiled to about three times more instructions
   than needed, and the prompt now goes through in batches whose inputs stay in the L1 cache
   (4.6 tokens/s before that; the batched multiply itself got 1.35x faster, with 73% fewer L1
-  misses). About half of the prompt time is now in the parts that run one token at a time.
+  misses). `--profile` on a 64-token prompt puts 75% of the prompt time in the multiplies,
+  17% in linear attention, 4% in full attention and 4% elsewhere.
   Replies read about 4.75 GB per
   token, so at about 11 GB/s they are bounded by memory bandwidth. Gemma 4 E4B has not been
   run on the real checkpoint yet.
