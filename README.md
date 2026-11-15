@@ -526,13 +526,18 @@ use the model. One request at a time; others wait their turn.
 
 ```
 bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
-             [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N] [--fast]
+             [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N]
+             [--timeout S] [--fast]
 ```
 
 - `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (with `"stream": true` too).
   Text chat only: tools, stop strings, `n` > 1, logprobs, penalties and JSON modes get a 400
   instead of being ignored.
-- Without `max_tokens` a reply runs until the model stops or the context fills.
+- Without `max_tokens` a reply runs until the model stops or the context fills. A reply
+  stops as soon as its client disconnects, and one cut short by a shutdown or a tool call is
+  an error (503 or 500), never a `"stop"` that looks complete.
+- A request has `--timeout` seconds (30) to arrive in full, so a slow client cannot hold the
+  server; with a key set, the key is checked before the body is read.
 - It listens on 127.0.0.1:8080. To reach it from the network, pass `--host 0.0.0.0` and set
   `LM_SERVE_API_KEY` in the environment; `/v1` then needs `Authorization: Bearer <key>`.
 - The model state cannot be rewound, so it is reused only when a request continues the last

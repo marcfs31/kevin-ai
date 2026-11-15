@@ -539,6 +539,24 @@ static void test_set_sampling(void)
     lm_chat_free(c);
 }
 
+/* a NUL byte from the model (the <0x00> byte token) does not cut the kept answer */
+static void test_nul_byte(void)
+{
+    Fake f;
+    fake_init(&f, 4096);
+    LmChat *c = mk(&f, 0, 0, NULL);
+    LmTurn t;
+    char nul[8];
+    bl("\0", 1, nul);
+    const int nul_id = lm_tok_vocab_id(g_tok, nul);
+    CHECK(nul_id >= 0);
+    script(&f, "A", "A", "B", "<|im_end|>", NULL);
+    f.script[1] = nul_id;
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && t.n_gen == 3);
+    CHECK(!strcmp(t.answer, "AB"));
+    lm_chat_free(c);
+}
+
 int main(void)
 {
     char err[256];
@@ -559,6 +577,7 @@ int main(void)
     test_same_seed_same_text();
     test_sync();
     test_set_sampling();
+    test_nul_byte();
 
     lm_template_free(g_tpl);
     lm_tok_close(g_tok);

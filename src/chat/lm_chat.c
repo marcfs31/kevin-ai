@@ -192,11 +192,18 @@ typedef struct {
     int oom;
 } Collect;
 
+/* NUL bytes (a model can emit the <0x00> byte token) are left out of the kept text: it is a C
+ * string, so a NUL would silently cut it, and history matching compares it with strcmp. */
 static void collect(void *u, LmOutKind kind, const char *s, size_t n)
 {
     Collect *c = (Collect *)u;
-    if (kind == LM_OUT_REASONING) { if (buf_add(&c->reasoning, s, n)) c->oom = 1; }
-    else if (kind == LM_OUT_ANSWER) { if (buf_add(&c->answer, s, n)) c->oom = 1; }
+    Buf *b = kind == LM_OUT_REASONING ? &c->reasoning : kind == LM_OUT_ANSWER ? &c->answer : NULL;
+    for (size_t i = 0; b && i < n;) {
+        size_t j = i;
+        while (j < n && s[j]) j++;
+        if (j > i && buf_add(b, s + i, j - i)) c->oom = 1;
+        i = j + 1;
+    }
     if (c->sink) c->sink(c->user, kind, s, n);
 }
 

@@ -46,6 +46,22 @@ j() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval
 post() { curl -s -o "$tmp/body" -w '%{http_code}' -H 'Content-Type: application/json' "$@"; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
+# raw PAYLOAD: send PAYLOAD (a Python bytes expression, so \r\n and repetition are easy) on a
+# plain socket and print the status code of the reply, or "reset"/"none"
+raw() {
+    python3 -I - "${url#http://}" "$1" <<'PY'
+import socket, sys
+host, port = sys.argv[1].rsplit(":", 1)
+s = socket.create_connection((host, int(port)), timeout=10)
+try:
+    s.sendall(eval(sys.argv[2]))
+    data = s.recv(4096)
+    print(data.split(b" ")[1].decode() if data.startswith(b"HTTP/1.1 ") else "none")
+except ConnectionResetError:
+    print("reset")
+PY
+}
+
 start() { # start the server with extra args; sets $pid and $url
     : > "$tmp/serve.err"
     "$SERVE" --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --port 0 --name tiny "$@" 2> "$tmp/serve.err" &
@@ -143,6 +159,67 @@ check '[ "$(code -H "Authorization: Bearer secret-test-kez" "$url/v1/models")" =
 check '[ "$(code -H "Authorization: Bearer secret-test-key" "$url/v1/models")" = 200 ]' "the right key refused"
 check '[ "$(code "$url/health")" = 200 ]' "/health needs a key"
 check '! grep -q secret-test-key "$tmp/serve.err"' "the key appears in the log"
+check '[ "$(post -H "Authorization: Bearer nope" -d "{}" "$url/v1/chat/completions")" = 401 ]' "a wrong key accepted on chat completions"
+check '[ "$(post -H "Authorization: Basic c2VjcmV0LXRlc3Qta2V5" -d "{}" "$url/v1/chat/completions")" = 401 ]' "a non-Bearer scheme accepted"
+one='{"messages":[{"role":"user","content":"hi"}],"max_tokens":1}'
+check '[ "$(post -H "Authorization: Bearer secret-test-key" -d "$one" "$url/v1/chat/completions")" = 200 ]' "the right key refused on chat completions"
+stop
+
+# protocol refusals on a raw socket: ambiguous framing and malformed headers are a 400, not a guess
+start --timeout 2
+# (the body is a valid request, so a server that picked one of the headers would answer 200)
+ok_body='b"{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}"'
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 60\r\nContent-Length: 3\r\n\r\n\" + $ok_body")" = 400 ]' "a repeated Content-Length was accepted"
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n\"")" = 411 ]' "chunked transfer encoding was accepted"
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nTransfer-Encoding : chunked\r\nContent-Length: 60\r\n\r\n\" + $ok_body")" = 400 ]' "whitespace before a header colon was accepted"
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 60\r\n\r\n\" + $ok_body")" = 200 ]' "the same request with clean headers was refused"
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: -1\r\n\r\n\"")" = 400 ]' "a negative Content-Length was accepted"
+check '[ "$(raw "b\"GET /health HTTP/1.1\r\nX: \" + b\"a\" * 20000 + b\"\r\n\r\n\"")" = 431 ]' "a 20 KB header was accepted"
+# a client that sends the body without waiting still gets the 413, not a connection reset
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 4194400\r\n\r\n\" + b\"a\" * 4194400")" = 413 ]' "an oversized body sent at once did not get a 413"
+# a request that does not arrive in time is a 408; a slow client does not hold the server
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 10\r\n\r\n{}\"")" = 408 ]' "an incomplete body did not time out with 408"
+python3 -I - "${url#http://}" <<'PY' &
+import socket, sys, time
+host, port = sys.argv[1].rsplit(":", 1)
+s = socket.create_connection((host, int(port)))
+for ch in b"GET /health HTTP/1.1\r\nX: " + b"a" * 100:
+    try:
+        s.send(bytes([ch]))
+    except OSError:
+        break
+    time.sleep(0.25)
+PY
+trickler=$!
+sleep 0.5
+t0=$(date +%s)
+check '[ "$(code -m 8 "$url/health")" = 200 ] && [ $(( $(date +%s) - t0 )) -le 5 ]' "a trickling client held the server for $(( $(date +%s) - t0 )) s"
+kill "$trickler" 2> /dev/null; wait "$trickler" 2> /dev/null
+# control bytes in the path do not reach the log
+raw "b\"GET /x\x1b[31m HTTP/1.1\r\n\r\n\"" > /dev/null
+check '! grep -q "$(printf "\033")" "$tmp/serve.err" && grep -q "GET /x?\[31m 404" "$tmp/serve.err"' "a control byte from the path reached the log"
+stop
+
+# a client that goes away stops its reply; a reply cut by shutdown is a 503, not a "stop"
+start
+curl -s -m 0.3 -o /dev/null -d '{"messages":[{"role":"user","content":"hi"}],"temperature":0}' "$url/v1/chat/completions"
+for _ in $(seq 50); do grep -q "499" "$tmp/serve.err" && break; sleep 0.1; done
+check 'grep -q "POST /v1/chat/completions 499 (client gone)" "$tmp/serve.err"' "an abandoned reply was not stopped: $(tail -1 "$tmp/serve.err")"
+check '[ "$(sed -n "s/.*499 (client gone).*generated \([0-9]*\) at.*/\1/p" "$tmp/serve.err")" -lt 4000 ]' "the abandoned reply ran to the end of the context"
+chat '{"messages":[{"role":"user","content":"hi"}],"temperature":0}' > "$tmp/code" &
+curl_pid=$!
+sleep 0.3
+kill "$pid"
+wait "$curl_pid"
+check '[ "$(cat "$tmp/code")" = 503 ] && grep -q "shutting down" "$tmp/body"' "a reply cut by SIGTERM: status $(cat "$tmp/code"), $(head -c 300 "$tmp/body")"
+wait "$pid" 2> /dev/null; pid=
+
+# exposed beyond loopback without a key: a warning; with a key: none
+start --host 0.0.0.0
+check 'grep -q "warning: reachable from other machines" "$tmp/serve.err"' "no warning for 0.0.0.0 without a key"
+stop
+LM_SERVE_API_KEY=k start --host 0.0.0.0
+check '! grep -q "warning" "$tmp/serve.err"' "a warning although a key is set"
 stop
 
 # fail loud: a port in use or a missing model is an error exit, never a fallback
