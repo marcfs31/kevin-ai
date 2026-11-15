@@ -687,7 +687,7 @@ static void handle(Server *s, Conn *c, int timeout_s)
     if (log.n_prompt)
         fprintf(stderr, "lm-serve: %s %s %d%s | prompt %d, %d from cache, fed %d%s at %.2f tok/s | generated %d at %.2f tok/s | %.1f s\n",
                 c->method, path, log.status, c->broken ? " (client gone)" : "", log.n_prompt, log.n_cached, log.n_prefill,
-                log.reprefill && !log.n_cached ? " (re-fed)" : "", log.prefill_s > 0 ? log.n_prefill / log.prefill_s : 0.0,
+                log.reprefill ? " (re-fed)" : "", log.prefill_s > 0 ? log.n_prefill / log.prefill_s : 0.0,
                 log.n_gen, log.decode_s > 0 ? log.n_gen / log.decode_s : 0.0, dt);
     else
         fprintf(stderr, "lm-serve: %s %s %d | %.3f s\n", c->method, path, log.status, dt);
