@@ -48,6 +48,18 @@ int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales,
 int lm_matvec_q8_scalar(float *y, const float *x, const int8_t *q, const float *scales,
                         int in, int out);
 
+/* Batched form for prompt processing: X is [T][in] row-major, Y is [T][out] row-major, and
+ *   Y[t][o] is BIT-IDENTICAL to lm_matvec_q8(.., X[t], ..)[o]
+ * for every token t, every row o, any T and any thread count: each token sees exactly the
+ * float operations of the single-token kernel, in the same order, and tokens never mix.
+ * What changes is the cost: each weight is loaded and widened once per tile of tokens
+ * instead of once per token. T = 0 writes nothing; `in` not a multiple of 32 or T < 0
+ * returns -1 with nothing written, 0 on success. lm_matmul_q8_scalar is the reference. */
+int lm_matmul_q8(float *Y, const float *X, int T, const int8_t *q, const float *scales,
+                 int in, int out);
+int lm_matmul_q8_scalar(float *Y, const float *X, int T, const int8_t *q, const float *scales,
+                        int in, int out);
+
 /* int8 activations (opt-in fast path; NOT bit-identical to lm_matvec_q8).
  *
  * lm_q8_quantize_acts rounds x to int8, one float scale per group of 32:
