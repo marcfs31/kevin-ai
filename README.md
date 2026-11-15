@@ -523,12 +523,15 @@ but token ids goes to stdout.
 
 ```
 bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
-           [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill]
+           [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]
 ```
 
 The prompt goes through `lm_prefill` (chunks of 32 tokens, each weight read once per chunk)
 unless `--logits-out` wants a row per token or `--no-prefill` is given; the results are
-bit-identical either way, `--no-prefill` is for timing the difference.
+bit-identical either way, `--no-prefill` is for timing the difference. `--profile` prints on
+stderr where the time went, for the prompt and for the generation: weight multiplies, linear
+attention (conv and delta rule), attention, and the rest (norms, residuals, embeddings). The
+ids on stdout are unchanged.
 
 ### bin/lm-quant
 

@@ -14,6 +14,7 @@
 #include "model/lm_bind.h"
 #include "model/lm_gemma.h"
 #include "model/lm_layers.h"
+#include "model/lm_times.h"
 
 #define PFX "model.language_model."
 
@@ -325,6 +326,8 @@ static void attention(LmGemma *g, int l, const float *x, float *out)
     const int hd = L->hd, kvd = c->kv_heads * hd;
     const double *freqs = g->freqs[L->full];
     float *q = g->q, *k = g->k, *v = g->v;
+    LM_TIMES_T0(t0);
+    const double mm0 = lm_times_acc.matmul;
 
     lm_mat_mul(&L->q, q, x);
     for (int h = 0; h < c->heads; h++) lm_rmsnorm_plain(q + (size_t)h * hd, q + (size_t)h * hd, L->q_norm, hd, c->eps);
@@ -345,6 +348,7 @@ static void attention(LmGemma *g, int l, const float *x, float *out)
     (void)lm_attn_window(g->attn, q, g->kc[p], g->vc[p], g->pos, L->full ? 0 : c->window,
                          slots_of(c, L->full, g->ctx), c->heads, c->kv_heads, hd, 1.0f, g->scores);
     lm_mat_mul(&L->o, out, g->attn);
+    LM_TIMES_ADD_OWN(attention, t0, mm0);
 }
 
 int lm_gemma_feed(LmGemma *g, int token, float *logits)
@@ -402,6 +406,8 @@ static void attention_batch(LmGemma *g, int l, const float *x, float *out, int T
     const int hd = L->hd, kvd = c->kv_heads * hd, qd = c->heads * hd;
     const double *freqs = g->freqs[L->full];
     const int slots = slots_of(c, L->full, g->ctx), p = L->producer;
+    LM_TIMES_T0(t0);
+    const double mm0 = lm_times_acc.matmul;
 
     lm_mat_mul_batch(&L->q, g->bq, x, T);
     if (!L->reuse) {
@@ -428,6 +434,7 @@ static void attention_batch(LmGemma *g, int l, const float *x, float *out, int T
                              c->heads, c->kv_heads, hd, 1.0f, g->scores);
     }
     lm_mat_mul_batch(&L->o, out, g->battn, T);
+    LM_TIMES_ADD_OWN(attention, t0, mm0);
 }
 
 /* Layers [from, to) over rows 0..T-1 of bh, the token of row t being at position pos0 + t. */
