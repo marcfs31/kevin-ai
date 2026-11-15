@@ -48,6 +48,28 @@ int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales,
 int lm_matvec_q8_scalar(float *y, const float *x, const int8_t *q, const float *scales,
                         int in, int out);
 
+/* int8 activations (opt-in fast path; NOT bit-identical to lm_matvec_q8).
+ *
+ * lm_q8_quantize_acts rounds x to int8, one float scale per group of 32:
+ *   amax = max |x| over the group; sx = amax / 127; qx = rint(x * (127 / amax)), |qx| <= 127.
+ * An all-zero group gets sx = 0 and qx = 0. A group holding a NaN or an infinity gets
+ * sx = NaN (qx = 0), so the result of any dot product that touches it is NaN, exactly as
+ * with the float kernel. Rounding error per element is at most sx / 2 (+ a float ulp).
+ * `in` must be a multiple of 32: returns -1 and writes nothing otherwise.
+ *
+ * lm_matvec_q8i computes y[o] = sum_g sr[g] * sx[g] * (sum_{i in g} q[o][i] * qx[i]) with
+ * the inner sum in exact int32. Eight float lanes accumulate lane j = int sum of bytes
+ * 4j..4j+3 of each group, acc[j] = fma((float)t_j, sr[g] * sx[g], acc[j]), then reduce as
+ * ((a0+a4)+(a2+a6)) + ((a1+a5)+(a3+a7)). The scalar path emulates exactly that, so
+ * scalar, AVX2 and NEON (dot-product extension) are BIT-IDENTICAL. Builds without AVX2 or
+ * NEON dotprod run the scalar path. Returns -1 (nothing written) when `in` is not a
+ * multiple of 32, 0 on success. Caller-owned buffers: qx[in], sx[in/32]. */
+int lm_q8_quantize_acts(int8_t *qx, float *sx, const float *x, int in);
+int lm_matvec_q8i(float *y, const int8_t *qx, const float *sx, const int8_t *q,
+                  const float *scales, int in, int out);
+int lm_matvec_q8i_scalar(float *y, const int8_t *qx, const float *sx, const int8_t *q,
+                         const float *scales, int in, int out);
+
 #ifdef __cplusplus
 }
 #endif

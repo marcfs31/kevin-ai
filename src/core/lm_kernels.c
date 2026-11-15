@@ -9,6 +9,7 @@
  * AVX2 and NEON paths bound to the same bit-identity contract. */
 #include <math.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "core/lm_bf16.h"
 #include "core/lm_kernels.h"
@@ -293,6 +294,126 @@ int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales,
         y[o] = vget_lane_f32(vpadd_f32(l2, l2), 0);
 #else
         y[o] = dot_q8_scalar(qr, sr, x, in);
+#endif
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ q8, int8 activations */
+
+/* AVX2 and NEON-with-dotprod have an int8 dot instruction; everything else runs the scalar
+ * emulation, which is the reference the vector paths must match bit for bit. */
+
+int lm_q8_quantize_acts(int8_t *qx, float *sx, const float *x, int in)
+{
+    if (in < 0 || in % LM_Q8_GROUP != 0) return -1;
+    for (int g = 0; g < in / LM_Q8_GROUP; g++) {
+        const float *xg = x + (size_t)g * LM_Q8_GROUP;
+        int8_t *qg = qx + (size_t)g * LM_Q8_GROUP;
+        float amax = 0.0f, probe = 0.0f;
+        for (int i = 0; i < LM_Q8_GROUP; i++) {
+            amax = fmaxf(amax, fabsf(xg[i]));
+            probe += xg[i] * 0.0f; /* stays 0 for finite x; NaN for a NaN or an infinity */
+        }
+        if (probe != probe) { /* poison the group: every dot product touching it is NaN */
+            sx[g] = NAN;
+            memset(qg, 0, LM_Q8_GROUP);
+            continue;
+        }
+        if (amax == 0.0f) {
+            sx[g] = 0.0f;
+            memset(qg, 0, LM_Q8_GROUP);
+            continue;
+        }
+        const double inv = 127.0 / (double)amax; /* double: no overflow for denormal groups */
+        for (int i = 0; i < LM_Q8_GROUP; i++) {
+            long v = lrint((double)xg[i] * inv);
+            qg[i] = (int8_t)(v > 127 ? 127 : v < -127 ? -127 : v);
+        }
+        sx[g] = amax / 127.0f;
+    }
+    return 0;
+}
+
+/* Scalar emulation of the eight-lane vector kernels: lane j sums bytes 4j..4j+3 of a group
+ * in exact int32, then one fused step into float lane j. */
+static inline float dot_q8i_scalar(const int8_t *q, const float *sc, const int8_t *qx,
+                                   const float *sx, int in)
+{
+    float acc[8] = {0};
+    for (int g = 0; g < in / LM_Q8_GROUP; g++) {
+        const int8_t *qg = q + (size_t)g * LM_Q8_GROUP;
+        const int8_t *xg = qx + (size_t)g * LM_Q8_GROUP;
+        const float s = sc[g] * sx[g];
+        for (int j = 0; j < 8; j++) {
+            int t = 0;
+            for (int k = 0; k < 4; k++) t += (int)qg[4 * j + k] * (int)xg[4 * j + k];
+            acc[j] = fmaf((float)t, s, acc[j]);
+        }
+    }
+    const float m0 = (acc[0] + acc[4]) + (acc[2] + acc[6]);
+    const float m1 = (acc[1] + acc[5]) + (acc[3] + acc[7]);
+    return m0 + m1;
+}
+
+int lm_matvec_q8i_scalar(float *y, const int8_t *qx, const float *sx, const int8_t *q,
+                         const float *scales, int in, int out)
+{
+    if (in < 0 || in % LM_Q8_GROUP != 0) return -1;
+    const int ng = in / LM_Q8_GROUP;
+    for (int o = 0; o < out; o++)
+        y[o] = dot_q8i_scalar(q + (size_t)o * in, scales + (size_t)o * ng, qx, sx, in);
+    return 0;
+}
+
+int lm_matvec_q8i(float *y, const int8_t *qx, const float *sx, const int8_t *q,
+                  const float *scales, int in, int out)
+{
+    if (in < 0 || in % LM_Q8_GROUP != 0) return -1;
+    const int ng = in / LM_Q8_GROUP;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (out > 64)
+#endif
+    for (int o = 0; o < out; o++) {
+        const int8_t *qr = q + (size_t)o * in;
+        const float *sr = scales + (size_t)o * ng;
+#if defined(LM_HAVE_AVX2)
+        const __m256i ones = _mm256_set1_epi16(1);
+        __m256 acc = _mm256_setzero_ps();
+        for (int g = 0; g < ng; g++) {
+            const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
+            LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
+            LM_PREFETCH(sr + g + 64);
+            const __m256i w = _mm256_loadu_si256((const __m256i *)qg);
+            const __m256i a = _mm256_loadu_si256((const __m256i *)(qx + (size_t)g * LM_Q8_GROUP));
+            /* |w| as unsigned (128 fits) times a with w's sign: w*a, and the int16 pair sums
+             * cannot saturate (2 * 128 * 127 = 32512) because |a| <= 127. */
+            const __m256i p = _mm256_maddubs_epi16(_mm256_abs_epi8(w), _mm256_sign_epi8(a, w));
+            const __m256i t = _mm256_madd_epi16(p, ones); /* lane j: bytes 4j..4j+3 */
+            acc = _mm256_fmadd_ps(_mm256_cvtepi32_ps(t), _mm256_set1_ps(sr[g] * sx[g]), acc);
+        }
+        __m128 lo = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+        lo = _mm_add_ps(lo, _mm_movehl_ps(lo, lo));
+        lo = _mm_add_ss(lo, _mm_shuffle_ps(lo, lo, 1));
+        y[o] = _mm_cvtss_f32(lo);
+#elif defined(LM_HAVE_NEON) && defined(__ARM_FEATURE_DOTPROD)
+        float32x4_t alo = vdupq_n_f32(0.0f), ahi = vdupq_n_f32(0.0f);
+        for (int g = 0; g < ng; g++) {
+            const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
+            const int8_t *xg = qx + (size_t)g * LM_Q8_GROUP;
+            LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
+            LM_PREFETCH(sr + g + 64);
+            const int32x4_t t0 = vdotq_s32(vdupq_n_s32(0), vld1q_s8(qg), vld1q_s8(xg));
+            const int32x4_t t1 = vdotq_s32(vdupq_n_s32(0), vld1q_s8(qg + 16), vld1q_s8(xg + 16));
+            const float32x4_t sv = vdupq_n_f32(sr[g] * sx[g]);
+            alo = vfmaq_f32(alo, vcvtq_f32_s32(t0), sv);
+            ahi = vfmaq_f32(ahi, vcvtq_f32_s32(t1), sv);
+        }
+        const float32x4_t l4 = vaddq_f32(alo, ahi);
+        const float32x2_t l2 = vadd_f32(vget_low_f32(l4), vget_high_f32(l4));
+        y[o] = vget_lane_f32(vpadd_f32(l2, l2), 0);
+#else
+        y[o] = dot_q8i_scalar(qr, sr, qx, sx, in);
 #endif
     }
     return 0;
