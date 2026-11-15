@@ -319,9 +319,11 @@ int lm_matvec_q8(float *y, const float *x, const int8_t *q, const float *scales,
 /* ------------------------------------------------------------------ q8, batched tokens */
 
 #define LM_MATMUL_TB 4 /* tokens per tile: the weights of a group are widened once for all of them */
-#define LM_MATMUL_RB 8 /* rows per block: a block of weights stays in cache across all the token tiles,
-                        * and a tile's inputs (TB * in floats) are reused by every row of the block,
-                        * instead of every row re-reading all T tokens' inputs from a farther cache */
+#define LM_MATMUL_RB 8 /* rows per block: a tile's inputs are reused by every row of the block */
+#define LM_MATMUL_KB 32 /* groups per input slice: a tile's slice of inputs (TB * KB * 32 floats, 16 KiB)
+                         * and the block's slice of weights (RB * KB * 32 bytes, 8 KiB) fit in a 32 KiB
+                         * L1 together. Without slicing, a tile's inputs (40 KiB at in = 2560, 144 KiB
+                         * at 9216) left L1 between rows and every row re-read them from L2 */
 
 int lm_matmul_q8_scalar(float *Y, const float *X, int T, const int8_t *q, const float *scales,
                         int in, int out)
@@ -356,14 +358,15 @@ static inline float q8_row_avx2(const int8_t *qr, const float *sr, const float *
     return hsum8_avx2(acc);
 }
 
-/* Row o against tokens t0..t0+3: Y[t0+k][o]. Per token exactly the single-token sequence:
+/* One row against the 4 tokens at x0 (rows `in` apart), groups g0..g1-1, continuing the
+ * accumulators in acc[0..3]. Per token exactly the single-token sequence:
  * t = fma(w_j, x_j, t) for j = 0..3, then acc = fma(t, scale, acc). */
-static inline void q8_tile4_avx2(float *Y, const float *X, int t0, int in, int out, int o,
-                                 const int8_t *qr, const float *sr, int ng)
+static inline void q8_tile4_avx2(__m256 *acc, const float *x0, int in, const int8_t *qr, const float *sr,
+                                 int g0, int g1)
 {
-    const float *x0 = X + (size_t)t0 * in, *x1 = x0 + in, *x2 = x1 + in, *x3 = x2 + in;
-    __m256 a0 = _mm256_setzero_ps(), a1 = a0, a2 = a0, a3 = a0;
-    for (int g = 0; g < ng; g++) {
+    const float *x1 = x0 + in, *x2 = x1 + in, *x3 = x2 + in;
+    __m256 a0 = acc[0], a1 = acc[1], a2 = acc[2], a3 = acc[3];
+    for (int g = g0; g < g1; g++) {
         const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
         const size_t off = (size_t)g * LM_Q8_GROUP;
         LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
@@ -385,12 +388,16 @@ static inline void q8_tile4_avx2(float *Y, const float *X, int t0, int in, int o
         LM_TOKEN_STEP(x3, a3);
 #undef LM_TOKEN_STEP
     }
-    Y[(size_t)(t0 + 0) * out + o] = hsum8_avx2(a0);
-    Y[(size_t)(t0 + 1) * out + o] = hsum8_avx2(a1);
-    Y[(size_t)(t0 + 2) * out + o] = hsum8_avx2(a2);
-    Y[(size_t)(t0 + 3) * out + o] = hsum8_avx2(a3);
+    acc[0] = a0; acc[1] = a1; acc[2] = a2; acc[3] = a3;
 }
 #elif defined(LM_HAVE_NEON)
+static inline float hsum8_neon(float32x4_t lo, float32x4_t hi)
+{
+    const float32x4_t l4 = vaddq_f32(lo, hi);
+    const float32x2_t l2 = vadd_f32(vget_low_f32(l4), vget_high_f32(l4));
+    return vget_lane_f32(vpadd_f32(l2, l2), 0);
+}
+
 static inline float q8_row_neon(const int8_t *qr, const float *sr, const float *x, int ng)
 {
     float32x4_t alo = vdupq_n_f32(0.0f), ahi = vdupq_n_f32(0.0f);
@@ -407,22 +414,21 @@ static inline float q8_row_neon(const int8_t *qr, const float *sr, const float *
         alo = vfmaq_f32(alo, tlo, sv);
         ahi = vfmaq_f32(ahi, thi, sv);
     }
-    const float32x4_t l4 = vaddq_f32(alo, ahi);
-    const float32x2_t l2 = vadd_f32(vget_low_f32(l4), vget_high_f32(l4));
-    return vget_lane_f32(vpadd_f32(l2, l2), 0);
+    return hsum8_neon(alo, ahi);
 }
 
-static inline void q8_tile4_neon(float *Y, const float *X, int t0, int in, int out, int o,
-                                 const int8_t *qr, const float *sr, int ng)
+/* acc holds, per token, the low and high halves: acc[2k], acc[2k+1]. */
+static inline void q8_tile4_neon(float32x4_t *acc, const float *x0, int in, const int8_t *qr, const float *sr,
+                                 int g0, int g1)
 {
     const float *xs[LM_MATMUL_TB];
     float32x4_t alo[LM_MATMUL_TB], ahi[LM_MATMUL_TB];
     for (int k = 0; k < LM_MATMUL_TB; k++) {
-        xs[k] = X + (size_t)(t0 + k) * in;
-        alo[k] = vdupq_n_f32(0.0f);
-        ahi[k] = vdupq_n_f32(0.0f);
+        xs[k] = x0 + (size_t)k * in;
+        alo[k] = acc[2 * k];
+        ahi[k] = acc[2 * k + 1];
     }
-    for (int g = 0; g < ng; g++) {
+    for (int g = g0; g < g1; g++) {
         const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
         const size_t off = (size_t)g * LM_Q8_GROUP;
         LM_PREFETCH(qg + LM_Q8_PREFETCH_BYTES);
@@ -445,9 +451,8 @@ static inline void q8_tile4_neon(float *Y, const float *X, int t0, int in, int o
         }
     }
     for (int k = 0; k < LM_MATMUL_TB; k++) {
-        const float32x4_t l4 = vaddq_f32(alo[k], ahi[k]);
-        const float32x2_t l2 = vadd_f32(vget_low_f32(l4), vget_high_f32(l4));
-        Y[(size_t)(t0 + k) * out + o] = vget_lane_f32(vpadd_f32(l2, l2), 0);
+        acc[2 * k] = alo[k];
+        acc[2 * k + 1] = ahi[k];
     }
 }
 #endif
@@ -459,24 +464,45 @@ int lm_matmul_q8(float *Y, const float *X, int T, const int8_t *q, const float *
     const int ng = in / LM_Q8_GROUP;
     const int Tfull = T - T % LM_MATMUL_TB;
     const int nrb = (out + LM_MATMUL_RB - 1) / LM_MATMUL_RB;
-    /* Rows in blocks, then token tiles, then rows of the block: only the order of independent
-     * computations differs from the one-token kernel, so every result is bit-identical. */
+    /* Rows in blocks, then token tiles, then input slices, then rows of the block. Each (row, token)
+     * accumulator still sees its groups in order 0..ng-1 (it is parked in acc between slices,
+     * which is exact), so only the order of independent computations differs from the one-token
+     * kernel and every result is bit-identical. */
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static) if (out > 64)
 #endif
     for (int rb = 0; rb < nrb; rb++) {
         const int o0 = rb * LM_MATMUL_RB, o1 = o0 + LM_MATMUL_RB < out ? o0 + LM_MATMUL_RB : out;
 #if defined(LM_HAVE_AVX2)
-        for (int t0 = 0; t0 < Tfull; t0 += LM_MATMUL_TB)
+        for (int t0 = 0; t0 < Tfull; t0 += LM_MATMUL_TB) {
+            __m256 acc[LM_MATMUL_RB][LM_MATMUL_TB];
+            for (int r = 0; r < o1 - o0; r++)
+                for (int k = 0; k < LM_MATMUL_TB; k++) acc[r][k] = _mm256_setzero_ps();
+            for (int g0 = 0; g0 < ng; g0 += LM_MATMUL_KB) {
+                const int g1 = g0 + LM_MATMUL_KB < ng ? g0 + LM_MATMUL_KB : ng;
+                for (int o = o0; o < o1; o++)
+                    q8_tile4_avx2(acc[o - o0], X + (size_t)t0 * in, in, q + (size_t)o * in, scales + (size_t)o * ng, g0, g1);
+            }
             for (int o = o0; o < o1; o++)
-                q8_tile4_avx2(Y, X, t0, in, out, o, q + (size_t)o * in, scales + (size_t)o * ng, ng);
+                for (int k = 0; k < LM_MATMUL_TB; k++) Y[(size_t)(t0 + k) * out + o] = hsum8_avx2(acc[o - o0][k]);
+        }
         for (int t = Tfull; t < T; t++)
             for (int o = o0; o < o1; o++)
                 Y[(size_t)t * out + o] = q8_row_avx2(q + (size_t)o * in, scales + (size_t)o * ng, X + (size_t)t * in, ng);
 #elif defined(LM_HAVE_NEON)
-        for (int t0 = 0; t0 < Tfull; t0 += LM_MATMUL_TB)
+        for (int t0 = 0; t0 < Tfull; t0 += LM_MATMUL_TB) {
+            float32x4_t acc[LM_MATMUL_RB][2 * LM_MATMUL_TB];
+            for (int r = 0; r < o1 - o0; r++)
+                for (int k = 0; k < 2 * LM_MATMUL_TB; k++) acc[r][k] = vdupq_n_f32(0.0f);
+            for (int g0 = 0; g0 < ng; g0 += LM_MATMUL_KB) {
+                const int g1 = g0 + LM_MATMUL_KB < ng ? g0 + LM_MATMUL_KB : ng;
+                for (int o = o0; o < o1; o++)
+                    q8_tile4_neon(acc[o - o0], X + (size_t)t0 * in, in, q + (size_t)o * in, scales + (size_t)o * ng, g0, g1);
+            }
             for (int o = o0; o < o1; o++)
-                q8_tile4_neon(Y, X, t0, in, out, o, q + (size_t)o * in, scales + (size_t)o * ng, ng);
+                for (int k = 0; k < LM_MATMUL_TB; k++)
+                    Y[(size_t)(t0 + k) * out + o] = hsum8_neon(acc[o - o0][2 * k], acc[o - o0][2 * k + 1]);
+        }
         for (int t = Tfull; t < T; t++)
             for (int o = o0; o < o1; o++)
                 Y[(size_t)t * out + o] = q8_row_neon(q + (size_t)o * in, scales + (size_t)o * ng, X + (size_t)t * in, ng);

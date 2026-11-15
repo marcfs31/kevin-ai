@@ -142,7 +142,9 @@ static void test_bad_arguments(void)
 int main(void)
 {
     printf("kernel path: %s\n", lm_kernel_isa());
-    static const int shapes[][2] = { { 32, 1 }, { 64, 5 }, { 96, 70 }, { 2560, 70 }, { 9216, 5 } };
+    /* 1056 and 2080 are one group past one and two 32-group input slices (the last slice holds a
+     * single group); 2560 ends on a half slice; 9216 is exactly nine slices */
+    static const int shapes[][2] = { { 32, 1 }, { 64, 5 }, { 96, 70 }, { 1056, 9 }, { 2080, 13 }, { 2560, 70 }, { 9216, 5 } };
     static const int ts[] = { 0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33 };
     for (size_t s = 0; s < sizeof shapes / sizeof *shapes; s++)
         for (size_t i = 0; i < sizeof ts / sizeof *ts; i++) check_shape(shapes[s][0], shapes[s][1], ts[i]);
