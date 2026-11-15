@@ -118,6 +118,55 @@ void lm_chat_reset(LmChat *c)
 int lm_chat_reprefills(const LmChat *c) { return c->reprefills; }
 int lm_chat_fed(const LmChat *c) { return c->fed.n; }
 
+int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen)
+{
+    const int first = n > 0 && msgs[0].role == LM_ROLE_SYSTEM;
+    for (int i = 0; i < n; i++) {
+        if (i >= first && msgs[i].role == LM_ROLE_SYSTEM) { set_err(err, errlen, "a system message must come first"); return -1; }
+        if (!msgs[i].content) { set_err(err, errlen, "message %d has no text", i); return -1; }
+    }
+    const int nh = n - first;
+    /* how many leading messages match the history (those entries are kept as they are) */
+    int keep = 0;
+    while (keep < nh && keep < c->nh && c->h[keep].role == msgs[first + keep].role &&
+           !strcmp(c->h[keep].content, msgs[first + keep].content))
+        keep++;
+    Hist *h = (Hist *)calloc((size_t)(nh > 0 ? nh : 1), sizeof *h);
+    char *sys = first ? dup_str(msgs[0].content) : NULL;
+    int oom = !h || (first && !sys);
+    for (int i = keep; i < nh && !oom; i++) {
+        h[i].role = msgs[first + i].role;
+        if (!(h[i].content = dup_str(msgs[first + i].content))) oom = 1;
+    }
+    if (oom) {
+        if (h) for (int i = keep; i < nh; i++) free(h[i].content);
+        free(h);
+        free(sys);
+        set_err(err, errlen, "out of memory");
+        return -1;
+    }
+    for (int i = 0; i < keep; i++) h[i] = c->h[i];
+    for (int i = keep; i < c->nh; i++) hist_free_one(&c->h[i]);
+    free(c->h);
+    c->h = h;
+    c->nh = nh;
+    c->caph = nh > 0 ? nh : 1;
+    free(c->system);
+    c->system = sys;
+    c->cfg.system = sys;
+    return 0;
+}
+
+void lm_chat_set_sampling(LmChat *c, double temperature, double top_p, int top_k, uint64_t seed)
+{
+    lm_sampler_free(&c->smp);
+    lm_sampler_init(&c->smp, temperature, top_p, top_k, seed);
+    c->cfg.temperature = temperature;
+    c->cfg.top_p = top_p;
+    c->cfg.top_k = top_k;
+    c->cfg.seed = seed;
+}
+
 /* ---- collecting sink --------------------------------------------------------------- */
 
 static int buf_add(Buf *b, const char *s, size_t n)

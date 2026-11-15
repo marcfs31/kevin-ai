@@ -464,6 +464,81 @@ static void test_same_seed_same_text(void)
     CHECK(!strcmp(outs[0], outs[1]));
 }
 
+/* lm_chat_sync: a client that sends the whole conversation back (lm-serve) keeps the fed state
+ * when its history matches what this chat generated, and re-feeds when it does not. */
+static void test_sync(void)
+{
+    Fake f;
+    fake_init(&f, 4096);
+    LmChat *c = mk(&f, 0, 0, NULL);
+    LmTurn t;
+    char err[256] = "";
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && !strcmp(t.answer, "Hello"));
+
+    LmMsg same[] = { { LM_ROLE_USER, "Hi", NULL, NULL, 0, 0 }, { LM_ROLE_ASSISTANT, "Hello", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, same, 2, err, sizeof err) == 0);
+    script(&f, "Yes", "<|im_end|>", NULL);
+    CHECK(turn(c, "Again", 0, &t, NULL, NULL) == LM_OK);
+    CHECK(t.reprefill == 0 && f.resets == 0 && t.n_prefill < t.n_prompt && !strcmp(t.answer, "Yes"));
+
+    /* NEGATIVE: the client edited the earlier answer, so the state is not a prefix any more */
+    LmMsg edited[] = { { LM_ROLE_USER, "Hi", NULL, NULL, 0, 0 }, { LM_ROLE_ASSISTANT, "Hello!", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, edited, 2, err, sizeof err) == 0);
+    script(&f, "Yes", "<|im_end|>", NULL);
+    CHECK(turn(c, "Again", 0, &t, NULL, NULL) == LM_OK);
+    CHECK(t.reprefill == 1 && f.resets == 1 && t.n_prefill == t.n_prompt);
+
+    /* the conversation just generated (edited history + "Again" + "Yes") is matched again */
+    LmMsg longer[] = { { LM_ROLE_USER, "Hi", NULL, NULL, 0, 0 }, { LM_ROLE_ASSISTANT, "Hello!", NULL, NULL, 0, 0 },
+                       { LM_ROLE_USER, "Again", NULL, NULL, 0, 0 }, { LM_ROLE_ASSISTANT, "Yes", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, longer, 4, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && t.reprefill == 0 && f.resets == 1);
+
+    /* a system message replaces the chat's and opens the prompt; a new system means a re-feed */
+    LmMsg sys[] = { { LM_ROLE_SYSTEM, "Be brief", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, sys, 1, err, sizeof err) == 0);
+    f.nlog = 0;
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && t.reprefill == 1);
+    CHECK(f.log[0] == pid("<|im_start|>") && f.log[1] == pid("system"));
+
+    /* an empty list is a new conversation without a system message */
+    CHECK(lm_chat_sync(c, NULL, 0, err, sizeof err) == 0);
+    f.nlog = 0;
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && t.reprefill == 1 && f.log[1] == pid("user"));
+
+    /* NEGATIVE: a system message that is not first, or a message without text, is refused and
+     * leaves the conversation as it was (the next turn still extends the state) */
+    LmMsg late[] = { { LM_ROLE_USER, "Hi", NULL, NULL, 0, 0 }, { LM_ROLE_SYSTEM, "x", NULL, NULL, 0, 0 } };
+    err[0] = 0;
+    CHECK(lm_chat_sync(c, late, 2, err, sizeof err) == -1 && strstr(err, "system"));
+    LmMsg empty[] = { { LM_ROLE_USER, NULL, NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, empty, 1, err, sizeof err) == -1);
+    script(&f, "Yes", "<|im_end|>", NULL);
+    CHECK(turn(c, "Again", 0, &t, NULL, NULL) == LM_OK && t.reprefill == 0);
+    lm_chat_free(c);
+}
+
+/* lm_chat_set_sampling replaces the settings for the next turn: invalid ones make it fail,
+ * valid ones work again. */
+static void test_set_sampling(void)
+{
+    Fake f;
+    fake_init(&f, 4096);
+    LmChat *c = mk(&f, 0, 0, NULL);
+    LmTurn t;
+    lm_chat_set_sampling(c, 0.7, 0.0 /* invalid top_p */, 0, 7);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == -1);
+    lm_chat_set_sampling(c, 0.0, 1.0, 0, 7);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && !strcmp(t.answer, "Hello"));
+    lm_chat_free(c);
+}
+
 int main(void)
 {
     char err[256];
@@ -482,6 +557,8 @@ int main(void)
     test_prefill_backend();
     test_thinking_and_tools();
     test_same_seed_same_text();
+    test_sync();
+    test_set_sampling();
 
     lm_template_free(g_tpl);
     lm_tok_close(g_tok);
