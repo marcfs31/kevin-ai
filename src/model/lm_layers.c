@@ -127,3 +127,99 @@ void lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnDim
     lm_mul_sigmoid(attn, gate, qd);
     lm_mat_mul(&w->o, out, attn);
 }
+
+/* ------------------------------------------------------------------ batched (prefill) */
+
+void lm_mat_mul_batch(const LmMat *m, float *Y, const float *X, int T)
+{
+    if (m->kind == LM_MAT_Q8 && !m->int8_acts) {
+        (void)lm_matmul_q8(Y, X, T, m->q, m->sc, m->cols, m->rows);
+        return;
+    }
+    for (int t = 0; t < T; t++) lm_mat_mul(m, Y + (size_t)t * m->rows, X + (size_t)t * m->cols);
+}
+
+size_t lm_mlp_batch_scratch(int inter, int T) { return 2 * (size_t)inter * (size_t)T; }
+
+void lm_mlp_batch(float *out, const float *x, const LmMlpW *w, float *scratch, int T)
+{
+    float *g = scratch, *u = scratch + (size_t)w->inter * T;
+    lm_mat_mul_batch(&w->gate, g, x, T);
+    lm_mat_mul_batch(&w->up, u, x, T);
+    for (int t = 0; t < T; t++)
+        lm_silu_mul(g + (size_t)t * w->inter, g + (size_t)t * w->inter, u + (size_t)t * w->inter, w->inter);
+    lm_mat_mul_batch(&w->down, out, g, T);
+}
+
+size_t lm_linear_batch_scratch(const LmLinDims *d, int T)
+{
+    const size_t conv_dim = (size_t)(2 * d->n_k * d->dk + d->n_v * d->dv), vd = (size_t)d->n_v * d->dv;
+    return (size_t)T * (conv_dim + 2 * vd + 2 * (size_t)d->n_v) + 2 * (size_t)d->n_v;
+}
+
+void lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const LmLinDims *d,
+                           float *conv_state, float *S, float *scratch, int T)
+{
+    const int kd = d->n_k * d->dk, vd = d->n_v * d->dv, conv_dim = 2 * kd + vd;
+    float *qkv = scratch, *z = qkv + (size_t)T * conv_dim, *o = z + (size_t)T * vd;
+    float *b = o + (size_t)T * vd, *a = b + (size_t)T * d->n_v, *g = a + (size_t)T * d->n_v, *beta = g + d->n_v;
+
+    lm_mat_mul_batch(&w->qkv, qkv, x, T);
+    lm_mat_mul_batch(&w->z, z, x, T);
+    lm_mat_mul_batch(&w->b, b, x, T);
+    lm_mat_mul_batch(&w->a, a, x, T);
+
+    const float qscale = (float)(1.0 / sqrt((double)d->dk));
+    for (int t = 0; t < T; t++) {   /* the state-carrying part, token by token, as lm_linear_mixer */
+        float *qkv_t = qkv + (size_t)t * conv_dim, *o_t = o + (size_t)t * vd, *z_t = z + (size_t)t * vd;
+        lm_conv1d_step(qkv_t, conv_state, qkv_t, w->conv_w, conv_dim, d->conv_k);
+        float *q = qkv_t, *k = qkv_t + kd, *v = qkv_t + 2 * kd;
+        for (int h = 0; h < d->n_k; h++) {
+            lm_l2norm(q + h * d->dk, q + h * d->dk, d->dk);
+            lm_l2norm(k + h * d->dk, k + h * d->dk, d->dk);
+            for (int i = 0; i < d->dk; i++) q[h * d->dk + i] *= qscale;
+        }
+        lm_gdn_gates(g, beta, a + (size_t)t * d->n_v, b + (size_t)t * d->n_v, w->A_log, w->dt_bias, d->n_v);
+        (void)lm_gated_delta_step(S, o_t, q, k, v, g, beta, d->n_k, d->n_v, d->dk, d->dv);
+        for (int h = 0; h < d->n_v; h++)
+            lm_rmsnorm_gated(o_t + h * d->dv, o_t + h * d->dv, z_t + h * d->dv, w->norm_w, d->dv, d->eps);
+    }
+    lm_mat_mul_batch(&w->out, out, o, T);
+}
+
+size_t lm_attn_batch_scratch(const LmAttnDims *d, int ctx, int T)
+{
+    const size_t qd = (size_t)d->heads * d->head_dim, kvd = (size_t)d->kv_heads * d->head_dim;
+    return (size_t)T * (2 * qd + 2 * kvd + qd) + 2 * qd + (size_t)d->heads * (size_t)ctx;
+}
+
+void lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmAttnDims *d,
+                         float *k_cache, float *v_cache, int pos0, int ctx, float *scratch, int T)
+{
+    (void)ctx;
+    const int hd = d->head_dim, qd = d->heads * hd, kvd = d->kv_heads * hd;
+    float *qgb = scratch, *kb = qgb + (size_t)T * 2 * qd, *vb = kb + (size_t)T * kvd;
+    float *attnb = vb + (size_t)T * kvd, *q = attnb + (size_t)T * qd, *gate = q + qd, *scores = gate + qd;
+
+    lm_mat_mul_batch(&w->q, qgb, x, T);
+    lm_mat_mul_batch(&w->k, kb, x, T);
+    lm_mat_mul_batch(&w->v, vb, x, T);
+
+    for (int t = 0; t < T; t++) {   /* norm, RoPE, cache write and attention, in position order */
+        const int pos = pos0 + t;
+        float *qg = qgb + (size_t)t * 2 * qd, *k = kb + (size_t)t * kvd, *v = vb + (size_t)t * kvd;
+        float *attn = attnb + (size_t)t * qd;
+        for (int h = 0; h < d->heads; h++) {
+            lm_rmsnorm(q + h * hd, qg + (size_t)h * 2 * hd, w->q_norm, hd, d->eps);
+            memcpy(gate + h * hd, qg + (size_t)h * 2 * hd + hd, (size_t)hd * sizeof(float));
+        }
+        for (int h = 0; h < d->kv_heads; h++) lm_rmsnorm(k + h * hd, k + h * hd, w->k_norm, hd, d->eps);
+        (void)lm_rope(q, d->heads, hd, d->rot, pos, d->theta);
+        (void)lm_rope(k, d->kv_heads, hd, d->rot, pos, d->theta);
+        memcpy(k_cache + (size_t)pos * kvd, k, (size_t)kvd * sizeof(float));
+        memcpy(v_cache + (size_t)pos * kvd, v, (size_t)kvd * sizeof(float));
+        (void)lm_attn_step(attn, q, k_cache, v_cache, pos + 1, d->heads, d->kv_heads, hd, scores);
+        lm_mul_sigmoid(attn, gate, qd);
+    }
+    lm_mat_mul_batch(&w->o, out, attnb, T);
+}
