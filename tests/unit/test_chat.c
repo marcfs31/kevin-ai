@@ -60,7 +60,7 @@ typedef struct {
     int calls;
     int pf_calls, pf_max;                         /* prefill backend: calls and the largest chunk handed to it */
     int st[MAXLOG];                               /* the "state": the id at every position held */
-    int saves, restores, drops, live;             /* prefix-cache hooks: calls, snapshots alive */
+    int saves, restores, drops, live, maxlive;    /* prefix-cache hooks: calls, snapshots alive (most at once) */
     int save_fail, restore_fail;                  /* make save return NULL / restore fail */
     int saved_pos;                                /* position of the last snapshot taken */
 } Fake;
@@ -106,7 +106,7 @@ static void *fk_save(void *c)
     if (!s) return NULL;
     s->pos = f->saved_pos = f->pos;
     memcpy(s->st, f->st, sizeof s->st);
-    f->live++;
+    if (++f->live > f->maxlive) f->maxlive = f->live;
     return s;
 }
 static int fk_restore(void *c, void *snap)
@@ -608,7 +608,8 @@ static void oracle(Fake *o, const char *system, const char *user)
 
 static int same_state(const Fake *a, const Fake *b) { return a->pos == b->pos && !memcmp(a->st, b->st, (size_t)a->pos * sizeof(int)); }
 
-/* the common prefix of two single-turn conversations with this system prompt */
+/* where the cache snapshots: the common prefix of two conversations with this system prompt
+ * and different first messages, i.e. the system block and the user header, spelled out */
 static int shared_prefix(const char *system)
 {
     Fake a, b;
@@ -616,6 +617,8 @@ static int shared_prefix(const char *system)
     oracle(&b, system, "Yo");
     int n = 0;
     while (n < a.pos && n < b.pos && a.st[n] == b.st[n]) n++;
+    /* <|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n */
+    CHECK(n > 6 && a.st[0] == pid("<|im_start|>") && a.st[n - 3] == pid("<|im_start|>") && a.st[n - 2] == pid("user"));
     return n;
 }
 
@@ -688,18 +691,29 @@ static void test_prefix_cache_sync(void)
     const int L = lm_chat_cached(c);
     CHECK(t.reprefill == 1 && f.saves == 1 && L == shared_prefix("You are terse. Answer in one short line."));
     CHECK(lm_chat_sync(c, b, 1, err, sizeof err) == 0);
+    const int reprefills = lm_chat_reprefills(c);
     script(&f, "Hello", "<|im_end|>", NULL);
-    CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == L && t.reprefill == 1);
+    CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == L);
+    CHECK(t.reprefill == 0 && lm_chat_reprefills(c) == reprefills); /* restored, not re-fed from scratch */
     oracle(&o, "You are terse. Answer in one short line.", "Hey");
     CHECK(same_state(&f, &o));
 
+    /* NEGATIVE: an edited answer shares the whole conversation with what was fed, but the
+     * snapshot still stops at the system message (its size is bounded by it) */
+    LmMsg e[] = { { LM_ROLE_SYSTEM, "You are terse. Answer in one short line.", NULL, NULL, 0, 0 },
+                  { LM_ROLE_USER, "Hey", NULL, NULL, 0, 0 }, { LM_ROLE_ASSISTANT, "Edited", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, e, 3, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    const int saves0 = f.saves;
+    CHECK(turn(c, "More", 0, &t, NULL, NULL) == LM_OK && t.n_cached == L && f.saves == saves0 && lm_chat_cached(c) == L);
+
     /* NEGATIVE: another system prompt is not served from the cache; the state is still right */
-    LmMsg d[] = { { LM_ROLE_SYSTEM, "Be long.", NULL, NULL, 0, 0 } };
+    LmMsg d[] = { { LM_ROLE_SYSTEM, "You are verbose. Answer in many long lines.", NULL, NULL, 0, 0 } };
     CHECK(lm_chat_sync(c, d, 1, err, sizeof err) == 0);
     script(&f, "Hello", "<|im_end|>", NULL);
     const int restores = f.restores, saves = f.saves;
     CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == 0 && f.restores == restores);
-    oracle(&o, "Be long.", "Hey");
+    oracle(&o, "You are verbose. Answer in many long lines.", "Hey");
     CHECK(same_state(&f, &o));
     /* NEGATIVE: the few ids the two share (the system header) did not evict the cache, which
      * still serves the first system prompt */
@@ -707,6 +721,17 @@ static void test_prefix_cache_sync(void)
     CHECK(lm_chat_sync(c, b, 1, err, sizeof err) == 0);
     script(&f, "Hello", "<|im_end|>", NULL);
     CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == L);
+
+    /* two conversations in a row with the other system prompt replace the cache, and the old
+     * snapshot is freed before the new one is taken: never two alive at once */
+    CHECK(lm_chat_sync(c, d, 1, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == 0);
+    CHECK(lm_chat_sync(c, d, 1, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK);
+    CHECK(f.saves == saves + 1 && lm_chat_cached(c) == shared_prefix("You are verbose. Answer in many long lines."));
+    CHECK(f.maxlive == 1);
     lm_chat_free(c);
     CHECK(f.live == 0);
     g_use_cache = 0;
@@ -748,6 +773,17 @@ static void test_prefix_cache_failures(void)
     CHECK(same_state(&f, &o));
     lm_chat_free(c);
     CHECK(f.live == 0);
+
+    /* NEGATIVE: without a system message nothing is cached, however much two conversations share */
+    fake_init(&f, 4096);
+    c = mk(&f, 0, 0, NULL);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "The same long opening line for both of these conversations, then Hi", 0, &t, NULL, NULL) == LM_OK);
+    lm_chat_reset(c);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "The same long opening line for both of these conversations, then Yo", 0, &t, NULL, NULL) == LM_OK);
+    CHECK(f.saves == 0 && lm_chat_cached(c) == 0);
+    lm_chat_free(c);
 
     /* the hooks come all three or none */
     LmChatConfig cc;

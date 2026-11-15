@@ -545,12 +545,13 @@ bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
 - The model state cannot be rewound, so it is reused only when a request continues the last
   conversation with the previous answer sent back unchanged (what chat clients do). Then only
   the new message is fed.
-- Otherwise a prefix cache helps: when two conversations in a row share at least 16 tokens
-  (typically the system prompt), the server keeps a snapshot of the state there, and a later
-  conversation that starts the same way is restored from it and feeds only the rest. The log
-  line says `N from cache`. The answer is the same as without the cache. One snapshot is kept;
-  for Qwen3.5-4B it takes about 50 MiB plus 64 KiB per cached token (about 82 MiB for a
-  500-token system prompt). `lm-chat` uses the same cache after `/reset`.
+- Otherwise a prefix cache helps: when two conversations in a row share their system prompt
+  (at least 16 tokens), the server keeps a snapshot of the state at its end, and a later
+  conversation with the same system prompt is restored from it and feeds only the rest. The
+  log line says `N from cache`. The answer is the same as without the cache. One snapshot is
+  kept, never longer than the system prompt; for Qwen3.5-4B it takes about 50 MiB plus 64 KiB
+  per token (about 82 MiB for a 500-token system prompt). Clients that alternate between two
+  system prompts replace it each time. `lm-chat` uses the same cache after `/reset`.
 - `scripts/lm-serve.service` runs it as a systemd user service; its comments say how to install it.
 
 ```bash
