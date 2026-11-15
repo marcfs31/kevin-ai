@@ -2,7 +2,8 @@
 # test_lm_serve.sh - bin/lm-serve end to end on the tiny Qwen3.5 fixture over real HTTP (curl):
 # the endpoints, streaming, state reuse when the client sends the previous answer back, the
 # API key, and the refusals (bad JSON, unsupported parameters, wrong method, unknown path,
-# oversized body). Run from the repository root after `make`.
+# oversized body), and lm-chat's default reply length on the same model. Run from the
+# repository root after `make`.
 #
 # The fixture tokenizer has ids up to 407 but the tiny model 384, so the test builds a model
 # directory whose tokenizer moves the special tokens into ids 358..383 (dropping the plain
@@ -158,6 +159,17 @@ for f in $unit_flags; do
     check '"$SERVE" --help | grep -q -- "$f"' "scripts/lm-serve.service uses $f, which lm-serve does not accept"
 done
 check '[ -n "$unit_flags" ]' "no flags found in scripts/lm-serve.service"
+
+# lm-chat on the same model: without --max-tokens an answer runs to the end of the context
+# (the old default stopped at 512 tokens, inside this 1024-token window)
+bin/lm-chat --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --ctx 1024 --temperature 0 \
+    --prompt hi > /dev/null 2> "$tmp/chat.err"; rc=$?
+check '[ $rc -eq 0 ] && grep -q "context full" "$tmp/chat.err" && ! grep -q "max-tokens reached" "$tmp/chat.err"' \
+      "lm-chat without --max-tokens (exit $rc): $(cat "$tmp/chat.err")"
+# NEGATIVE: an explicit --max-tokens still stops there
+bin/lm-chat --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --ctx 1024 --temperature 0 \
+    --prompt hi --max-tokens 5 > /dev/null 2> "$tmp/chat.err"
+check 'grep -q "max-tokens reached" "$tmp/chat.err"' "lm-chat --max-tokens 5 did not stop: $(cat "$tmp/chat.err")"
 
 if [ "$fails" -ne 0 ]; then echo "test_lm_serve: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_lm_serve: $checks checks passed"

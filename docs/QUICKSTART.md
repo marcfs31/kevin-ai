@@ -98,6 +98,7 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 ```
 
 Thinking is off by default (`--no-think`). With `--prompt` it answers once and exits.
+Without `--max-tokens` an answer runs until the model stops or the context fills.
 
 `bin/lm-serve` (OpenAI-compatible HTTP endpoint on 127.0.0.1:8080):
 
