@@ -132,4 +132,4 @@ for m in ${TARGETS[@]+"${TARGETS[@]}"}; do
   echo "  $REPO_DIR/bin/lm-chat --model $MODELS_ROOT/$m --weights $MODELS_ROOT/$m/model.q8.safetensors --stats"
 done
 [ ${#TARGETS[@]} -gt 0 ] || echo "  (no model chosen; re-run with --model qwen3.5-4b or gemma-4-e4b)"
-echo "Speed is unmeasured: --stats prints tokens/s; please report it."
+echo "The chat command prints tokens/s (--stats). If the doctor report above has a 'cpu clock' NOTE, fix that cap first: see README Troubleshooting."
