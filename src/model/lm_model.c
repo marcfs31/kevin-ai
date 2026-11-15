@@ -288,13 +288,7 @@ int lm_prefill(LmModel *m, const int *tokens, int n, float *logits)
         if (tokens[i] < 0 || tokens[i] >= V) return LM_ERR_TOKEN;
     if (n > lm_n_ctx(m) - lm_pos(m)) return LM_ERR_CTX;
     if (n == 0) return LM_OK;
-    if (m->gemma) {
-        for (int i = 0; i < n; i++) {
-            const int rc = lm_gemma_feed(m->gemma, tokens[i], i == n - 1 ? logits : NULL);
-            if (rc != LM_OK) return rc;
-        }
-        return LM_OK;
-    }
+    if (m->gemma) return lm_gemma_prefill(m->gemma, tokens, n, logits);
 
     const LmCfg *c = &m->cfg;
     const int H = c->hidden;

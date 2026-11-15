@@ -10,6 +10,7 @@
 #include "json.h"
 #include "model/lm_gemma.h"
 #include "model/lm_gemma_config.h"
+#include "model/lm_layers.h"
 
 #define FIX "tests/fixtures/gemma4-tiny"
 #define Q8 FIX "/model.q8.safetensors"
@@ -534,7 +535,8 @@ static void test_e4b_memory(void)
     const size_t scratch = 4 * 2560 + 2 * 10240                   /* h n mix mlp_out, gate+up */
                          + 8 * 512 + 2 * (2 * 512) + 8 * 512       /* q k v attn at the largest head size */
                          + 8 * 4096                                /* scores */
-                         + 2 * LP + LP / 32 + 1 + 256 + 2560;      /* per-layer inputs, scales, ple_g, ple_d */
+                         + 2 * LP + LP / 32 + 1 + 256 + 2560       /* per-layer inputs, scales, ple_g, ple_d */
+                         + (size_t)LM_PREFILL_CHUNK * (4 * 2560 + 2 * 10240 + 2 * (8 * 512) + 2 * (2 * 512) + 2 * LP + 256);  /* prefill chunk buffers */
     const size_t want = (sliding_kv + full_kv + scratch) * F + LP * 2;
     const size_t got = lm_gemma_state_bytes(&c, 4096);
     CHECK_MSG(got == want, "state bytes %zu, formula %zu", got, want);

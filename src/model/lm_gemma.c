@@ -41,6 +41,8 @@ struct LmGemma {
     unsigned char *rowbuf;                   /* raw PLE row: L*P*2 bytes */
     float *h, *n, *mix, *mlp_out, *mlp_s, *q, *k, *v, *attn, *scores;
     float *ple, *ple_ctx, *ple_scales, *ple_g, *ple_d;
+    float     *barena;                       /* prefill buffers for LM_PREFILL_CHUNK tokens, one allocation */
+    float *bh, *bn, *bmix, *bmlp, *bq, *bk, *bv, *battn, *bple, *bple_ctx, *bple_g, *bple_d;
 };
 
 /* ------------------------------------------------------------------ sizes */
@@ -53,11 +55,11 @@ static int slots_of(const LmGemmaCfg *c, int full, int ctx)
 
 static int hd_of(const LmGemmaCfg *c, int full) { return full ? c->global_head_dim : c->head_dim; }
 
-typedef struct { size_t kv_floats, scratch_floats, rowbuf_bytes; } Sizes;
+typedef struct { size_t kv_floats, scratch_floats, batch_floats, rowbuf_bytes; } Sizes;
 
 static Sizes sizes(const LmGemmaCfg *c, int ctx)
 {
-    Sizes s = { 0, 0, 0 };
+    Sizes s = { 0, 0, 0, 0 };
     int any_full = 0, hdmax = c->head_dim;
     for (int i = 0; i < c->layers; i++) {
         if (c->full[i]) any_full = 1;
@@ -72,6 +74,9 @@ static Sizes sizes(const LmGemmaCfg *c, int ctx)
                      + qd + 2 * kvd + qd + (size_t)c->heads * nvis             /* q k v attn scores */
                      + 2 * LP + LP / LM_Q8_GROUP + 1                           /* ple, ple_ctx, scales */
                      + (size_t)c->ple_dim + (size_t)c->hidden;                 /* ple_g, ple_d */
+    /* one chunk of: h n mix, gate+up, q, attn, k, v, the per-layer inputs and their projection, ple_g, ple_d */
+    s.batch_floats = (size_t)LM_PREFILL_CHUNK * (4 * (size_t)c->hidden + 2 * (size_t)c->inter + 2 * qd + 2 * kvd
+                                                 + 2 * LP + (size_t)c->ple_dim);
     s.rowbuf_bytes = LP * 2;
     return s;
 }
@@ -79,7 +84,7 @@ static Sizes sizes(const LmGemmaCfg *c, int ctx)
 size_t lm_gemma_state_bytes(const LmGemmaCfg *c, int ctx)
 {
     const Sizes s = sizes(c, ctx);
-    return (s.kv_floats + s.scratch_floats) * sizeof(float) + s.rowbuf_bytes;
+    return (s.kv_floats + s.scratch_floats + s.batch_floats) * sizeof(float) + s.rowbuf_bytes;
 }
 
 /* ------------------------------------------------------------------ open / close */
@@ -96,7 +101,7 @@ void lm_gemma_close(LmGemma *g)
     free(g->kc); free(g->vc);
     free(g->layers);
     free(g->freqs[0]); free(g->freqs[1]);
-    free(g->arena); free(g->rowbuf);
+    free(g->arena); free(g->barena); free(g->rowbuf);
     lm_bind_free(&g->b);
     lm_gemma_config_free(&g->cfg);
     free(g);
@@ -226,6 +231,24 @@ LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, int 
         g->ple_g = p;   p += P;
         g->ple_d = p;   p += c->hidden;
         if ((size_t)(p - g->arena) != sz.scratch_floats) { lm_fail(err, errlen, "internal error: scratch layout"); goto fail; }
+
+        const size_t T = LM_PREFILL_CHUNK;
+        g->barena = (float *)calloc(sz.batch_floats, sizeof(float));
+        if (!g->barena) { lm_fail(err, errlen, "out of memory allocating prefill buffers"); goto fail; }
+        p = g->barena;
+        g->bh = p;      p += T * c->hidden;
+        g->bn = p;      p += T * c->hidden;
+        g->bmix = p;    p += T * c->hidden;
+        g->bmlp = p;    p += T * 2 * (size_t)c->inter;
+        g->bq = p;      p += T * qd;
+        g->battn = p;   p += T * qd;
+        g->bk = p;      p += T * kvd;
+        g->bv = p;      p += T * kvd;
+        g->bple = p;    p += T * LP;
+        g->bple_ctx = p; p += T * LP;
+        g->bple_g = p;  p += T * P;
+        g->bple_d = p;  p += T * c->hidden;
+        if ((size_t)(p - g->barena) != sz.batch_floats) { lm_fail(err, errlen, "internal error: prefill buffer layout"); goto fail; }
     }
     return g;
 fail:
@@ -253,11 +276,11 @@ void lm_gemma_reset(LmGemma *g)
 /* ple[l*P + i] for the token whose scaled embedding is e:
  * (rms(proj(e) * hidden^-1/2, norm) + table[token] * bf16(sqrt(P))) * 2^-1/2.
  * The table row is read from the mapped file, one row, never the table. */
-static int per_layer_inputs(LmGemma *g, int token, char *err, size_t errlen)
+/* tok[LP] = the per-layer table row of `token` as floats (bf16 widened, or q8 dequantised). */
+static int ple_read_row(LmGemma *g, int token, float *tok, char *err, size_t errlen)
 {
     const LmGemmaCfg *c = &g->cfg;
     const int P = c->ple_dim, LP = c->layers * P;
-    float *tok = g->ple;
     if (!g->b.q8) {
         if (lm_st_read_slice(&g->b.st, g->ple_t, (int64_t)token * LP * 2, (int64_t)LP * 2, g->rowbuf, err, errlen) != 0) return -1;
         const uint16_t *r = (const uint16_t *)g->rowbuf;     /* rowbuf is malloc-aligned */
@@ -269,15 +292,29 @@ static int per_layer_inputs(LmGemma *g, int token, char *err, size_t errlen)
         const int8_t *q = (const int8_t *)g->rowbuf;
         for (int i = 0; i < LP; i++) tok[i] = (float)q[i] * g->ple_scales[i / LM_Q8_GROUP];
     }
-    lm_mat_mul(&g->ple_model, g->ple_ctx, g->h);
+    return 0;
+}
+
+/* tok[LP] (the table row) becomes the per-layer inputs, from cx[LP] = per_layer_model_projection * h. */
+static void ple_combine(const LmGemma *g, float *tok, float *cx_all)
+{
+    const LmGemmaCfg *c = &g->cfg;
+    const int P = c->ple_dim;
     const float cscale = (float)(1.0 / sqrt((double)c->hidden));
     const float half = (float)(1.0 / sqrt(2.0));
     for (int l = 0; l < c->layers; l++) {
-        float *cx = g->ple_ctx + (size_t)l * P, *tk = tok + (size_t)l * P;
+        float *cx = cx_all + (size_t)l * P, *tk = tok + (size_t)l * P;
         for (int i = 0; i < P; i++) cx[i] *= cscale;
         lm_rmsnorm_plain(cx, cx, g->ple_norm, P, c->eps);
         for (int i = 0; i < P; i++) tk[i] = (cx[i] + tk[i] * c->ple_scale) * half;
     }
+}
+
+static int per_layer_inputs(LmGemma *g, int token, char *err, size_t errlen)
+{
+    if (ple_read_row(g, token, g->ple, err, errlen) != 0) return -1;
+    lm_mat_mul(&g->ple_model, g->ple_ctx, g->h);
+    ple_combine(g, g->ple, g->ple_ctx);
     return 0;
 }
 
@@ -348,6 +385,125 @@ int lm_gemma_feed(LmGemma *g, int token, float *logits)
     g->pos++;
     if (logits) {
         lm_rmsnorm_plain(g->n, g->h, g->final_norm, H, c->eps);
+        lm_mat_mul(&g->embed, logits, g->n);
+        lm_logit_softcap(logits, c->vocab, c->cap);
+    }
+    return LM_OK;
+}
+
+/* ------------------------------------------------------------------ prefill */
+
+/* The batched twin of attention(): the projections run over the T tokens at once, the rest (norms,
+ * RoPE, the cache write, the windowed attention) token by token in position order. */
+static void attention_batch(LmGemma *g, int l, const float *x, float *out, int T, int pos0)
+{
+    const LmGemmaCfg *c = &g->cfg;
+    const GLayer *L = &g->layers[l];
+    const int hd = L->hd, kvd = c->kv_heads * hd, qd = c->heads * hd;
+    const double *freqs = g->freqs[L->full];
+    const int slots = slots_of(c, L->full, g->ctx), p = L->producer;
+
+    lm_mat_mul_batch(&L->q, g->bq, x, T);
+    if (!L->reuse) {
+        lm_mat_mul_batch(&L->k, g->bk, x, T);
+        lm_mat_mul_batch(&L->v, g->bv, x, T);
+    }
+    for (int t = 0; t < T; t++) {
+        const int pos = pos0 + t;
+        float *q = g->bq + (size_t)t * qd;
+        for (int h = 0; h < c->heads; h++) lm_rmsnorm_plain(q + (size_t)h * hd, q + (size_t)h * hd, L->q_norm, hd, c->eps);
+        (void)lm_rope_freqs_apply(q, c->heads, hd, freqs, pos);
+        if (!L->reuse) {
+            float *k = g->bk + (size_t)t * kvd, *v = g->bv + (size_t)t * kvd;
+            for (int h = 0; h < c->kv_heads; h++) {
+                lm_rmsnorm_plain(k + (size_t)h * hd, k + (size_t)h * hd, L->k_norm, hd, c->eps);
+                lm_rmsnorm_plain(v + (size_t)h * hd, v + (size_t)h * hd, NULL, hd, c->eps);
+            }
+            (void)lm_rope_freqs_apply(k, c->kv_heads, hd, freqs, pos);
+            const size_t slot = (size_t)(pos % slots);
+            memcpy(g->kc[l] + slot * kvd, k, (size_t)kvd * sizeof(float));
+            memcpy(g->vc[l] + slot * kvd, v, (size_t)kvd * sizeof(float));
+        }
+        (void)lm_attn_window(g->battn + (size_t)t * qd, q, g->kc[p], g->vc[p], pos, L->full ? 0 : c->window, slots,
+                             c->heads, c->kv_heads, hd, 1.0f, g->scores);
+    }
+    lm_mat_mul_batch(&L->o, out, g->battn, T);
+}
+
+/* Layers [from, to) over rows 0..T-1 of bh, the token of row t being at position pos0 + t. */
+static void layers_batch(LmGemma *g, int from, int to, int T, int pos0)
+{
+    const LmGemmaCfg *c = &g->cfg;
+    const int H = c->hidden, P = c->ple_dim, LP = c->layers * P;
+    for (int i = from; i < to; i++) {
+        const GLayer *L = &g->layers[i];
+        for (int t = 0; t < T; t++) lm_rmsnorm_plain(g->bn + (size_t)t * H, g->bh + (size_t)t * H, L->in_norm, H, c->eps);
+        attention_batch(g, i, g->bn, g->bmix, T, pos0);
+        for (int t = 0; t < T; t++) {
+            float *mix = g->bmix + (size_t)t * H, *h = g->bh + (size_t)t * H;
+            lm_rmsnorm_plain(mix, mix, L->post_attn_norm, H, c->eps);
+            for (int j = 0; j < H; j++) h[j] += mix[j];
+            lm_rmsnorm_plain(g->bn + (size_t)t * H, h, L->pre_ff_norm, H, c->eps);
+        }
+        float *gate = g->bmlp, *up = g->bmlp + (size_t)T * c->inter;
+        lm_mat_mul_batch(&L->gate, gate, g->bn, T);
+        lm_mat_mul_batch(&L->up, up, g->bn, T);
+        for (int t = 0; t < T; t++)
+            lm_gelu_tanh_mul(gate + (size_t)t * c->inter, gate + (size_t)t * c->inter, up + (size_t)t * c->inter, c->inter);
+        lm_mat_mul_batch(&L->down, g->bmix, gate, T);
+        for (int t = 0; t < T; t++) {
+            float *mo = g->bmix + (size_t)t * H, *h = g->bh + (size_t)t * H;
+            lm_rmsnorm_plain(mo, mo, L->post_ff_norm, H, c->eps);
+            for (int j = 0; j < H; j++) h[j] += mo[j];
+        }
+        lm_mat_mul_batch(&L->ple_gate, g->bple_g, g->bh, T);
+        for (int t = 0; t < T; t++) {
+            const float *pl = g->bple + (size_t)t * LP + (size_t)i * P;
+            float *pg = g->bple_g + (size_t)t * P;
+            for (int j = 0; j < P; j++) pg[j] = lm_gelu_tanh(pg[j]) * pl[j];
+        }
+        lm_mat_mul_batch(&L->ple_proj, g->bple_d, g->bple_g, T);
+        for (int t = 0; t < T; t++) {
+            float *pd = g->bple_d + (size_t)t * H, *h = g->bh + (size_t)t * H;
+            lm_rmsnorm_plain(pd, pd, L->post_ple_norm, H, c->eps);
+            for (int j = 0; j < H; j++) h[j] = (h[j] + pd[j]) * L->layer_scalar;
+        }
+    }
+}
+
+int lm_gemma_prefill(LmGemma *g, const int *tokens, int n, float *logits)
+{
+    const LmGemmaCfg *c = &g->cfg;
+    const int H = c->hidden, P = c->ple_dim, LP = c->layers * P;
+    int last_T = 0;
+    for (int s = 0; s < n; s += LM_PREFILL_CHUNK) {
+        const int T = n - s < LM_PREFILL_CHUNK ? n - s : LM_PREFILL_CHUNK;
+        last_T = T;
+        for (int t = 0; t < T; t++) {
+            float *h = g->bh + (size_t)t * H;
+            lm_mat_row(&g->embed, tokens[s + t], h);
+            for (int j = 0; j < H; j++) h[j] *= c->embed_scale;
+        }
+        lm_mat_mul_batch(&g->ple_model, g->bple_ctx, g->bh, T);
+        for (int t = 0; t < T; t++) {
+            char err[256];
+            if (ple_read_row(g, tokens[s + t], g->bple + (size_t)t * LP, err, sizeof err) != 0) return LM_ERR_IO;
+            ple_combine(g, g->bple + (size_t)t * LP, g->bple_ctx + (size_t)t * LP);
+        }
+        /* Only the layers that own a KV cache. The last num_kv_shared_layers layers hold no state: they
+         * read the caches of the producing layers and their output is a token's own logits and nothing
+         * else, so for every token whose logits are not asked for they are skipped (they are 18 of the
+         * 42 layers of the real E4B). The state after the call is exactly that of lm_gemma_feed. */
+        layers_batch(g, 0, c->first_shared, T, g->pos);
+        g->pos += T;
+    }
+    if (logits) {   /* the last token also runs the layers that read the shared caches */
+        if (last_T > 1) {
+            memcpy(g->bh, g->bh + (size_t)(last_T - 1) * H, (size_t)H * sizeof(float));
+            memcpy(g->bple, g->bple + (size_t)(last_T - 1) * LP, (size_t)LP * sizeof(float));
+        }
+        layers_batch(g, c->first_shared, c->layers, 1, g->pos - 1);
+        lm_rmsnorm_plain(g->n, g->bh, g->final_norm, H, c->eps);
         lm_mat_mul(&g->embed, logits, g->n);
         lm_logit_softcap(logits, c->vocab, c->cap);
     }

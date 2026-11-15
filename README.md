@@ -194,7 +194,7 @@ cache.
 **Gemma 4 memory.** Only the first 24 layers own a key/value cache; the last 18 reuse
 them. Sliding-window layers keep a ring of 512 positions. The per-layer embedding table is
 read one row per token from the mapped file, never loaded whole. At 4096 tokens of context
-the caches come to about 168 MiB.
+the caches come to about 168 MiB, plus about 8 MiB of prompt-processing buffers.
 
 **Porting.** The engine is written from scratch and ports code by file from
 [kimi-k3-in-c](https://github.com/FareedKhan-dev/kimi-k3-in-c) (Apache-2.0; see
