@@ -83,7 +83,7 @@ static void usage(FILE *f)
     fputs("usage: lm-chat --model DIR [--weights FILE] [--prompt TEXT] [--system TEXT]\n"
           "       [--think | --no-think] [--show-thinking] [--temperature T] [--top-p P]\n"
           "       [--top-k K] [--seed N] [--max-tokens N] [--ctx N] [--threads N]\n"
-          "       [--strict-template] [--stats]\n", f);
+          "       [--strict-template] [--stats] [--fast]\n", f);
 }
 
 static int parse_double(const char *s, double *out)
@@ -154,7 +154,7 @@ static const char *need_value(int argc, char **argv, int *i)
 int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *prompt = NULL, *system = NULL;
-    int think = 0, show_thinking = 0, stats = 0, strict = 0;
+    int think = 0, show_thinking = 0, stats = 0, strict = 0, fast = 0;
     double temperature = -1, top_p = -1;
     long top_k = -1, seed = 1, max_tokens = 512, ctx = 0, threads = 0;
 
@@ -171,6 +171,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--show-thinking")) show_thinking = 1;
         else if (!strcmp(a, "--strict-template")) strict = 1;
         else if (!strcmp(a, "--stats")) stats = 1;
+        else if (!strcmp(a, "--fast")) fast = 1;
         else if (!strcmp(a, "--temperature")) { if (parse_double(VAL, &temperature) || temperature < 0) BAD; }
         else if (!strcmp(a, "--top-p")) { if (parse_double(VAL, &top_p) || top_p <= 0 || top_p > 1) BAD; }
         else if (!strcmp(a, "--top-k")) { if (parse_long(VAL, 0, 1 << 20, &top_k)) BAD; }
@@ -196,7 +197,7 @@ int main(int argc, char **argv)
     LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-chat: %s\n", err); lm_tok_close(tok); return 1; }
 
-    LmOpts lo = { weights, (int)ctx, (int)threads };
+    LmOpts lo = { weights, (int)ctx, (int)threads, fast };
     LmModel *m = lm_open(model, &lo, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-chat: %s\n", err); lm_template_free(tpl); lm_tok_close(tok); return 1; }
 

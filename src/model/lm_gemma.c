@@ -125,7 +125,7 @@ static int bind_ple_table(LmGemma *g, char *err, size_t errlen)
     return 0;
 }
 
-LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, char *err, size_t errlen)
+LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, int fast, char *err, size_t errlen)
 {
     LmGemma *g = (LmGemma *)calloc(1, sizeof *g);
     if (!g) { lm_fail(err, errlen, "out of memory"); return NULL; }
@@ -135,6 +135,7 @@ LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, char
     const int P = c->ple_dim, LP = c->layers * P;
 
     if (lm_bind_open(&g->b, weights ? weights : model_dir, weights != NULL, err, errlen) != 0) goto fail;
+    g->b.fast = fast;
 
     g->layers = (GLayer *)calloc((size_t)c->layers, sizeof(GLayer));
     if (!g->layers) { lm_fail(err, errlen, "out of memory"); goto fail; }

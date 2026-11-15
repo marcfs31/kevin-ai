@@ -491,11 +491,17 @@ interactive chat; `/reset` clears the conversation and `/exit` quits.
 bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
             [--think | --no-think] [--show-thinking] [--strict-template]
             [--temperature T] [--top-p P] [--top-k K] [--seed N]
-            [--max-tokens N] [--ctx N] [--threads N] [--stats]
+            [--max-tokens N] [--ctx N] [--threads N] [--stats] [--fast]
 ```
 
 - Thinking is off by default (`--no-think`). A thinking block costs many tokens at this speed.
 - `--stats` prints tokens/s to stderr.
+- `--fast` (experimental, needs a q8 `--weights` file) rounds the activations of every matrix
+  multiply to int8 so the CPU can multiply int8 pairs directly. It is faster but NOT
+  bit-identical to the default and slightly less exact: the default stays the one the golden
+  gate checks. `make gate-fast` reports how far it is from the oracle on the tiny fixtures
+  (not a gate); the numbers on the real models are recorded in the pull request that
+  measured them.
 - Sampling defaults come from `generation_config.json` for Gemma; flags override them.
 
 ### bin/lm-run
@@ -505,7 +511,7 @@ but token ids goes to stdout.
 
 ```
 bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
-           [--greedy N] [--ctx N] [--threads N]
+           [--greedy N] [--ctx N] [--threads N] [--fast]
 ```
 
 ### bin/lm-quant

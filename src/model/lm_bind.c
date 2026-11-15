@@ -81,9 +81,13 @@ int lm_bind_mat(LmBind *b, const char *name, int rows, int cols, LmMat *out, cha
             if (lm_st_read(&b->st, t, cp, err, n) != 0) return -1;
             q = cp;
         }
+        if (b->fast && cols > LM_Q8I_MAX_COLS)
+            return lm_fail(err, n, "tensor %s: the int8 fast path supports at most %d inputs, this matrix has %d",
+                           name, LM_Q8I_MAX_COLS, cols);
         out->kind = LM_MAT_Q8;
         out->q = q;
         out->sc = sc;
+        out->int8_acts = b->fast;
         return 0;
     }
     if (t->dtype == LM_DT_I8)

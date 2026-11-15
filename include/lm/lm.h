@@ -30,6 +30,9 @@ typedef struct {
                             bf16 safetensors in model_dir (sharded, with index) */
     int ctx;             /* positions the KV cache can hold. 0 = 4096 */
     int threads;         /* 0 = the OpenMP default */
+    int q8_int8_acts;    /* 1 = fast path: round the activations of every q8 matrix multiply to
+                            int8 (per group of 32). Faster, NOT bit-identical to 0 and slightly
+                            less exact; requires `weights` (a q8 file). 0 = exact, the default */
 } LmOpts;
 
 /* model_dir holds config.json in the Hugging Face layout. Every architecture number
