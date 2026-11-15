@@ -47,6 +47,7 @@ typedef struct {
 } Layer;
 
 struct LmModel {
+    unsigned long id;                        /* unique per lm_open: snapshots name their model by it */
     LmGemma *gemma;                          /* non-NULL: a Gemma 4 model, every other field unused */
     LmCfg    cfg;
     int      ctx, pos;
@@ -92,6 +93,8 @@ void lm_close(LmModel *m)
 LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t errlen)
 {
     LmModel *m = (LmModel *)calloc(1, sizeof *m);
+    static unsigned long next_id;
+    if (m) m->id = ++next_id;
     if (!m) { lm_fail(err, errlen, "out of memory"); return NULL; }
     const char *weights = opts ? opts->weights : NULL;
     int ctx = opts ? opts->ctx : 0;
@@ -252,6 +255,66 @@ void lm_reset(LmModel *m)
     }
     m->pos = 0;
 }
+
+/* ---- snapshots ------------------------------------------------------------------- */
+
+struct LmSnapshot { unsigned long model; int pos; size_t n; float *data; };
+
+/* The state regions at position pos, in a fixed order (lm_gemma_state_regions for Gemma). */
+static void state_regions(LmModel *m, int pos, LmRegionFn fn, void *user)
+{
+    if (m->gemma) { lm_gemma_state_regions(m->gemma, pos, fn, user); return; }
+    const LmCfg *c = &m->cfg;
+    const size_t kvd = (size_t)c->kv_heads * c->head_dim;
+    for (int i = 0; i < c->layers; i++) {
+        if (m->conv[i]) fn(user, m->conv[i], (size_t)c->conv_dim * (size_t)(c->conv_k - 1) + 1);
+        if (m->S[i]) fn(user, m->S[i], (size_t)c->lv_heads * c->lk_dim * c->lv_dim);
+        if (m->kc[i]) fn(user, m->kc[i], (size_t)pos * kvd);
+        if (m->vc[i]) fn(user, m->vc[i], (size_t)pos * kvd);
+    }
+}
+
+typedef struct { float *buf; size_t off; int mode; } Walk; /* mode 0 count, 1 save, 2 restore */
+
+static void walk(void *u, float *p, size_t n)
+{
+    Walk *w = (Walk *)u;
+    if (w->mode == 1) memcpy(w->buf + w->off, p, n * sizeof(float));
+    else if (w->mode == 2) memcpy(p, w->buf + w->off, n * sizeof(float));
+    w->off += n;
+}
+
+LmSnapshot *lm_snapshot(const LmModel *cm)
+{
+    LmModel *m = (LmModel *)cm; /* the walk only reads when saving */
+    const int pos = lm_pos(m);
+    Walk w = { NULL, 0, 0 };
+    state_regions(m, pos, walk, &w);
+    LmSnapshot *s = (LmSnapshot *)calloc(1, sizeof *s);
+    if (!s) return NULL;
+    s->data = (float *)malloc((w.off ? w.off : 1) * sizeof(float));
+    if (!s->data) { free(s); return NULL; }
+    s->model = m->id;
+    s->pos = pos;
+    s->n = w.off;
+    Walk save = { s->data, 0, 1 };
+    state_regions(m, pos, walk, &save);
+    return s;
+}
+
+int lm_restore(LmModel *m, const LmSnapshot *s)
+{
+    if (!s || s->model != m->id) return -1;
+    Walk w = { s->data, 0, 2 };
+    state_regions(m, s->pos, walk, &w);
+    if (m->gemma) lm_gemma_set_pos(m->gemma, s->pos);
+    else m->pos = s->pos;
+    return LM_OK;
+}
+
+int    lm_snapshot_pos(const LmSnapshot *s)   { return s->pos; }
+size_t lm_snapshot_bytes(const LmSnapshot *s) { return s->n * sizeof(float); }
+void   lm_snapshot_free(LmSnapshot *s)        { if (s) { free(s->data); free(s); } }
 
 static int feed(LmModel *m, int token, float *logits)
 {

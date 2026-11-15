@@ -65,6 +65,20 @@ int  lm_feed(LmModel *m, int token, float *logits);
  * return LM_ERR_IO if a per-layer embedding row cannot be read. */
 int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
 
+/* A copy of the model state at the current position: every recurrent and conv state, the KV
+ * caches up to lm_pos (whole sliding-window rings) and the position. lm_restore puts the model
+ * back exactly there -- the state, and so every later logit, BIT-IDENTICAL to the moment it was
+ * taken -- whatever was fed or reset in between, as often as needed. A shared prompt prefix
+ * (a system prompt) is then fed once and restored instead of fed again. Size: lm_snapshot_bytes,
+ * about 50 MB for Qwen3.5-4B (the delta-rule state) plus the KV rows. */
+typedef struct LmSnapshot LmSnapshot;
+LmSnapshot *lm_snapshot(const LmModel *m);                 /* NULL on allocation failure */
+/* LM_OK, or -1 (nothing changed) if s was taken from another LmModel. */
+int         lm_restore(LmModel *m, const LmSnapshot *s);
+int         lm_snapshot_pos(const LmSnapshot *s);
+size_t      lm_snapshot_bytes(const LmSnapshot *s);
+void        lm_snapshot_free(LmSnapshot *s);               /* NULL is a no-op */
+
 /* Where the time goes (lm-run --profile). Process-wide and OFF by default; while on, every
  * lm_feed and lm_prefill adds wall-clock seconds to these counters. Results are unchanged by
  * it. Not thread-safe: profile one model at a time, from one thread. total minus the other
