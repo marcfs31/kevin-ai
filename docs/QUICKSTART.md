@@ -4,7 +4,8 @@ Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2), 8 GB RAM, Ubuntu Server 26
 238 GB NVMe SSD for the system and weights, 931 GB 5400 rpm HDD (do not put weights here).
 
 Status: phase 1. The engine runs the real Qwen3.5-4B checkpoint on the target machine, at
-about 1.7 tokens/s generating with the q8 weights (see the README for details).
+about 2.3 tokens/s generating and 4.6 tokens/s on a 32-token prompt with the q8 weights, with
+the CPU held at 800 MHz by the BIOS (see the README for details).
 
 **Fast path:** after `sudo apt install build-essential python3 curl` and copying the repo
 to the server, `scripts/install.sh` does steps 3 to 7 below in one go (build, tests,

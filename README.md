@@ -9,10 +9,14 @@ A C99 CPU inference engine for small language models, written from scratch for a
 - **Qwen3.5-4B (phase 1) and Gemma 4 E4B (phase 2) are both implemented.** Each passes its
   golden gate on a tiny synthetic model, checked against a float64 oracle. The Gemma
   oracle agrees with Hugging Face transformers to 5e-9.
-- **Qwen3.5-4B runs on the real checkpoint** (first run, 2026-11-14, on the target machine).
-  It answers correctly. Measured with the q8 weights: about **1.7 tokens/s** generating and
-  about **1.9 tokens/s** on the prompt. Speed is bounded by memory bandwidth (about 4.75 GB
-  read per token). Gemma 4 E4B has not been run on the real checkpoint yet.
+- **Qwen3.5-4B runs on the real checkpoint** (first run 2026-11-14, re-measured 2026-11-15 with
+  `tools/bench_fast.py`, on the target machine). It answers correctly. With the q8 weights:
+  about **2.3 tokens/s** generating and about **4.6 tokens/s** on a 32-token prompt, with the
+  CPU still held at 800 MHz of its 2.5 GHz (see Troubleshooting, "cpu clock"). The first run
+  gave 1.7 and 1.9: the AVX2 kernels were compiled to about three times more instructions
+  than needed, and the prompt now goes through in batches. Replies read about 4.75 GB per
+  token, so at about 11 GB/s they are bounded by memory bandwidth. Gemma 4 E4B has not been
+  run on the real checkpoint yet.
 
 The full plan, with the normative model equations and test gates, is in
 [docs/PLAN.md](docs/PLAN.md).
@@ -35,8 +39,9 @@ The engine is developed and measured on one machine. Every number in this README
 
 What this means for the engine:
 
-- **Memory is the limit.** The q8 Qwen3.5-4B file is about 4.8 GB and is read once per
-  generated token, so speed is bounded by memory bandwidth, not by the four cores.
+- **Memory is the limit for replies.** The q8 Qwen3.5-4B file is about 4.8 GB and is read once
+  per generated token, so reply speed is bounded by memory bandwidth, not by the four cores.
+  A prompt is processed in batches that read each weight once per 32 tokens.
 - **No GPU path, no AVX-512.** The kernels use AVX2 with FMA (and NEON on ARM, for
   development on a Mac). On this CPU the kernel test reports `kernel path: avx2`.
 - **Gemma 4 E4B is tight.** Its q8 file is about 8.5 GB, larger than RAM; only the
@@ -497,12 +502,15 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 - Thinking is off by default (`--no-think`). A thinking block costs many tokens at this speed.
 - `--stats` prints tokens/s to stderr.
 - `--fast` (experimental, needs a q8 `--weights` file) rounds the activations of every matrix
-  multiply to int8 so the CPU can multiply int8 pairs directly. It is faster but NOT
-  bit-identical to the default and slightly less exact: the default stays the one the golden
-  gate checks. `make gate-fast` reports how far it is from the oracle on the tiny fixtures
-  (not a gate). On a real model, `python3 tools/bench_fast.py --run bin/lm-run --model DIR
-  --weights FILE` measures generation and prompt tokens/s for both paths and how often the
-  fast path picks the exact path's top token (teacher-forced on 96 generated tokens).
+  multiply to int8 so the CPU can multiply int8 pairs directly. It is NOT bit-identical to
+  the default and slightly less exact: the default stays the one the golden gate checks.
+  Measured on the real Qwen3.5-4B (96 generated tokens, teacher-forced): the same top token
+  as the exact path at 96 of 96 positions, logit error 1.0% on average (1.3% worst). But
+  once the exact kernels were fixed it is only 1.05x faster for replies (2.44 against 2.31
+  tokens/s) and slower for prompts (3.1 against 4.6 tokens/s batched), so it is **not
+  recommended**; the flag stays for experiments. `make gate-fast` reports its distance from
+  the oracle on the tiny fixtures (not a gate). `python3 tools/bench_fast.py --run bin/lm-run
+  --model DIR --weights FILE` reproduces the numbers above.
 - Sampling defaults come from `generation_config.json` for Gemma; flags override them.
 
 ### bin/lm-run
