@@ -38,4 +38,14 @@ int      lm_gemma_feed(LmGemma *g, int token, float *logits);   /* LM_* code of 
  * context length (weights and their widened norm vectors / q8 scale tables are separate). */
 size_t   lm_gemma_state_bytes(const LmGemmaCfg *c, int ctx);
 
+/* n tokens as n lm_gemma_feed calls: the model state and the logits after the last token are
+ * BIT-IDENTICAL. Chunks of LM_PREFILL_CHUNK tokens: the projections and MLPs run over the chunk
+ * (each weight read once per chunk), norms, RoPE, the cache write and the attention run token by
+ * token in position order. The layers that only read the shared KV caches hold no state, so they
+ * run only for the last token and only when logits are asked for. The caller (lm_prefill) has
+ * validated the ids and that they fit. logits (may be NULL): after the last token only.
+ * Returns LM_OK, or LM_ERR_IO if a per-layer table row cannot be read (the chunk in progress is
+ * then not applied, as with lm_gemma_feed, but earlier chunks are). */
+int      lm_gemma_prefill(LmGemma *g, const int *tokens, int n, float *logits);
+
 #endif /* LM_GEMMA_H */
