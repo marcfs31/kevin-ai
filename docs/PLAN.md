@@ -275,6 +275,6 @@ window. Same golden files, q8 file and gate as Qwen.
 
 ## Later
 
-The MTP head as a speculative draft for Qwen; a prefix cache (a saved state after a shared
-system prompt). Batched prefill and the OpenAI-compatible endpoint (`bin/lm-serve`, with
-`scripts/lm-serve.service`) are done.
+The MTP head as a speculative draft for Qwen. Batched prefill, the OpenAI-compatible endpoint
+(`bin/lm-serve`, with `scripts/lm-serve.service`) and the prefix cache (`lm_snapshot` /
+`lm_restore`, one snapshot in `lm_chat`) are done.

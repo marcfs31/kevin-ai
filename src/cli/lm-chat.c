@@ -57,6 +57,9 @@ static int be_feed(void *ctx, int token, float *logits) { return lm_feed((LmMode
 static int be_prefill(void *ctx, const int *ids, int n, float *logits) { return lm_prefill((LmModel *)ctx, ids, n, logits); }
 static void be_reset(void *ctx) { lm_reset((LmModel *)ctx); }
 static int be_pos(void *ctx) { return lm_pos((const LmModel *)ctx); }
+static void *be_save(void *ctx) { return lm_snapshot((const LmModel *)ctx); }
+static int be_restore(void *ctx, void *snap) { return lm_restore((LmModel *)ctx, (const LmSnapshot *)snap); }
+static void be_drop(void *ctx, void *snap) { (void)ctx; lm_snapshot_free((LmSnapshot *)snap); }
 
 /* ---- output ----------------------------------------------------------------------- */
 
@@ -137,8 +140,8 @@ static int run_turn(Session *s, const char *text)
         fputs("[cancelled]\n", stderr);
     }
     if (s->stats)
-        fprintf(stderr, "[prompt %d tokens, fed %d%s: %.2f tok/s | generated %d tokens: %.2f tok/s]\n",
-                t.n_prompt, t.n_prefill, t.reprefill ? " (re-fed from scratch)" : "",
+        fprintf(stderr, "[prompt %d tokens, %d from cache, fed %d%s: %.2f tok/s | generated %d tokens: %.2f tok/s]\n",
+                t.n_prompt, t.n_cached, t.n_prefill, t.reprefill && !t.n_cached ? " (re-fed from scratch)" : "",
                 t.prefill_s > 0 ? t.n_prefill / t.prefill_s : 0.0, t.n_gen, t.decode_s > 0 ? t.n_gen / t.decode_s : 0.0);
     return 0;
 }
@@ -214,6 +217,9 @@ int main(int argc, char **argv)
     cc.backend.reset = be_reset;
     cc.backend.pos = be_pos;
     cc.backend.prefill = be_prefill;
+    cc.backend.save = be_save;
+    cc.backend.restore = be_restore;
+    cc.backend.drop = be_drop;
     cc.temperature = temperature;
     cc.top_p = top_p;
     cc.top_k = (int)top_k;
