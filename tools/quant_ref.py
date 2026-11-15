@@ -4,9 +4,9 @@
 CLI (same contract as lm-quant):  quant_ref.py --model DIR_OR_FILE --out FILE
 
 WHICH TENSORS
-  Only tensors whose name starts with `model.language_model.` are written. `model.visual.*`,
-  `mtp.*` and anything else are DROPPED (text-only engine; this is what makes the real
-  file about 4.75 GB). Of the kept tensors, those named `*.weight` with exactly 2 dims
+  Only tensors whose name starts with `model.language_model.` or `mtp.` (Qwen3.5's
+  multi-token-prediction head, the draft for speculative decoding) are written.
+  `model.visual.*` and anything else are DROPPED (text-only engine). Of the kept tensors, those named `*.weight` with exactly 2 dims
   (including `embed_tokens.weight`) are quantised; all others (1-D norms, `A_log`,
   `dt_bias`, the 3-D `conv1d.weight`) are copied byte-for-byte with their own dtype/shape.
   Source dtype of a quantised matrix must be BF16 or F32. `in` must be a multiple of 32, else
@@ -49,6 +49,7 @@ import safetensors as st
 
 GROUP = 32
 TEXT_PREFIX = "model.language_model."
+MTP_PREFIX = "mtp."
 SCALE_SUFFIX = ".q8scale"
 QMAX = 127
 
@@ -104,8 +105,8 @@ def is_quantised(name, shape):
 
 def quantize_store(store, source_sha256):
     """store: Checkpoint-like (names/dtype/shape/raw/floats). Returns the q8 file bytes."""
-    names = [n for n in store.names() if n.startswith(TEXT_PREFIX)]
-    if not names:
+    names = [n for n in store.names() if n.startswith(TEXT_PREFIX) or n.startswith(MTP_PREFIX)]
+    if not any(n.startswith(TEXT_PREFIX) for n in names):
         raise QuantError("no tensor starts with %r" % TEXT_PREFIX)
     out = {}
     for name in names:

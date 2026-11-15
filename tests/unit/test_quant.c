@@ -254,7 +254,7 @@ static void test_checkpoint(void)
     LmQuantStats stt;
     int rc = lm_quantize_checkpoint(P("ck"), P("q8.safetensors"), &stt, err, sizeof err);
     CHECK_MSG(rc == 0, "%s", err);
-    CHECK(stt.n_quantised == 4 && stt.n_copied == 3 && stt.n_ignored == 3);   /* embed, q_proj, zrows, f32mat | norm, conv, A_log | 3 dropped */
+    CHECK(stt.n_quantised == 5 && stt.n_copied == 3 && stt.n_ignored == 2);   /* embed, q_proj, zrows, f32mat, mtp.fc | norm, conv, A_log | 2 visual dropped */
     CHECK(access(P("q8.safetensors.tmp"), F_OK) != 0);
 
     LmSt o, src;
@@ -267,11 +267,11 @@ static void test_checkpoint(void)
         "model.language_model.layers.0.f32mat.weight", "model.language_model.layers.0.f32mat.weight.q8scale",
         "model.language_model.layers.0.input_layernorm.weight",
         "model.language_model.layers.0.linear_attn.conv1d.weight",
-        "model.language_model.layers.0.linear_attn.A_log" };
-    CHECK(names_ok(&o, want, 11));
+        "model.language_model.layers.0.linear_attn.A_log",
+        "mtp.fc.weight", "mtp.fc.weight.q8scale" };          /* the MTP head is kept */
+    CHECK(names_ok(&o, want, 13));
     CHECK(lm_st_find(&o, "model.visual.blocks.0.attn.qkv.weight") == NULL);
     CHECK(lm_st_find(&o, "model.visual.merger.weight") == NULL);
-    CHECK(lm_st_find(&o, "mtp.fc.weight") == NULL);
 
     /* metadata */
     char want_src[65];
@@ -351,16 +351,14 @@ static void test_checkpoint(void)
         CHECK(spaces == 0);                                      /* no whitespace inside the compact JSON */
         CHECK(e < N || N % 8 == 0);
         /* names appear in ascending byte order, and data_offsets chain from 0 */
-        const char *pos = strstr(h, "}},") ? h : h;
         char prev[256] = "";
         int64_t cursor = 0;
-        const char *p = strstr(h, "\"}}"[0] ? "},\"" : "");   /* first tensor entry follows the metadata object */
-        p = strstr(h, "},\"model.");
+        const char *p = strstr(h, "},\"model.");                /* first tensor entry follows the metadata object */
         CHECK(p != NULL);
         int count = 0;
-        while (p && (p = strstr(p, "\"model.")) != NULL) {
-            const char *q = p + 1;
-            const char *qe = strchr(q, '"');
+        while (p && (p = strstr(p, "\":{\"dtype\"")) != NULL) { /* every tensor entry: "<name>":{"dtype"... */
+            const char *qe = p, *q = p;
+            while (q > h && q[-1] != '"') q--;
             char nm[256];
             snprintf(nm, sizeof nm, "%.*s", (int)(qe - q), q);
             CHECK(strcmp(prev, nm) < 0);
@@ -373,8 +371,7 @@ static void test_checkpoint(void)
             count++;
             p = d + 10;
         }
-        (void)pos;
-        CHECK(count == 11);
+        CHECK(count == 13);
         struct stat sb;
         CHECK(stat(P("q8.safetensors"), &sb) == 0 && (int64_t)sb.st_size == 8 + (int64_t)N + cursor);
         free(h);

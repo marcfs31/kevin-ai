@@ -22,7 +22,12 @@ from an lm-q8 file written by quant_ref.py, dequantised exactly in double
 ((double)q * (double)scale). The config always comes from --model DIR/config.json.
 
 Module: `Model.load(model_dir, weights=None)`, `model.forward(tokens) -> [[vocab] per position]`,
-`model.generate(prompt, n) -> (prompt rows, ids, steps)`.
+`model.generate(prompt, n) -> (prompt rows, ids, steps)`, `model.mtp_rows(tokens)` (the MTP head).
+
+MTP head (`mtp.*`, ported from vLLM `model_executor/models/qwen3_5_mtp.py`, Apache-2.0): at
+position p it takes the final normed hidden state h_p of the main model and the token at
+p+1, x = fc([norm_e(embed(t_{p+1})), norm_h(h_p)]), runs one full-attention decoder layer
+(its own KV cache, RoPE position p), and drafts the token at p+2 from head(norm(x)).
 CLI (the `lm-run` contract; engine-only flags are accepted and ignored):
     ref_qwen35.py --model DIR [--weights Q8FILE] --tokens 1,2,3 [--logits-out F] [--greedy N]
 Stdout: one generated id per line. `--logits-out` writes one little-endian f32 row of
@@ -41,6 +46,7 @@ import quant_ref
 import safetensors as st
 
 PREFIX = "model.language_model."
+MTP = "mtp."
 
 
 # --------------------------------------------------------------------------- ops (float64)
@@ -259,9 +265,32 @@ class Model:
             return cls(cfg, Weights(st.open_checkpoint(model_dir)))
         return cls(cfg, Weights(quant_ref.load_q8(weights), q8=True))
 
+    def has_mtp(self):
+        return self.w.store.has(MTP + "fc.weight")
+
+    def _attn_shapes(self, a):
+        c = self.cfg
+        return {a + "q_proj.weight": (c.heads * c.head_dim * 2, c.hidden),
+                a + "k_proj.weight": (c.kv_heads * c.head_dim, c.hidden),
+                a + "v_proj.weight": (c.kv_heads * c.head_dim, c.hidden),
+                a + "o_proj.weight": (c.hidden, c.heads * c.head_dim),
+                a + "q_norm.weight": (c.head_dim,), a + "k_norm.weight": (c.head_dim,)}
+
+    def _layer_shapes(self, p):
+        c = self.cfg
+        return {p + "input_layernorm.weight": (c.hidden,), p + "post_attention_layernorm.weight": (c.hidden,),
+                p + "mlp.gate_proj.weight": (c.inter, c.hidden), p + "mlp.up_proj.weight": (c.inter, c.hidden),
+                p + "mlp.down_proj.weight": (c.hidden, c.inter)}
+
     def _check_shapes(self):
         c, w = self.cfg, self.w
         expect = {PREFIX + "embed_tokens.weight": (c.vocab, c.hidden), PREFIX + "norm.weight": (c.hidden,)}
+        if self.has_mtp():
+            expect[MTP + "fc.weight"] = (c.hidden, 2 * c.hidden)
+            for n in ("norm", "pre_fc_norm_embedding", "pre_fc_norm_hidden"):
+                expect[MTP + n + ".weight"] = (c.hidden,)
+            expect.update(self._layer_shapes(MTP + "layers.0."))
+            expect.update(self._attn_shapes(MTP + "layers.0.self_attn."))
         if not c.tied:
             expect["lm_head.weight"] = (c.vocab, c.hidden)
         for i, lt in enumerate(c.layer_types):
@@ -362,6 +391,10 @@ class Model:
 
     def step(self, state, token):
         """Feed one token; returns the vocab logits row. Mutates `state`."""
+        return self.step_h(state, token)[0]
+
+    def step_h(self, state, token):
+        """step, also returning the final normed hidden state (the MTP head's input)."""
         c, w = self.cfg, self.w
         embed = w.get(PREFIX + "embed_tokens.weight")
         if not 0 <= token < c.vocab:
@@ -381,7 +414,32 @@ class Model:
         state["pos"] = pos + 1
         h = rmsnorm_zero_centred(h, w.get(PREFIX + "norm.weight"), c.eps)
         head = embed if c.tied else w.get("lm_head.weight")
-        return matvec(head, h)
+        return matvec(head, h), h
+
+    def mtp_step(self, ms, h, token, pos):
+        """The MTP head at position pos: h = final normed hidden at pos, token = the id at pos+1.
+        Appends to the head's KV cache `ms` ({"k": [], "v": []}); returns the draft logits for
+        the id at pos+2."""
+        c, w = self.cfg, self.w
+        embed = w.get(PREFIX + "embed_tokens.weight")
+        e = rmsnorm_zero_centred(embed[token], w.get(MTP + "pre_fc_norm_embedding.weight"), c.eps)
+        hn = rmsnorm_zero_centred(h, w.get(MTP + "pre_fc_norm_hidden.weight"), c.eps)
+        x = matvec(w.get(MTP + "fc.weight"), e + hn)
+        p = MTP + "layers.0."
+        n1 = rmsnorm_zero_centred(x, w.get(p + "input_layernorm.weight"), c.eps)
+        x = [a + b for a, b in zip(x, self._full_attn(p + "self_attn.", n1, ms, pos))]
+        n2 = rmsnorm_zero_centred(x, w.get(p + "post_attention_layernorm.weight"), c.eps)
+        x = [a + b for a, b in zip(x, self._mlp(p + "mlp.", n2))]
+        x = rmsnorm_zero_centred(x, w.get(MTP + "norm.weight"), c.eps)
+        return matvec(embed if c.tied else w.get("lm_head.weight"), x)
+
+    def mtp_rows(self, tokens):
+        """The MTP draft logits at positions 0..len(tokens)-2 (position p sees tokens[p+1])."""
+        state, hs = self.new_state(), []
+        for t in tokens:
+            hs.append(self.step_h(state, t)[1])
+        ms = {"k": [], "v": []}
+        return [self.mtp_step(ms, hs[p], tokens[p + 1], p) for p in range(len(tokens) - 1)]
 
     def forward(self, tokens):
         state = self.new_state()
