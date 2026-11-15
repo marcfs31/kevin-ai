@@ -197,15 +197,65 @@ def check(run_bin, quant_bin, fixtures, timeout):
     return "check_golden OK%s: " % tag + "; ".join(parts)
 
 
+def report_fast(run_bin, fixtures, timeout):
+    """REPORT (never a gate): the opt-in int8 fast path on the q8 fixture against the q8 oracle.
+
+    The fast path is not bit-identical to the exact one and is not held to the 2e-4 gate; this
+    prints how far it is, so the trade-off is a number. It fails only if the engine itself does
+    (non-zero exit, wrong row count, NaN or Inf)."""
+    need_exe(run_bin, "lm-run")
+    cfg_path = os.path.join(fixtures, "config.json")
+    need_file(cfg_path, "config.json")
+    try:
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        vocab = cfg.get("text_config", cfg)["vocab_size"]
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise Failure("config.json is malformed: %s" % e)
+    q8 = os.path.join(fixtures, "model.q8.safetensors")
+    need_file(q8, "q8 fixture")
+    tokens, logits, prompt, out = load_golden(os.path.join(fixtures, "golden_q8.json"), vocab)
+    base = [run_bin, "--model", fixtures, "--weights", q8, "--fast"]
+    csv = lambda ids: ",".join(str(t) for t in ids)
+    with tempfile.TemporaryDirectory() as tmp:
+        lpath = os.path.join(tmp, "fast.logits.f32")
+        run(base + ["--tokens", csv(tokens), "--logits-out", lpath], timeout, "fast logits run")
+        with open(lpath, "rb") as f:
+            raw = f.read()
+    if len(raw) != len(tokens) * vocab * 4:
+        raise Failure("fast logits file has %d bytes, expected %d" % (len(raw), len(tokens) * vocab * 4))
+    flat = struct.unpack("<%df" % (len(tokens) * vocab), raw)
+    worst, argmax_ok = 0.0, 0
+    for t in range(len(tokens)):
+        row = flat[t * vocab:(t + 1) * vocab]
+        if not all(math.isfinite(v) for v in row):
+            raise Failure("fast row %d contains NaN or Inf" % t)
+        ref = logits[t]
+        scale = max(abs(v) for v in ref) or 1.0
+        worst = max(worst, max(abs(a - b) for a, b in zip(row, ref)) / scale)
+        argmax_ok += argmax(row) == argmax(ref)
+    stdout = run(base + ["--tokens", csv(prompt), "--greedy", str(len(out))], timeout, "fast greedy run")
+    try:
+        ids = [int(x) for x in stdout.split()]
+    except ValueError:
+        raise Failure("fast greedy stdout has a non-integer line: %r" % stdout[:80])
+    same = sum(1 for a, b in zip(ids, out) if a == b)
+    return ("check_golden --fast REPORT (not a gate): %s: worst logit error %.1f%% of max|logit| "
+            "(exact path: gate 0.02%%), argmax equal on %d/%d rows, greedy ids equal %d/%d"
+            % (os.path.basename(os.path.normpath(fixtures)), 100 * worst, argmax_ok, len(tokens), same, len(out)))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="gate 2: engine vs oracle fixtures")
     ap.add_argument("--run", required=True, help="path to lm-run")
     ap.add_argument("--quant", required=True, help="path to lm-quant")
     ap.add_argument("--fixtures", required=True, help="tests/fixtures/qwen35-tiny or tests/fixtures/gemma4-tiny")
     ap.add_argument("--timeout", type=float, default=600.0, help="seconds per engine invocation")
+    ap.add_argument("--fast", action="store_true",
+                    help="REPORT how far the opt-in int8 fast path is from the q8 oracle instead of running the gate")
     a = ap.parse_args(argv)
     try:
-        print(check(a.run, a.quant, a.fixtures, a.timeout))
+        print(report_fast(a.run, a.fixtures, a.timeout) if a.fast else check(a.run, a.quant, a.fixtures, a.timeout))
         return 0
     except Failure as e:
         print("check_golden FAILED: %s" % e, file=sys.stderr)

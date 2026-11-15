@@ -19,6 +19,7 @@
 typedef struct {
     LmSt   st;
     int    q8;                 /* weights come from an lm-q8 file */
+    int    fast;               /* set before binding: q8 matrices multiply with int8 activations */
     void **owned;
     int    nowned, capowned;
 } LmBind;

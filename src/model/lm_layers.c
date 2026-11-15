@@ -12,7 +12,16 @@ void lm_mat_mul(const LmMat *m, float *y, const float *x)
     switch (m->kind) {
     case LM_MAT_F32:  lm_matvec_f32(y, x, m->f, m->cols, m->rows); break;
     case LM_MAT_BF16: lm_matvec_bf16(y, x, m->bf, m->cols, m->rows); break;
-    case LM_MAT_Q8:   (void)lm_matvec_q8(y, x, m->q, m->sc, m->cols, m->rows); break;
+    case LM_MAT_Q8:
+        if (m->int8_acts) {
+            int8_t qx[LM_Q8I_MAX_COLS];
+            float sx[LM_Q8I_MAX_COLS / LM_Q8_GROUP];
+            (void)lm_q8_quantize_acts(qx, sx, x, m->cols);
+            (void)lm_matvec_q8i(y, qx, sx, m->q, m->sc, m->cols, m->rows);
+        } else {
+            (void)lm_matvec_q8(y, x, m->q, m->sc, m->cols, m->rows);
+        }
+        break;
     default: break;
     }
 }

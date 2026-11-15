@@ -95,6 +95,9 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
     if (ctx < 0) { lm_fail(err, errlen, "ctx must not be negative"); free(m); return NULL; }
     if (ctx == 0) ctx = 4096;
     m->ctx = ctx;
+    const int fast = opts ? opts->q8_int8_acts : 0;
+    if (fast < 0 || fast > 1) { lm_fail(err, errlen, "q8_int8_acts must be 0 or 1"); free(m); return NULL; }
+    if (fast && !weights) { lm_fail(err, errlen, "the int8 fast path needs a q8 weights file (--weights)"); free(m); return NULL; }
 #ifdef _OPENMP
     if (opts && opts->threads > 0) omp_set_num_threads(opts->threads);
 #endif
@@ -105,7 +108,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
         char mt[64] = "";
         if (lm_config_model_type(model_dir, mt, sizeof mt) == 0) {
             if (!strcmp(mt, "gemma4")) {
-                m->gemma = lm_gemma_open(model_dir, weights, ctx, err, errlen);
+                m->gemma = lm_gemma_open(model_dir, weights, ctx, fast, err, errlen);
                 if (!m->gemma) { free(m); return NULL; }
                 m->ctx = ctx;
                 return m;
@@ -122,6 +125,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
     const LmCfg *c = &m->cfg;
 
     if (lm_bind_open(&m->b, weights ? weights : model_dir, weights != NULL, err, errlen) != 0) goto fail;
+    m->b.fast = fast;
 
     m->layers = (Layer *)calloc((size_t)c->layers, sizeof(Layer));
     if (!m->layers) { lm_fail(err, errlen, "out of memory"); goto fail; }

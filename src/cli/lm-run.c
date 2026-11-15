@@ -1,5 +1,5 @@
 /* lm-run.c - bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
- *                       [--greedy N] [--ctx N] [--threads N]
+ *                       [--greedy N] [--ctx N] [--threads N] [--fast]
  *
  * Feeds the token ids, writes one little-endian f32 row of `vocab` logits per fed token
  * to F, then generates N tokens by argmax (lowest id wins a tie) and prints one id per
@@ -16,7 +16,7 @@
 static int usage(void)
 {
     fprintf(stderr, "usage: lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]\n"
-                    "              [--greedy N] [--ctx N] [--threads N]\n");
+                    "              [--greedy N] [--ctx N] [--threads N] [--fast]\n");
     return 2;
 }
 
@@ -43,7 +43,7 @@ static const char *code_name(int rc)
 int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *tokstr = NULL, *outp = NULL;
-    int greedy = 0, ctx = 0, threads = 0;
+    int greedy = 0, ctx = 0, threads = 0, fast = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         const int has = i + 1 < argc;
@@ -53,6 +53,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--logits-out") && has) outp = argv[++i];
         else if (!strcmp(a, "--greedy") && has) { if (parse_int(argv[++i], 0, &greedy)) { fprintf(stderr, "lm-run: bad --greedy\n"); return 2; } }
         else if (!strcmp(a, "--ctx") && has) { if (parse_int(argv[++i], 1, &ctx)) { fprintf(stderr, "lm-run: bad --ctx\n"); return 2; } }
+        else if (!strcmp(a, "--fast")) fast = 1;
         else if (!strcmp(a, "--threads") && has) { if (parse_int(argv[++i], 1, &threads)) { fprintf(stderr, "lm-run: bad --threads\n"); return 2; } }
         else return usage();
     }
@@ -73,7 +74,7 @@ int main(int argc, char **argv)
     if (ntok == 0) { fprintf(stderr, "lm-run: --tokens is empty\n"); free(tok); return 2; }
 
     char err[1024] = "";
-    LmOpts o = { weights, ctx, threads };
+    LmOpts o = { weights, ctx, threads, fast };
     LmModel *m = lm_open(model, &o, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-run: %s\n", err); free(tok); return 1; }
     const int vocab = lm_n_vocab(m);
