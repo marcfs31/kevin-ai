@@ -69,8 +69,8 @@ int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
  * caches up to lm_pos (whole sliding-window rings) and the position. lm_restore puts the model
  * back exactly there -- the state, and so every later logit, BIT-IDENTICAL to the moment it was
  * taken -- whatever was fed or reset in between, as often as needed. A shared prompt prefix
- * (a system prompt) is then fed once and restored instead of fed again. Size: lm_snapshot_bytes,
- * about 50 MB for Qwen3.5-4B (the delta-rule state) plus the KV rows. */
+ * (a system prompt) is then fed once and restored instead of fed again. Size: lm_snapshot_bytes;
+ * for Qwen3.5-4B about 50 MiB (conv and delta-rule state) plus 64 KiB per position. */
 typedef struct LmSnapshot LmSnapshot;
 LmSnapshot *lm_snapshot(const LmModel *m);                 /* NULL on allocation failure */
 /* LM_OK, or -1 (nothing changed) if s was taken from another LmModel. */
