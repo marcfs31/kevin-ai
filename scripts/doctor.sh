@@ -16,7 +16,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/doctor.sh [--read-speed] [--help] [MODEL_DIR]
 
-Read-only checks: CPU model, cores, avx2 and fma flags, memory and swap, compiler,
+Read-only checks: CPU model, cores, avx2 and fma flags, CPU clock cap, memory and swap, compiler,
 the model type named in MODEL_DIR/config.json (qwen3.5-4b or gemma-4-e4b), that
 model's files and sizes, the q8 file, whether MODEL_DIR is on a rotational disk, and
 whether the engine binaries are built.
@@ -49,6 +49,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 MODEL_DIR="${MODEL_DIR_ARG:-$HOME/models/qwen3.5-4b}"
+# Where the CPU facts are read from; the tests point these at fixture files.
+CPUINFO="${LM_DOCTOR_CPUINFO:-/proc/cpuinfo}"
+CPUFREQ_DIR="${LM_DOCTOR_CPUFREQ_DIR:-/sys/devices/system/cpu/cpu0/cpufreq}"
 
 # Expected files per model: "name|size", empty size = not pinned (presence checked).
 # These match the pins in scripts/download-model.sh.
@@ -125,15 +128,15 @@ rotational_status() {
 }
 
 # --- CPU -------------------------------------------------------------------------
-if [ -r /proc/cpuinfo ]; then
-  cpu_model=$(awk -F': *' '/^model name/ {print $2; exit}' /proc/cpuinfo)
+if [ -r "$CPUINFO" ]; then
+  cpu_model=$(awk -F': *' '/^model name/ {print $2; exit}' "$CPUINFO")
   if [ -n "$cpu_model" ]; then
     report OK "cpu model" "$cpu_model"
   else
     report UNKNOWN "cpu model" "no 'model name' in /proc/cpuinfo"
   fi
 
-  flags=$(awk -F': *' '/^flags/ {print " " $2 " "; exit}' /proc/cpuinfo)
+  flags=$(awk -F': *' '/^flags/ {print " " $2 " "; exit}' "$CPUINFO")
   for f in avx2 fma; do
     if [ -z "$flags" ]; then
       report UNKNOWN "cpu flag $f" "no 'flags' line in /proc/cpuinfo"
@@ -151,13 +154,40 @@ fi
 
 cores=""
 if command -v nproc >/dev/null 2>&1; then cores=$(nproc 2>/dev/null) || cores=""; fi
-if ! is_uint "$cores" && [ -r /proc/cpuinfo ]; then
-  cores=$(awk '/^processor/ {n++} END {print n + 0}' /proc/cpuinfo)
+if ! is_uint "$cores" && [ -r "$CPUINFO" ]; then
+  cores=$(awk '/^processor/ {n++} END {print n + 0}' "$CPUINFO")
 fi
 if is_uint "$cores" && [ "$cores" -gt 0 ]; then
   report OK "cores" "$cores"
 else
   report UNKNOWN "cores" "cannot determine the core count"
+fi
+
+# --- CPU clock -------------------------------------------------------------------
+# A CPU held far below the speed in its model name is held by firmware (BIOS power or
+# thermal setting, or an unrecognised power adapter); the engine then runs at that clock.
+# NOTE, not FAIL: a low clock is slow, not broken.
+max_khz=""
+[ -r "$CPUFREQ_DIR/cpuinfo_max_freq" ] && max_khz=$(tr -d '[:space:]' < "$CPUFREQ_DIR/cpuinfo_max_freq" 2>/dev/null)
+if is_uint "$max_khz" && [ "$max_khz" -gt 0 ]; then
+  max_mhz=$((max_khz / 1000))
+  cap_khz=""
+  [ -r "$CPUFREQ_DIR/scaling_max_freq" ] && cap_khz=$(tr -d '[:space:]' < "$CPUFREQ_DIR/scaling_max_freq" 2>/dev/null)
+  gov=""
+  [ -r "$CPUFREQ_DIR/scaling_governor" ] && gov=$(tr -d '[:space:]' < "$CPUFREQ_DIR/scaling_governor" 2>/dev/null)
+  nominal_mhz=""
+  if [[ "${cpu_model:-}" =~ @[[:space:]]*([0-9]+(\.[0-9]+)?)GHz ]]; then
+    nominal_mhz=$(awk -v g="${BASH_REMATCH[1]}" 'BEGIN { printf "%d", g * 1000 }')
+  fi
+  if [ -n "$nominal_mhz" ] && [ $((max_mhz * 10)) -lt $((nominal_mhz * 8)) ]; then
+    report NOTE "cpu clock" "capped at $max_mhz MHz, the model name says $nominal_mhz MHz: firmware is limiting the CPU. See README Troubleshooting (power adapter, BIOS)"
+  elif is_uint "$cap_khz" && [ "$cap_khz" -lt "$max_khz" ]; then
+    report NOTE "cpu clock" "scaling_max_freq is $((cap_khz / 1000)) MHz, below the hardware maximum of $max_mhz MHz: a software limit"
+  else
+    report OK "cpu clock" "hardware maximum $max_mhz MHz${nominal_mhz:+ (model name: $nominal_mhz MHz)}, governor ${gov:-unknown}"
+  fi
+else
+  report UNKNOWN "cpu clock" "cpufreq is not exposed here (virtual machine, or no frequency driver)"
 fi
 
 # --- Memory ----------------------------------------------------------------------

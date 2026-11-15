@@ -536,7 +536,17 @@ scripts/doctor.sh [--read-speed] [MODEL_DIR]
 
 - **Out of memory.** Use the q8 file, not bf16. Lower `--ctx`. Close other programs and
   check `scripts/doctor.sh` for available memory. A swap file helps as a safety margin.
-- **Slow.** Keep the model directory on the SSD, not the HDD. Use q8 rather than bf16.
+- **Slow.** Keep the model directory on the SSD, not the HDD. Use q8 rather than bf16. Then
+  check the `cpu clock` line of `scripts/doctor.sh` (next entry).
+- **`cpu clock` NOTE in doctor: the CPU is capped far below its rated speed.** On the
+  OptiPlex 3050 this once held the i5-6500T at 800 MHz (`cat
+  /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq` printed 800000, turbo off), which
+  made every reply about three times slower. The cause was a non-genuine ("Replacement")
+  power adapter: Dell firmware cannot identify it, logs "Unknown AC power adapter, may
+  affect performance" (BIOS setup, F2, Maintenance, System Logs) and limits the CPU. Use a
+  genuine Dell adapter of the right wattage (65 W for the Micro). If the log shows no such
+  line, look in the BIOS for SpeedStep, Turbo Boost, C-States and a Thermal Management mode
+  set to Quiet, and update the BIOS. It is not a heat problem unless `x86_pkg_temp` is high.
 - **Installer shows "Mount a filesystem at /" or "Select a boot disk".** Both must be set
   on the Samsung SSD before Done.
 - **doctor reports FAIL on a model file.** The size or hash does not match the pinned

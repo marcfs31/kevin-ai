@@ -38,6 +38,7 @@ CLI_SRCS  := $(wildcard src/cli/*.c)
 BINS      := $(CLI_SRCS:src/cli/%.c=bin/%)
 TEST_SRCS := $(wildcard tests/unit/test_*.c)
 TESTS     := $(TEST_SRCS:tests/unit/%.c=$(B)/tests/unit/%)
+TEST_SH   := $(wildcard tests/scripts/test_*.sh)
 
 .PHONY: all test gate gate-fast sanitize portable clean
 .SECONDARY:
@@ -58,7 +59,8 @@ $(B)/tests/unit/%: $(B)/tests/unit/%.o $(LIB_OBJS)
 # A test target with nothing to run must fail, not pass.
 test: $(TESTS)
 	@test -n "$(TESTS)" || { echo "make test: no tests/unit/test_*.c found"; exit 1; }
-	@fail=0; for t in $(TESTS); do echo "== $$t"; ./$$t || { echo "FAILED: $$t"; fail=1; }; done; exit $$fail
+	@fail=0; for t in $(TESTS); do echo "== $$t"; ./$$t || { echo "FAILED: $$t"; fail=1; }; done; \
+	for s in $(TEST_SH); do echo "== $$s"; bash $$s || { echo "FAILED: $$s"; fail=1; }; done; exit $$fail
 
 gate: bin/lm-run bin/lm-quant
 	python3 tools/check_golden.py --run bin/lm-run --quant bin/lm-quant --fixtures tests/fixtures/qwen35-tiny
