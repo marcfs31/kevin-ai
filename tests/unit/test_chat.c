@@ -14,6 +14,8 @@
 static int g_fail = 0, g_checks = 0;
 #undef CHECK /* lm_test.h defines its own; this file counts with g_checks/g_fail */
 #define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #c); } } while (0)
+#undef CHECK_MSG
+#define CHECK_MSG(c, ...) do { g_checks++; if (!(c)) { g_fail++; fprintf(stderr, "%s:%d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
 static LmTok *g_tok;
 static LmTemplate *g_tpl;
@@ -57,6 +59,10 @@ typedef struct {
     int feeds, fail_at;                           /* fail_at: the feed() call (0-based) returning LM_ERR_IO */
     int calls;
     int pf_calls, pf_max;                         /* prefill backend: calls and the largest chunk handed to it */
+    int st[MAXLOG];                               /* the "state": the id at every position held */
+    int saves, restores, drops, live;             /* prefix-cache hooks: calls, snapshots alive */
+    int save_fail, restore_fail;                  /* make save return NULL / restore fail */
+    int saved_pos;                                /* position of the last snapshot taken */
 } Fake;
 
 static int fk_feed(void *c, int token, float *logits)
@@ -65,6 +71,7 @@ static int fk_feed(void *c, int token, float *logits)
     int call = f->calls++;
     if (f->fail_at >= 0 && call == f->fail_at) return LM_ERR_IO;
     if (f->pos >= f->n_ctx) return LM_ERR_CTX;
+    f->st[f->pos] = token;
     f->log[f->nlog] = token;
     f->null_logits[f->nlog++] = logits == NULL;
     f->pos++;
@@ -89,6 +96,31 @@ static int fk_prefill(void *c, const int *ids, int n, float *logits)
     return LM_OK;
 }
 static int g_use_prefill; /* mk() gives the backend the prefill call when set */
+typedef struct { int pos; int st[MAXLOG]; } FkSnap;
+static void *fk_save(void *c)
+{
+    Fake *f = (Fake *)c;
+    f->saves++;
+    if (f->save_fail) return NULL;
+    FkSnap *s = (FkSnap *)malloc(sizeof *s);
+    if (!s) return NULL;
+    s->pos = f->saved_pos = f->pos;
+    memcpy(s->st, f->st, sizeof s->st);
+    f->live++;
+    return s;
+}
+static int fk_restore(void *c, void *snap)
+{
+    Fake *f = (Fake *)c;
+    f->restores++;
+    if (f->restore_fail) return LM_ERR_IO;
+    const FkSnap *s = (const FkSnap *)snap;
+    f->pos = s->pos;
+    memcpy(f->st, s->st, sizeof f->st);
+    return LM_OK;
+}
+static void fk_drop(void *c, void *snap) { ((Fake *)c)->drops++; ((Fake *)c)->live--; free(snap); }
+static int g_use_cache; /* mk() gives the backend the prefix-cache hooks when set */
 static void fk_reset(void *c) { Fake *f = (Fake *)c; f->pos = 0; f->resets++; f->nlog = 0; }
 static int fk_pos(void *c) { return ((Fake *)c)->pos; }
 
@@ -116,7 +148,8 @@ static LmChat *mk(Fake *f, int thinking, int strict, const char *system)
     memset(&cc, 0, sizeof cc);
     cc.tok = g_tok;
     cc.tpl = g_tpl;
-    cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos, g_use_prefill ? fk_prefill : NULL };
+    cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos, g_use_prefill ? fk_prefill : NULL,
+                              g_use_cache ? fk_save : NULL, g_use_cache ? fk_restore : NULL, g_use_cache ? fk_drop : NULL };
     cc.temperature = 0;
     cc.top_p = 1;
     cc.seed = 1;
@@ -451,7 +484,7 @@ static void test_same_seed_same_text(void)
         LmChatConfig cc;
         memset(&cc, 0, sizeof cc);
         cc.tok = g_tok; cc.tpl = g_tpl;
-        cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL };
+        cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL, NULL, NULL, NULL };
         cc.temperature = 1.0; cc.top_p = 0.9; cc.top_k = 5; cc.seed = 42;
         char err[100];
         LmChat *c = lm_chat_new(&cc, err, sizeof err);
@@ -557,6 +590,176 @@ static void test_nul_byte(void)
     lm_chat_free(c);
 }
 
+/* ---- prefix cache ------------------------------------------------------------------------ */
+
+/* The state a chat without any cache reaches for one turn: the oracle a cached turn must equal. */
+static void oracle(Fake *o, const char *system, const char *user)
+{
+    const int keep = g_use_cache;
+    g_use_cache = 0;
+    fake_init(o, 4096);
+    LmChat *c = mk(o, 0, 0, system);
+    LmTurn t;
+    script(o, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, user, 0, &t, NULL, NULL) == LM_OK);
+    lm_chat_free(c);
+    g_use_cache = keep;
+}
+
+static int same_state(const Fake *a, const Fake *b) { return a->pos == b->pos && !memcmp(a->st, b->st, (size_t)a->pos * sizeof(int)); }
+
+/* the common prefix of two single-turn conversations with this system prompt */
+static int shared_prefix(const char *system)
+{
+    Fake a, b;
+    oracle(&a, system, "Hi");
+    oracle(&b, system, "Yo");
+    int n = 0;
+    while (n < a.pos && n < b.pos && a.st[n] == b.st[n]) n++;
+    return n;
+}
+
+static void test_prefix_cache(void)
+{
+    const char *sys = "You are terse. Answer in one short line.";
+    const int L = shared_prefix(sys);
+    CHECK(L >= LM_CHAT_CACHE_MIN); /* the system block and the next turn's opening */
+    for (int pf = 0; pf < 2; pf++) {
+        g_use_prefill = pf;
+        g_use_cache = 1;
+        Fake f, o;
+        fake_init(&f, 4096);
+        LmChat *c = mk(&f, 0, 0, sys);
+        LmTurn t;
+        /* conversation A: nothing to compare with yet, nothing cached */
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK);
+        CHECK(f.saves == 0 && lm_chat_cached(c) == 0 && t.n_cached == 0);
+
+        /* /reset, conversation B: it shares L ids with A, so the prefill snapshots there */
+        lm_chat_reset(c);
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK);
+        CHECK_MSG(f.saves == 1 && lm_chat_cached(c) == L && f.saved_pos == L,
+                  "pf=%d: saves %d cached %d saved at %d, want %d", pf, f.saves, lm_chat_cached(c), f.saved_pos, L);
+        CHECK_MSG(t.n_cached == 0 && t.n_prefill == t.n_prompt, "pf=%d: cached %d prefill %d prompt %d", pf, t.n_cached, t.n_prefill, t.n_prompt);
+        oracle(&o, sys, "Yo");
+        CHECK_MSG(same_state(&f, &o), "pf=%d: taking a snapshot changed what was fed", pf);
+
+        /* /reset, conversation C: restored from the cache, only the rest fed, same state */
+        lm_chat_reset(c);
+        script(&f, "Hello", "<|im_end|>", NULL);
+        f.nlog = 0;
+        CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK);
+        CHECK_MSG(t.n_cached == L && t.n_prefill == t.n_prompt - L && f.restores == 1,
+                  "pf=%d: cached %d prefill %d prompt %d", pf, t.n_cached, t.n_prefill, t.n_prompt);
+        CHECK(f.saves == 1 && f.nlog == t.n_prompt - L + 1);
+        oracle(&o, sys, "Hey");
+        CHECK_MSG(same_state(&f, &o), "pf=%d: the restored conversation differs from a fresh one", pf);
+        CHECK(!strcmp(g_ans, "Hello"));
+
+        /* the next turn of C extends the state: no cache involved */
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "More", 0, &t, NULL, NULL) == LM_OK && t.n_cached == 0 && t.reprefill == 0 && f.restores == 1);
+        lm_chat_free(c);
+        CHECK(f.live == 0); /* the chat dropped its snapshot */
+    }
+    g_use_prefill = 0;
+    g_use_cache = 0;
+}
+
+static void test_prefix_cache_sync(void)
+{
+    /* lm-serve: no reset, each request replaces the conversation */
+    g_use_cache = 1;
+    Fake f, o;
+    fake_init(&f, 4096);
+    LmChat *c = mk(&f, 0, 0, NULL);
+    char err[200];
+    LmTurn t;
+    LmMsg a[] = { { LM_ROLE_SYSTEM, "You are terse. Answer in one short line.", NULL, NULL, 0, 0 }, { LM_ROLE_USER, "Hi", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, a, 1, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && f.saves == 0);
+    LmMsg b[] = { { LM_ROLE_SYSTEM, "You are terse. Answer in one short line.", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, b, 1, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK);
+    const int L = lm_chat_cached(c);
+    CHECK(t.reprefill == 1 && f.saves == 1 && L == shared_prefix("You are terse. Answer in one short line."));
+    CHECK(lm_chat_sync(c, b, 1, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == L && t.reprefill == 1);
+    oracle(&o, "You are terse. Answer in one short line.", "Hey");
+    CHECK(same_state(&f, &o));
+
+    /* NEGATIVE: another system prompt is not served from the cache; the state is still right */
+    LmMsg d[] = { { LM_ROLE_SYSTEM, "Be long.", NULL, NULL, 0, 0 } };
+    CHECK(lm_chat_sync(c, d, 1, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    const int restores = f.restores, saves = f.saves;
+    CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == 0 && f.restores == restores);
+    oracle(&o, "Be long.", "Hey");
+    CHECK(same_state(&f, &o));
+    /* NEGATIVE: the few ids the two share (the system header) did not evict the cache, which
+     * still serves the first system prompt */
+    CHECK(f.saves == saves && lm_chat_cached(c) == L);
+    CHECK(lm_chat_sync(c, b, 1, err, sizeof err) == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && t.n_cached == L);
+    lm_chat_free(c);
+    CHECK(f.live == 0);
+    g_use_cache = 0;
+}
+
+static void test_prefix_cache_failures(void)
+{
+    g_use_cache = 1;
+    Fake f, o;
+    LmTurn t;
+    /* save fails: no cache, the turns are unaffected */
+    fake_init(&f, 4096);
+    f.save_fail = 1;
+    LmChat *c = mk(&f, 0, 0, "You are terse. Answer in one short line.");
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK);
+    lm_chat_reset(c);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK && f.saves == 1 && lm_chat_cached(c) == 0);
+    oracle(&o, "You are terse. Answer in one short line.", "Yo");
+    CHECK(same_state(&f, &o));
+    lm_chat_free(c);
+
+    /* restore fails: the backend is reset and everything fed */
+    fake_init(&f, 4096);
+    c = mk(&f, 0, 0, "You are terse. Answer in one short line.");
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK);
+    lm_chat_reset(c);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK && lm_chat_cached(c) > 0);
+    lm_chat_reset(c);
+    f.restore_fail = 1;
+    const int resets = f.resets;
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hey", 0, &t, NULL, NULL) == LM_OK && f.restores == 1 && t.n_cached == 0);
+    CHECK(t.n_prefill == t.n_prompt && f.resets == resets + 1);
+    oracle(&o, "You are terse. Answer in one short line.", "Hey");
+    CHECK(same_state(&f, &o));
+    lm_chat_free(c);
+    CHECK(f.live == 0);
+
+    /* the hooks come all three or none */
+    LmChatConfig cc;
+    memset(&cc, 0, sizeof cc);
+    cc.tok = g_tok; cc.tpl = g_tpl;
+    fake_init(&f, 4096);
+    cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL, fk_save, fk_restore, NULL };
+    char err[100];
+    CHECK(lm_chat_new(&cc, err, sizeof err) == NULL);
+    g_use_cache = 0;
+}
+
 int main(void)
 {
     char err[256];
@@ -578,6 +781,9 @@ int main(void)
     test_sync();
     test_set_sampling();
     test_nul_byte();
+    test_prefix_cache();
+    test_prefix_cache_sync();
+    test_prefix_cache_failures();
 
     lm_template_free(g_tpl);
     lm_tok_close(g_tok);

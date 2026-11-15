@@ -29,6 +29,9 @@ struct LmChat {
     int nh, caph;
     LmIds fed;       /* ids the backend holds, in order */
     int dirty;       /* backend state unknown (error mid-feed): next turn must reset */
+    LmIds prev;      /* what was fed before the last lm_chat_reset */
+    void *snap;      /* the prefix cache: a backend snapshot of snap_ids, or NULL */
+    LmIds snap_ids;
     int reprefills;
     float *logits;
 };
@@ -76,7 +79,8 @@ static int hist_push(LmChat *c, const Hist *h)
 LmChat *lm_chat_new(const LmChatConfig *cfg, char *err, size_t errlen)
 {
     if (!cfg || !cfg->tok || !cfg->tpl || !cfg->backend.feed || !cfg->backend.reset ||
-        !cfg->backend.pos || cfg->backend.n_vocab <= 0 || cfg->backend.n_ctx <= 0) {
+        !cfg->backend.pos || cfg->backend.n_vocab <= 0 || cfg->backend.n_ctx <= 0 ||
+        !cfg->backend.save != !cfg->backend.restore || !cfg->backend.save != !cfg->backend.drop) {
         set_err(err, errlen, "lm_chat_new: incomplete configuration or backend");
         return NULL;
     }
@@ -101,6 +105,9 @@ void lm_chat_free(LmChat *c)
     hist_clear(c);
     free(c->h);
     lm_ids_free(&c->fed);
+    lm_ids_free(&c->prev);
+    if (c->snap) c->cfg.backend.drop(c->cfg.backend.ctx, c->snap);
+    lm_ids_free(&c->snap_ids);
     lm_sampler_free(&c->smp);
     free(c->system);
     free(c->logits);
@@ -110,6 +117,9 @@ void lm_chat_free(LmChat *c)
 void lm_chat_reset(LmChat *c)
 {
     hist_clear(c);
+    LmIds t = c->prev;
+    c->prev = c->fed;
+    c->fed = t;
     c->fed.n = 0;
     c->dirty = 0;
     c->cfg.backend.reset(c->cfg.backend.ctx);
@@ -117,6 +127,7 @@ void lm_chat_reset(LmChat *c)
 
 int lm_chat_reprefills(const LmChat *c) { return c->reprefills; }
 int lm_chat_fed(const LmChat *c) { return c->fed.n; }
+int lm_chat_cached(const LmChat *c) { return c->snap ? c->snap_ids.n : 0; }
 
 int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen)
 {
@@ -214,6 +225,44 @@ static void pop_user(LmChat *c)
     if (c->nh > 0) hist_free_one(&c->h[--c->nh]);
 }
 
+static int common_prefix(const LmIds *a, const LmIds *b)
+{
+    int n = 0;
+    while (n < a->n && n < b->n && a->ids[n] == b->ids[n]) n++;
+    return n;
+}
+
+/* The backend is at position 0. Restore the cache if it covers a prefix of the prompt (leaving
+ * at least the last id to feed); returns the ids now held, 0 if none. */
+static int restore_cache(LmChat *c, const LmIds *prompt)
+{
+    const LmBackend *be = &c->cfg.backend;
+    const int n = c->snap_ids.n;
+    if (!c->snap || n >= prompt->n || memcmp(c->snap_ids.ids, prompt->ids, (size_t)n * sizeof(int)))
+        return 0;
+    c->fed.n = 0;
+    if (be->restore(be->ctx, c->snap) != LM_OK || lm_ids_append(&c->fed, c->snap_ids.ids, n)) {
+        be->reset(be->ctx);
+        c->fed.n = 0;
+        return 0;
+    }
+    return n;
+}
+
+/* Replace the cache with a snapshot of the state, which holds c->fed. A failure keeps the old one. */
+static void save_cache(LmChat *c)
+{
+    const LmBackend *be = &c->cfg.backend;
+    LmIds ids = { 0 };
+    if (lm_ids_append(&ids, c->fed.ids, c->fed.n)) return;
+    void *s = be->save(be->ctx);
+    if (!s) { lm_ids_free(&ids); return; }
+    if (c->snap) be->drop(be->ctx, c->snap);
+    lm_ids_free(&c->snap_ids);
+    c->snap = s;
+    c->snap_ids = ids;
+}
+
 int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTurn *res,
                  char *err, size_t errlen)
 {
@@ -253,6 +302,13 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
     int reuse = !c->dirty && c->fed.n < prompt.n && be->pos(be->ctx) == c->fed.n &&
                 (c->fed.n == 0 || !memcmp(c->fed.ids, prompt.ids, (size_t)c->fed.n * sizeof(int)));
     int start = reuse ? c->fed.n : 0;
+    /* where to snapshot: the longest prefix the new prompt shares with the old ids */
+    int save_at = 0;
+    if (be->save && !(reuse && c->fed.n > 0)) {
+        save_at = common_prefix(c->fed.n > 0 ? &c->fed : &c->prev, &prompt);
+        if (save_at >= prompt.n) save_at = prompt.n - 1;
+        if (save_at < LM_CHAT_CACHE_MIN) save_at = 0;
+    }
     if (prompt.n > be->n_ctx) {
         set_err(err, errlen, "the prompt is %d tokens and does not fit the %d-token context", prompt.n, be->n_ctx);
         res->stop = LM_STOP_CTX;
@@ -266,12 +322,16 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
         c->fed.n = 0;
         c->dirty = 0;
     }
+    if (be->save && c->fed.n == 0) {
+        start = res->n_cached = restore_cache(c, &prompt);
+        if (save_at <= start) save_at = 0;
+    }
 
     /* Prefill: ids without logits, the last one with. A backend with prefill takes chunks, polling
      * cancellation between them; one without is fed token by token. */
     double t0 = now_s();
     const int chunk = be->prefill ? LM_CHAT_PREFILL_CHUNK : 1;
-    for (int i = start; i < prompt.n; i += chunk) {
+    for (int i = start, n = 0; i < prompt.n; i += n) {
         if (opts->cancelled && opts->cancelled(opts->cancel_user)) {
             res->stop = LM_STOP_CANCEL;
             res->prefill_s = now_s() - t0;
@@ -279,7 +339,8 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
             pop_user(c); /* what was fed stays a valid prefix if the same message is sent again */
             return LM_OK;
         }
-        const int n = prompt.n - i < chunk ? prompt.n - i : chunk;
+        n = prompt.n - i < chunk ? prompt.n - i : chunk;
+        if (i < save_at && i + n > save_at) n = save_at - i; /* stop at the snapshot point */
         const int last = i + n == prompt.n;
         int frc = be->prefill ? be->prefill(be->ctx, prompt.ids + i, n, last ? c->logits : NULL)
                               : be->feed(be->ctx, prompt.ids[i], last ? c->logits : NULL);
@@ -301,6 +362,7 @@ int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTur
             }
         }
         res->n_prefill += n;
+        if (save_at && c->fed.n == save_at) save_cache(c);
     }
     res->prefill_s = now_s() - t0;
     lm_ids_free(&prompt);
