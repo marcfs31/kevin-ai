@@ -500,8 +500,9 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
   multiply to int8 so the CPU can multiply int8 pairs directly. It is faster but NOT
   bit-identical to the default and slightly less exact: the default stays the one the golden
   gate checks. `make gate-fast` reports how far it is from the oracle on the tiny fixtures
-  (not a gate); the numbers on the real models are recorded in the pull request that
-  measured them.
+  (not a gate). On a real model, `python3 tools/bench_fast.py --run bin/lm-run --model DIR
+  --weights FILE` measures generation and prompt tokens/s for both paths and how often the
+  fast path picks the exact path's top token (teacher-forced on 96 generated tokens).
 - Sampling defaults come from `generation_config.json` for Gemma; flags override them.
 
 ### bin/lm-run
