@@ -19,7 +19,12 @@ typedef struct {
     const uint16_t *bf;      /* LM_MAT_BF16 */
     const int8_t   *q;       /* LM_MAT_Q8: int8 [rows][cols] */
     const float    *sc;      /* LM_MAT_Q8: f32 [rows][cols/32]; must be float-aligned */
+    int             int8_acts; /* LM_MAT_Q8: 1 = multiply with int8-rounded activations */
 } LmMat;
+
+/* The int8 path rounds x into stack buffers of this many inputs; lm_bind_mat refuses a
+ * larger q8 matrix when the fast path is on, so no matrix is ever silently run exact. */
+#define LM_Q8I_MAX_COLS 16384
 
 /* y[rows] = M x[cols]. */
 void lm_mat_mul(const LmMat *m, float *y, const float *x);
