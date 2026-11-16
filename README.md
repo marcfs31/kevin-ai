@@ -1,8 +1,8 @@
 # small-llm-in-c
 
-A C99 CPU inference engine for small language models, written from scratch for an
-8 GB machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512),
-8 GB RAM, Ubuntu Server 26.04.1 LTS, with the model weights on the NVMe SSD.
+A C99 CPU inference engine for small language models, written from scratch for a small
+machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512), about
+11 GB RAM, Ubuntu Server 26.04.1 LTS, with the models on a SATA SSD at `/mnt/models`.
 
 ## Status
 
@@ -19,8 +19,10 @@ A C99 CPU inference engine for small language models, written from scratch for a
   misses). `--profile` on a 64-token prompt puts 75% of the prompt time in the multiplies,
   17% in linear attention, 4% in full attention and 4% elsewhere.
   Replies read about 4.75 GB per
-  token, so at about 11 GB/s they are bounded by memory bandwidth. Gemma 4 E4B has not been
-  run on the real checkpoint yet.
+  token, so at about 11 GB/s they are bounded by memory bandwidth.
+- **Gemma 4 E4B runs on the real checkpoint** (first run 2026-11-16, on the target machine).
+  It answers correctly. With the q8 weights: about **1.9 tokens/s** generating and 3.5 to 5.9
+  tokens/s on a short prompt, at a peak of 5.7 GiB resident.
 
 The full plan, with the normative model equations and test gates, is in
 [docs/PLAN.md](docs/PLAN.md).
@@ -33,13 +35,13 @@ The engine is developed and measured on one machine. Every number in this README
 |---|---|
 | system | Dell OptiPlex 3050 |
 | CPU | Intel Core i5-6500T, 4 cores, no hyper-threading, AVX2 and FMA, no AVX-512 |
-| memory | 8 GB (the OS reports 7308 MB usable; about 6700 MB available when the tests ran) |
+| memory | about 11 GB (the OS reports 11,328 MiB usable; about 10.8 GiB available when idle) |
 | GPU | Intel HD Graphics 530, not used |
-| system and weights disk | Samsung MZVLB256HAHQ, 238.5 GB NVMe SSD |
-| bulk disk | Toshiba MQ04ABF100, 931.5 GB 5400 rpm HDD, not used by the engine |
+| system disk | Samsung MZVLB256HAHQ, 238.5 GB NVMe SSD (reads 1.7 GB/s) |
+| models disk | Samsung SSD 850, 465.8 GB SATA SSD, ext4 at `/mnt/models` (reads about 0.55 GB/s) |
 | network | Realtek RTL8111/8168 gigabit Ethernet, Intel Wireless 8265/8275 (unused) |
 | OS | Ubuntu Server 26.04.1 LTS, kernel 7.0.0-43-generic, x86-64 |
-| toolchain | gcc 15.2.0, GNU make 4.4.1, Python 3.14.3 |
+| toolchain | gcc 15.2.0, GNU make 4.4.1, Python 3.14.4 |
 
 What this means for the engine:
 
@@ -48,8 +50,13 @@ What this means for the engine:
   A prompt is processed in batches that read each weight once per 32 tokens.
 - **No GPU path, no AVX-512.** The kernels use AVX2 with FMA (and NEON on ARM, for
   development on a Mac). On this CPU the kernel test reports `kernel path: avx2`.
-- **Gemma 4 E4B is tight.** Its q8 file is about 8.5 GB, larger than RAM; only the
-  per-token working set (about 5.3 GB) stays hot, the rest is read from the SSD on demand.
+- **Both models fit in memory.** Measured peaks: q8 Qwen 5.1 GiB, q8 Gemma 5.7 GiB (its
+  8.5 GB file includes a per-layer table read one row per token), bf16 Qwen 8.0 GiB. bf16
+  Qwen now stays resident instead of streaming from disk, but it is still slower than q8:
+  about 1.1 tokens/s generating.
+- **The models disk is only read at load.** The q8 file is read once and stays in the page
+  cache, so the SATA SSD costs about 9 s on the first load after a boot (the NVMe would take
+  3 s) and nothing afterwards.
 - **Verified on this machine (first run, 2026-11-14):** the build, all unit tests and both
   golden gates pass under gcc 15 with OpenMP and the AVX2 kernels. The real Qwen3.5-4B
   checkpoint loads and answers; the speed is in the Status section above.
@@ -68,8 +75,8 @@ Qwen's multi-token-prediction (MTP) head is used for speculative greedy decoding
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
-as written, or adapt them, but keep the disk layout: the OS and model weights on the SSD,
-the HDD free.
+as written, or adapt them, but keep the disk layout: the OS on the NVMe SSD and the models
+on the SATA SSD.
 
 ### Disk roles
 
@@ -77,8 +84,8 @@ Full machine specs are in [Target machine](#target-machine). The disks are used 
 
 | disk | use |
 |---|---|
-| Samsung 238.5 GB NVMe SSD | Ubuntu, `/`, `/boot`, `/boot/efi`, and the models in `~/models` |
-| Toshiba 931.5 GB HDD | not used by the engine; keep for backups or other data |
+| Samsung 238.5 GB NVMe SSD | Ubuntu, `/`, `/boot`, `/boot/efi` |
+| Samsung 465.8 GB SATA SSD | the models, in `/mnt/models` (set up after the install; see below) |
 | SanDisk USB stick | installer media only; do not partition or use it afterwards |
 
 ### Installer steps
@@ -141,6 +148,22 @@ sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
+### The models disk
+
+Once, after the first boot. This **erases the disk**: check that `/dev/sda` is the SATA SSD
+(`lsblk -o NAME,SIZE,MODEL,SERIAL`) before running it.
+
+```sh
+sudo sfdisk /dev/sda <<< $'label: gpt\n,,L'
+sudo mkfs.ext4 -L models -m 0 /dev/sda1
+sudo mkdir -p /mnt/models
+echo "UUID=$(sudo blkid -s UUID -o value /dev/sda1) /mnt/models ext4 defaults,noatime,nofail 0 2" | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload && sudo mount /mnt/models && sudo chown "$USER:$USER" /mnt/models
+```
+
+`nofail` lets the machine boot without the disk. Unmounted, `/mnt/models` belongs to root,
+so the scripts fall back to `~/models` instead of filling the system disk by mistake.
+
 ## Install the engine
 
 Copy this repository to the server. From your Mac:
@@ -158,7 +181,7 @@ scripts/install.sh --model qwen3.5-4b
 ```
 
 `scripts/install.sh` runs, in order: a system and tools check (refuses without AVX2),
-`make`, `make test`, `make gate`, the pinned model download to `~/models/<model>`, the q8
+`make`, `make test`, `make gate`, the pinned model download to `<root>/<model>`, the q8
 file, and the read-only `scripts/doctor.sh` report. It prints the chat command at the end.
 
 | option | meaning |
@@ -167,9 +190,9 @@ file, and the read-only `scripts/doctor.sh` report. It prints the chat command a
 | `--model gemma-4-e4b` | about 17 GB download, 8.5 GB q8 file |
 | `--model both` | both of the above |
 | `--model none` | build and test only |
-| `--model-dir DIR` | where models go (default `~/models`) |
+| `--model-dir DIR` | where models go. Default: `$LM_MODELS_DIR`, else `/mnt/models` when you can write it, else `~/models` (`scripts/models-root.sh` prints the choice) |
 | `--skip-tests` | skip `make test` and `make gate` (not recommended on the first run) |
-| `--allow-hdd` | allow downloading to the HDD (not recommended) |
+| `--allow-hdd` | allow downloading to a rotational disk (not recommended) |
 
 It is safe to re-run: finished downloads and an existing q8 file are skipped.
 
@@ -194,8 +217,9 @@ Requirements: a C99 compiler (`build-essential`), `make`, Python 3 (stdlib only)
 
 - `bin/lm-quant` writes a q8 file: int8 weights with one f32 scale per 32 weights. The
   engine memory-maps it and keeps it resident. This is the normal mode on this machine.
-- The original bf16 safetensors also load directly. On 8 GB they stream through the page
-  cache: slow, but exact. The golden gate uses it as the reference for q8.
+- The original bf16 safetensors also load directly: exact, but slower. bf16 Qwen (9.3 GB)
+  stays resident in 11 GB; bf16 Gemma (16 GB) streams through the page cache. The golden
+  gate uses bf16 as the reference for q8.
 
 **Long chats stay cheap (Qwen).** Linear-attention layers keep a fixed-size state instead
 of a cache that grows with every token. Only the full-attention layers keep a key/value
@@ -613,7 +637,7 @@ scripts/doctor.sh [--read-speed] [MODEL_DIR]
 
 - **Out of memory.** Use the q8 file, not bf16. Leave out `--ctx` (it then fits free memory) or lower it. Close other programs and
   check `scripts/doctor.sh` for available memory. A swap file helps as a safety margin.
-- **Slow.** Keep the model directory on the SSD, not the HDD. Use q8 rather than bf16. Then
+- **Slow.** Keep the model directory on an SSD. Use q8 rather than bf16. Then
   check the `cpu clock` line of `scripts/doctor.sh` (next entry).
 - **`cpu clock` NOTE in doctor: the CPU is capped far below its rated speed.** On the
   OptiPlex 3050 this once held the i5-6500T at 800 MHz (`cat

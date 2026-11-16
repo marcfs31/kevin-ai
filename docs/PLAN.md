@@ -1,9 +1,10 @@
-# Plan: Qwen3.5-4B and Gemma 4 E4B in C99 on an 8 GB CPU box
+# Plan: Qwen3.5-4B and Gemma 4 E4B in C99 on a small CPU box
 
 ## Decision
 
-Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2, no AVX-512), 8 GB RAM, 238 GB NVMe
-SSD, 931 GB 5400 rpm HDD, Ubuntu Server 26.04.1 LTS. Owner's choice (2026-11-13): run
+Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2, no AVX-512), Ubuntu Server 26.04.1 LTS.
+Planned for 8 GB RAM, a 238 GB NVMe SSD and a 931 GB HDD; upgraded 2026-11-16 to about 11 GB
+RAM, with the HDD replaced by a 466 GB SATA SSD for the models. Owner's choice (2026-11-13): run
 **Qwen3.5-4B** and **Gemma 4 E4B** with a from-scratch C engine in the style of
 kimi-k3-in-c, replacing the earlier gpt-oss-20b plan.
 
@@ -18,8 +19,8 @@ used as a speculative draft (see Later).
 **Weights: q8 resident, bf16 exact.** bf16 Qwen is 8.4 GB of text weights, more than
 RAM. `bin/lm-quant` writes a q8 file (int8, one f32 scale per 32 weights, about
 4.75 GB) that the engine mmaps and keeps resident. The original bf16 safetensors also
-load directly; on 8 GB they stream through the page cache (the kimi-k3-in-c
-technique), slow but exact. Speed is **an estimate until measured on the box: roughly
+load directly; on 8 GB they streamed through the page cache (the kimi-k3-in-c
+technique), slow but exact; in 11 GB bf16 Qwen stays resident (8.0 GiB measured). Speed is **an estimate until measured on the box: roughly
 2 to 4 tokens/s for q8**, bounded by memory bandwidth (~4.75 GB read per token).
 
 **Repo: from scratch, porting by file** from kimi-k3-in-c (Apache-2.0, attribution in
@@ -236,7 +237,7 @@ mask. So only layers `< first` keep a KV cache; a sliding cache needs only the l
 **Memory on 8 GB.** Text weights in q8 are about 8.5 GB: the per-layer table is about
 3.2 GB but is read one 12 KB row per token (page cache, evictable), and the shared
 layers' unused K/V tensors are never touched, so the hot working set is about 5.3 GB.
-Tighter than Qwen; same speed caveat: an estimate until measured.
+Tighter than Qwen. Measured 2026-11-16 with 11 GB: peak 5.7 GiB resident, 1.9 tokens/s.
 
 **Tokenizer** (`tokenizer.json` BPE): normalizer replaces `" "` with `"▁"` (U+2581);
 the Split pre-tokenizer then never fires, so each text segment between added tokens is

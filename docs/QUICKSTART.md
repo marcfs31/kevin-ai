@@ -1,7 +1,8 @@
 # Quickstart: Qwen3.5-4B on the OptiPlex
 
-Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2), 8 GB RAM, Ubuntu Server 26.04.1 LTS,
-238 GB NVMe SSD for the system and weights, 931 GB 5400 rpm HDD (do not put weights here).
+Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2), about 11 GB RAM, Ubuntu Server 26.04.1
+LTS, 238 GB NVMe SSD for the system, 466 GB SATA SSD for the models at `/mnt/models` (README,
+"The models disk").
 
 Status: phase 1. The engine runs the real Qwen3.5-4B checkpoint on the target machine, at
 about 2.3 tokens/s generating and 5.2 tokens/s on a 32-token prompt with the q8 weights, with
@@ -54,7 +55,9 @@ files. That is expected. It exits non-zero on any FAIL.
 scripts/download-model.sh --model qwen3.5-4b
 ```
 
-The default MODEL_DIR is `$HOME/models/qwen3.5-4b`. The script needs about 10.3 GB free
+The default MODEL_DIR is `<root>/qwen3.5-4b`, where `<root>` is `$LM_MODELS_DIR`, else
+`/mnt/models` when you can write it, else `$HOME/models` (`scripts/models-root.sh` prints
+it). The commands below use `/mnt/models`. The script needs about 10.3 GB free
 (the 9.32 GB checkpoint plus 1 GB). It refuses a rotational disk unless you pass
 `--allow-hdd`. It is resumable: if it stops, run the same command again. It never
 overwrites or deletes files; a file with a wrong size or sha256 stops it, and you move
@@ -63,7 +66,7 @@ that file aside before re-running.
 ## 6. Make the q8 file
 
 ```sh
-bin/lm-quant --model ~/models/qwen3.5-4b --out ~/models/qwen3.5-4b/model.q8.safetensors
+bin/lm-quant --model /mnt/models/qwen3.5-4b --out /mnt/models/qwen3.5-4b/model.q8.safetensors
 ```
 
 The q8 file is about 4.75 GB and is what the engine keeps resident in RAM.
@@ -71,7 +74,7 @@ The q8 file is about 4.75 GB and is what the engine keeps resident in RAM.
 ## 7. Check the model and the read speed
 
 ```sh
-scripts/doctor.sh ~/models/qwen3.5-4b --read-speed
+scripts/doctor.sh /mnt/models/qwen3.5-4b --read-speed
 ```
 
 This now checks the model files, the q8 file, and the RAM available for q8. With
@@ -80,7 +83,7 @@ This now checks the model files, the q8 file, and the RAM available for q8. With
 ## 8. First chat
 
 ```sh
-bin/lm-chat --model ~/models/qwen3.5-4b --weights ~/models/qwen3.5-4b/model.q8.safetensors --stats
+bin/lm-chat --model /mnt/models/qwen3.5-4b --weights /mnt/models/qwen3.5-4b/model.q8.safetensors --stats
 ```
 
 With no `--prompt`, this opens a REPL. Type `/reset` to clear the conversation and
@@ -125,11 +128,11 @@ bin/lm-quant --model DIR --out FILE
 
 ## Troubleshooting
 
-- **Out of memory.** Use the q8 file (`--weights ~/models/qwen3.5-4b/model.q8.safetensors`)
+- **Out of memory.** Use the q8 file (`--weights /mnt/models/qwen3.5-4b/model.q8.safetensors`)
   rather than the bf16 shards, and lower `--ctx`. Close other programs and re-run
   `scripts/doctor.sh` to see MemAvailable.
 - **Slow.** Confirm the model directory is on the SSD (doctor reports the device). Use q8,
-  not bf16: bf16 streams from disk on this 8 GB box and is slower.
+  not bf16: bf16 is exact but about half the speed.
 - **FAIL on a model file.** The size does not match the pinned checkpoint. Move the file
   aside and run `scripts/download-model.sh --model qwen3.5-4b` again.
 
