@@ -61,8 +61,9 @@ What this means for the engine:
 | Qwen3.5-4B | ~4.2 B | 9.32 GB bf16, 2 shards | phase 1, implemented | Gated DeltaNet linear attention, three layers to one full attention |
 | Gemma 4 E4B | ~4 B core + per-layer embeddings | 15.99 GB bf16, 1 file | phase 2, implemented | per-layer embeddings, KV sharing across layers, logit softcap 30 |
 
-Both are Apache-2.0 and ungated. Vision, audio and Qwen's MTP head are out of scope; the
-engine is text only.
+Both are Apache-2.0 and ungated. Vision and audio are out of scope; the engine is text only.
+Qwen's multi-token-prediction (MTP) head is used for speculative greedy decoding in `lm-run
+--mtp` (see below).
 
 ## Ubuntu Server installation
 
@@ -568,6 +569,7 @@ but token ids goes to stdout.
 ```
 bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
            [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]
+           [--mtp [--mtp-out F]]
 ```
 
 The prompt goes through `lm_prefill` (chunks of 32 tokens, each weight read once per chunk)
@@ -576,6 +578,15 @@ bit-identical either way, `--no-prefill` is for timing the difference. `--profil
 stderr where the time went, for the prompt and for the generation: weight multiplies, linear
 attention (conv and delta rule), attention, and the rest (norms, residuals, embeddings). The
 ids on stdout are unchanged.
+
+`--mtp` (Qwen3.5 only) decodes greedily with speculation: Qwen's MTP head drafts the next
+token, and one two-token forward checks the current token and the draft together. A wrong
+draft is thrown away and the model state rolled back, so the ids are exactly those of plain
+`--greedy`; stderr reports how many drafts were accepted. `--mtp-out F` writes the head's
+draft logits for every prompt position but the last (the golden gate checks them). The head
+needs the `mtp.*` tensors: a q8 file written by an older `lm-quant` has none and must be
+written again. For Qwen3.5-4B the head adds about 125 MB of q8 weights, 8 KiB of cache per
+token, and about 50 MiB for the rollback state. Not yet in `lm-chat` or `lm-serve`.
 
 ### bin/lm-quant
 

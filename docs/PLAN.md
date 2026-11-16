@@ -12,7 +12,8 @@ kimi-k3-in-c, replacing the earlier gpt-oss-20b plan.
 | Qwen3.5-4B | ~4.2 B | 9.32 GB bf16, 2 shards | **phase 1** | its Gated DeltaNet layers are the closest thing to the reference repo's KDA code, so the most transfers |
 | Gemma 4 E4B | ~4 B core + per-layer embeddings | 15.99 GB bf16, 1 file | phase 2 | needs pieces the reference has none of: per-layer embeddings, KV sharing across layers, logit softcap |
 
-Both Apache-2.0, ungated. Vision, audio and Qwen's MTP head are out of scope (text only).
+Both Apache-2.0, ungated. Vision and audio are out of scope (text only); Qwen's MTP head is
+used as a speculative draft (see Later).
 
 **Weights: q8 resident, bf16 exact.** bf16 Qwen is 8.4 GB of text weights, more than
 RAM. `bin/lm-quant` writes a q8 file (int8, one f32 scale per 32 weights, about
@@ -41,7 +42,8 @@ vocab 248320; tied embeddings; rms_norm_eps 1e-6; full attention 16 heads, 4 KV 
 head_dim 256, `attn_output_gate` true, rope theta 1e7, partial_rotary_factor 0.25;
 linear attention 16 key heads x 128, 32 value heads x 128, conv kernel 4.
 
-Tensor prefix `model.language_model.`; ignore `model.visual.*` and `mtp.*`. Embedding
+Tensor prefix `model.language_model.` (plus the MTP head `mtp.*`, kept since the MTP work);
+ignore `model.visual.*`. Embedding
 `embed_tokens.weight` [vocab, hidden], also the unembedding (tied). Final `norm.weight`.
 
 **RMSNorm (zero-centred):** `y = x * rsqrt(mean(x^2) + eps) * (1 + w)`. Used for
@@ -114,7 +116,7 @@ and prints one id per line on stdout. Nothing else goes to stdout.
 Tiny fixture `tests/fixtures/qwen35-tiny/`: `config.json` (real schema, nested
 `text_config`, `model_type` qwen3_5), weights in TWO shards plus
 `model.safetensors.index.json` (so sharding is tested), the real tensor names including
-a few `visual.*` and `mtp.*` tensors that must be ignored, and:
+a few `visual.*` tensors that must be ignored, a full MTP head (`mtp.*`), and:
 - `golden_bf16.json` and `golden_q8.json` = `{"tokens": [...], "logits": [[vocab] per
   token], "greedy": {"prompt": [...], "out": [...]}}` — the q8 golden is the oracle run
   on the dequantised q8 weights, so both are exact targets;
@@ -275,6 +277,28 @@ window. Same golden files, q8 file and gate as Qwen.
 
 ## Later
 
-The MTP head as a speculative draft for Qwen. Batched prefill, the OpenAI-compatible endpoint
-(`bin/lm-serve`, with `scripts/lm-serve.service`) and the prefix cache (`lm_snapshot` /
-`lm_restore`, one snapshot in `lm_chat`) are done.
+Batched prefill, the OpenAI-compatible endpoint (`bin/lm-serve`, with
+`scripts/lm-serve.service`) and the prefix cache (`lm_snapshot` / `lm_restore`, one snapshot in
+`lm_chat`) are done.
+
+**MTP speculative decoding (Qwen3.5), phase 1 done: engine and `lm-run --mtp`.** The head (as
+in vLLM's `qwen3_5_mtp.py`) takes h_p, the main model's final normed hidden at position p, and
+the token at p+1: `x = fc([norm_e(embed(t)), norm_h(h_p)])`, one full-attention decoder layer
+with its own KV cache at RoPE position p, `norm`, then the shared lm_head; it drafts p+2. All
+its norms are zero-centred.
+- Invariant: with `pos` tokens fed, the head's cache holds entries 0..pos-2 and `hlast` is
+  h_{pos-1}. Every feed or prefill chunk runs the head over the entries its tokens complete.
+- `lm_draft(token)` computes entry pos-1 into a provisional slot (the next feed writes the same
+  values there) and returns the draft logits; it changes nothing else.
+- `lm_verify(tokens, n <= 2)` feeds n tokens as one batch, returns every row, and checkpoints
+  the linear-attention state (conv and delta-rule S) after each token but the last.
+- `lm_accept(k)` keeps the first k: it restores the checkpoint, `hlast` and `pos`. Full
+  attention needs no rollback (slots past pos are rewritten before they are read).
+- Oracle: speculative greedy gives exactly the plain greedy ids; `tests/unit/test_mtp.c`
+  checks draft, verify and accept bit-exact against plain decoding, and `check_golden.py`
+  checks the head's rows against `ref_qwen35.Model.mtp_rows`.
+- Cost on the i5: a two-token verify is about 1.1 forwards and a draft about 0.16 (mostly the
+  lm_head), so 70-80% accepted drafts would give about 1.3-1.4x. Not measured yet.
+- Next: phase 2, `lm_chat` / `lm-serve` with speculative sampling (rejection sampling when
+  temperature > 0); phase 3, measure the acceptance rate and speed on the server (needs the
+  q8 file written again).
