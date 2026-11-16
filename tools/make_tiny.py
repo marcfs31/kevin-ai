@@ -3,7 +3,8 @@
 tests/fixtures/README.md).
 
     make_tiny.py                 write the fixture with the committed SEED
-    make_tiny.py --check         regenerate in memory, fail unless byte-identical to the files on disk
+    make_tiny.py --check         regenerate in memory, fail unless identical to the files on disk (JSON floats within
+                         a few ulps, see fixture_cmp.py)
     make_tiny.py --find-seed [N] search seeds N, N+1, ... until every margin holds; print the first
 
 Everything is derived from `random.Random(seed)` (Mersenne Twister: stable across Python
@@ -31,6 +32,7 @@ import random
 import sys
 import tempfile
 
+import fixture_cmp
 import quant_ref
 import ref_qwen35 as ref
 import safetensors as st
@@ -327,8 +329,9 @@ def main(argv=None):
                 bad.append("missing " + name)
             else:
                 with open(path, "rb") as f:
-                    if f.read() != data:
-                        bad.append("differs " + name)
+                    msg = fixture_cmp.diff(name, f.read(), data)
+                if msg:
+                    bad.append("differs " + msg)
         if os.path.isdir(a.out):
             bad += ["unexpected " + n for n in sorted(os.listdir(a.out)) if n not in files]
         else:
@@ -336,7 +339,7 @@ def main(argv=None):
         if bad:
             print("make_tiny --check FAILED: " + "; ".join(bad), file=sys.stderr)
             return 1
-        print("make_tiny --check OK: %d files byte-identical (seed %d, min gap bf16 %.4g q8 %.4g)"
+        print("make_tiny --check OK: %d files identical (seed %d, min gap bf16 %.4g q8 %.4g)"
               % (len(files), SEED, info["min_gap_bf16"], info["min_gap_q8"]))
         return 0
     os.makedirs(a.out, exist_ok=True)

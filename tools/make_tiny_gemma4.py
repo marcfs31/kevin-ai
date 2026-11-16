@@ -3,7 +3,8 @@
 tests/fixtures/README.md).
 
     make_tiny_gemma4.py                 write the fixture with the committed SEED
-    make_tiny_gemma4.py --check         regenerate in memory, fail unless byte-identical to the files on disk
+    make_tiny_gemma4.py --check         regenerate in memory, fail unless identical to the files on disk (JSON floats within
+                         a few ulps, see fixture_cmp.py)
     make_tiny_gemma4.py --find-seed [N] search seeds N, N+1, ... until every margin holds; print the first
 
 Everything is derived from `random.Random(seed)` plus the float64 oracle in ref_gemma4.py, so the
@@ -30,6 +31,7 @@ import random
 import sys
 import tempfile
 
+import fixture_cmp
 import quant_ref
 import ref_gemma4 as ref
 import safetensors as st
@@ -301,8 +303,9 @@ def main(argv=None):
                 bad.append("missing " + name)
             else:
                 with open(path, "rb") as f:
-                    if f.read() != data:
-                        bad.append("differs " + name)
+                    msg = fixture_cmp.diff(name, f.read(), data)
+                if msg:
+                    bad.append("differs " + msg)
         if os.path.isdir(a.out):
             bad += ["unexpected " + n for n in sorted(os.listdir(a.out)) if n not in files]
         else:
@@ -310,7 +313,7 @@ def main(argv=None):
         if bad:
             print("make_tiny_gemma4 --check FAILED: " + "; ".join(bad), file=sys.stderr)
             return 1
-        print("make_tiny_gemma4 --check OK: %d files byte-identical (seed %d, min gap bf16 %.4g q8 %.4g)"
+        print("make_tiny_gemma4 --check OK: %d files identical (seed %d, min gap bf16 %.4g q8 %.4g)"
               % (len(files), SEED, info["min_gap_bf16"], info["min_gap_q8"]))
         return 0
     os.makedirs(a.out, exist_ok=True)

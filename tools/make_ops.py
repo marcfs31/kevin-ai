@@ -2,7 +2,8 @@
 """Deterministic generator for tests/fixtures/ops/*.json (schemas: tests/fixtures/README.md).
 
     make_ops.py            write the fixtures
-    make_ops.py --check    regenerate in memory, fail unless byte-identical to the files on disk
+    make_ops.py --check    regenerate in memory, fail unless identical to the files on disk (JSON floats within
+                         a few ulps, see fixture_cmp.py)
 
 All expected values come from the float64 oracles in ref_qwen35.py and ref_gemma4.py. Inputs (activations) are
 rounded to f32 and weights to bf16, so a C test reads exactly the numbers the oracle used;
@@ -17,6 +18,7 @@ import random
 import struct
 import sys
 
+import fixture_cmp
 import quant_ref
 import ref_gemma4 as gem
 import ref_qwen35 as ref
@@ -400,14 +402,15 @@ def main(argv=None):
                 bad.append("missing " + name)
             else:
                 with open(path, "rb") as f:
-                    if f.read() != data:
-                        bad.append("differs " + name)
+                    msg = fixture_cmp.diff(name, f.read(), data)
+                if msg:
+                    bad.append("differs " + msg)
         if os.path.isdir(a.out):
             bad += ["unexpected " + n for n in sorted(os.listdir(a.out)) if n not in files]
         if bad:
             print("make_ops --check FAILED: " + "; ".join(bad), file=sys.stderr)
             return 1
-        print("make_ops --check OK: %d files byte-identical" % len(files))
+        print("make_ops --check OK: %d files identical" % len(files))
         return 0
     os.makedirs(a.out, exist_ok=True)
     for name, data in files.items():

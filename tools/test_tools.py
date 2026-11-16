@@ -21,6 +21,7 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
 
 import check_golden  # noqa: E402
+import fixture_cmp  # noqa: E402
 import make_ops  # noqa: E402
 import make_tiny  # noqa: E402
 import make_tiny_gemma4  # noqa: E402
@@ -523,13 +524,37 @@ class ModelTests(unittest.TestCase):
                 self.assertAlmostEqual(a, b, delta=1e-6 * max(1, abs(b)))
 
 
+class FixtureCmpTests(unittest.TestCase):
+    def test_equal_bytes_agree(self):
+        self.assertIsNone(fixture_cmp.diff("a.bin", b"xy", b"xy"))
+
+    def test_last_digit_libm_difference_is_accepted(self):
+        a = 0.9206484225686468
+        b = math.nextafter(a, 1.0)
+        self.assertIsNone(fixture_cmp.diff("r.json", json.dumps({"y": [a, 2]}).encode(), json.dumps({"y": [b, 2]}).encode()))
+
+    def test_real_differences_fail(self):
+        x = json.dumps({"y": [0.5, 2], "s": "a"}).encode()
+        for other, needle in ((json.dumps({"y": [0.5 + 1e-12, 2], "s": "a"}), "ulps"),
+                              (json.dumps({"y": [0.5, 3], "s": "a"}), "2 != 3"),
+                              (json.dumps({"y": [0.5], "s": "a"}), "length"),
+                              (json.dumps({"s": "a", "y": [0.5, 2]}), "keys"),
+                              (json.dumps({"y": [0.5, 2.0], "s": "a"}), "int != float"),
+                              (json.dumps({"y": [0.5, 2], "s": "b"}), "'a' != 'b'"),
+                              (json.dumps({"y": [0.5, 2], "s": "a"}, indent=1), "formatting")):
+            with self.subTest(needle):
+                self.assertIn(needle, fixture_cmp.diff("f.json", x, other.encode()))
+        self.assertIn("bytes differ", fixture_cmp.diff("f.safetensors", b"\x00\x01", b"\x00\x02"))
+        self.assertIn("not JSON", fixture_cmp.diff("f.json", b"{", b"{}"))
+
+
 class FixtureTests(unittest.TestCase):
     def test_tiny_fixture_is_reproducible_and_small(self):
         files, info = make_tiny.build(make_tiny.SEED)
         total = 0
         self.assertEqual(sorted(files), sorted(os.listdir(TINY)))
         for name, data in files.items():
-            self.assertEqual(rbytes(os.path.join(TINY, name)), data, name)
+            self.assertIsNone(fixture_cmp.diff(name, rbytes(os.path.join(TINY, name)), data))
             total += len(data)
         self.assertLess(total, 2 * 1024 * 1024)
         self.assertGreater(info["min_gap_bf16"], 1e-2)
@@ -539,7 +564,7 @@ class FixtureTests(unittest.TestCase):
         files = make_ops.build()
         self.assertEqual(sorted(files), sorted(os.listdir(OPS)))
         for name, data in files.items():
-            self.assertEqual(rbytes(os.path.join(OPS, name)), data, name)
+            self.assertIsNone(fixture_cmp.diff(name, rbytes(os.path.join(OPS, name)), data))
             self.assertLess(len(data), 1 << 20, name)
             json.loads(data)
 
@@ -1175,7 +1200,7 @@ class GemmaFixtureTests(unittest.TestCase):
         self.assertEqual(sorted(files), sorted(os.listdir(GTINY)))
         total = 0
         for name, data in files.items():
-            self.assertEqual(rbytes(os.path.join(GTINY, name)), data, name)
+            self.assertIsNone(fixture_cmp.diff(name, rbytes(os.path.join(GTINY, name)), data))
             total += len(data)
         self.assertLess(total, 4 * 1024 * 1024)
         self.assertGreater(info["min_gap_bf16"], make_tiny_gemma4.MIN_GAP)
@@ -1309,7 +1334,7 @@ class GemmaFixtureTests(unittest.TestCase):
                 "full_attention_layer", "linear_attention_layer", "mlp", "q8_quantize"]
         files = make_ops.build()
         for name in qwen:
-            self.assertEqual(files[name + ".json"], rbytes(os.path.join(OPS, name + ".json")), name)
+            self.assertIsNone(fixture_cmp.diff(name + ".json", rbytes(os.path.join(OPS, name + ".json")), files[name + ".json"]))
         self.assertEqual(sorted(n for n in files if n[:-5] not in qwen),
                          ["gelu_tanh.json", "gelu_tanh_mul.json", "gemma_rmsnorm.json", "gemma_rope.json",
                           "logit_softcap.json", "sliding_attention.json"])
