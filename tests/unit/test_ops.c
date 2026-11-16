@@ -3,8 +3,6 @@
  * wrong delta-rule order, non-causal attention) does NOT produce the same numbers. The
  * oracle fixtures under tests/fixtures/ops/ are wired in by the model tests, not here.
  * Style follows kimi-k3-in-c tests/unit/test_ops.c (Apache-2.0). */
-#include <string.h>
-
 #include "lm_test.h"
 
 #include "core/lm_ops.h"
