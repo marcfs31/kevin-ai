@@ -346,7 +346,7 @@ static inline float hsum8_avx2(__m256 acc)
     return _mm_cvtss_f32(lo);
 }
 
-/* The single-token row of lm_matvec_q8, for the tokens left over after the 4-token tiles. */
+/* The single-token row of lm_matvec_q8, for a token left over after the 4- and 2-token tiles. */
 static inline float q8_row_avx2(const int8_t *qr, const float *sr, const float *x, int ng)
 {
     __m256 acc = _mm256_setzero_ps();
@@ -358,14 +358,15 @@ static inline float q8_row_avx2(const int8_t *qr, const float *sr, const float *
     return hsum8_avx2(acc);
 }
 
-/* One row against the 4 tokens at x0 (rows `in` apart), groups g0..g1-1, continuing the
- * accumulators in acc[0..3]. Per token exactly the single-token sequence:
- * t = fma(w_j, x_j, t) for j = 0..3, then acc = fma(t, scale, acc). */
-static inline void q8_tile4_avx2(__m256 *acc, const float *x0, int in, const int8_t *qr, const float *sr,
-                                 int g0, int g1)
+/* One row against the nt (2 or 4) tokens at x0 (rows `in` apart), groups g0..g1-1, continuing
+ * the accumulators in acc[0..nt-1]. Per token exactly the single-token sequence:
+ * t = fma(w_j, x_j, t) for j = 0..3, then acc = fma(t, scale, acc). nt is a constant at every
+ * call, so the unused half folds away. */
+static inline void q8_tile_avx2(__m256 *acc, const float *x0, int in, const int8_t *qr, const float *sr,
+                                int g0, int g1, int nt)
 {
-    const float *x1 = x0 + in, *x2 = x1 + in, *x3 = x2 + in;
-    __m256 a0 = acc[0], a1 = acc[1], a2 = acc[2], a3 = acc[3];
+    const float *x1 = x0 + in, *x2 = nt == 4 ? x1 + in : x1, *x3 = nt == 4 ? x2 + in : x1;
+    __m256 a0 = acc[0], a1 = acc[1], a2 = nt == 4 ? acc[2] : a0, a3 = nt == 4 ? acc[3] : a0;
     for (int g = g0; g < g1; g++) {
         const int8_t *qg = qr + (size_t)g * LM_Q8_GROUP;
         const size_t off = (size_t)g * LM_Q8_GROUP;
@@ -384,11 +385,14 @@ static inline void q8_tile4_avx2(__m256 *acc, const float *x0, int in, const int
     } while (0)
         LM_TOKEN_STEP(x0, a0);
         LM_TOKEN_STEP(x1, a1);
-        LM_TOKEN_STEP(x2, a2);
-        LM_TOKEN_STEP(x3, a3);
+        if (nt == 4) {
+            LM_TOKEN_STEP(x2, a2);
+            LM_TOKEN_STEP(x3, a3);
+        }
 #undef LM_TOKEN_STEP
     }
-    acc[0] = a0; acc[1] = a1; acc[2] = a2; acc[3] = a3;
+    acc[0] = a0; acc[1] = a1;
+    if (nt == 4) { acc[2] = a2; acc[3] = a3; }
 }
 #elif defined(LM_HAVE_NEON)
 static inline float hsum8_neon(float32x4_t lo, float32x4_t hi)
@@ -418,12 +422,12 @@ static inline float q8_row_neon(const int8_t *qr, const float *sr, const float *
 }
 
 /* acc holds, per token, the low and high halves: acc[2k], acc[2k+1]. */
-static inline void q8_tile4_neon(float32x4_t *acc, const float *x0, int in, const int8_t *qr, const float *sr,
-                                 int g0, int g1)
+static inline void q8_tile_neon(float32x4_t *acc, const float *x0, int in, const int8_t *qr, const float *sr,
+                                int g0, int g1, int nt)
 {
     const float *xs[LM_MATMUL_TB];
     float32x4_t alo[LM_MATMUL_TB], ahi[LM_MATMUL_TB];
-    for (int k = 0; k < LM_MATMUL_TB; k++) {
+    for (int k = 0; k < nt; k++) {
         xs[k] = x0 + (size_t)k * in;
         alo[k] = acc[2 * k];
         ahi[k] = acc[2 * k + 1];
@@ -440,7 +444,7 @@ static inline void q8_tile4_neon(float32x4_t *acc, const float *x0, int in, cons
             wh[j] = vcvtq_f32_s32(vmovl_s16(vget_high_s16(s)));
         }
         const float32x4_t sv = vdupq_n_f32(sr[g]);
-        for (int k = 0; k < LM_MATMUL_TB; k++) {
+        for (int k = 0; k < nt; k++) {
             float32x4_t tlo = vdupq_n_f32(0.0f), thi = vdupq_n_f32(0.0f);
             for (int j = 0; j < 4; j++) {
                 tlo = vfmaq_f32(tlo, wl[j], vld1q_f32(xs[k] + off + 8 * j));
@@ -450,7 +454,7 @@ static inline void q8_tile4_neon(float32x4_t *acc, const float *x0, int in, cons
             ahi[k] = vfmaq_f32(ahi[k], thi, sv);
         }
     }
-    for (int k = 0; k < LM_MATMUL_TB; k++) {
+    for (int k = 0; k < nt; k++) {
         acc[2 * k] = alo[k];
         acc[2 * k + 1] = ahi[k];
     }
@@ -463,6 +467,7 @@ int lm_matmul_q8(float *Y, const float *X, int T, const int8_t *q, const float *
     if (in < 0 || in % LM_Q8_GROUP != 0 || T < 0) return -1;
     const int ng = in / LM_Q8_GROUP;
     const int Tfull = T - T % LM_MATMUL_TB;
+    const int Tpair = Tfull + (T - Tfull) / 2 * 2; /* then one 2-token tile (an lm_verify of 2 is all of it) */
     const int nrb = (out + LM_MATMUL_RB - 1) / LM_MATMUL_RB;
     /* Rows in blocks, then token tiles, then input slices, then rows of the block. Each (row, token)
      * accumulator still sees its groups in order 0..ng-1 (it is parked in acc between slices,
@@ -474,36 +479,48 @@ int lm_matmul_q8(float *Y, const float *X, int T, const int8_t *q, const float *
     for (int rb = 0; rb < nrb; rb++) {
         const int o0 = rb * LM_MATMUL_RB, o1 = o0 + LM_MATMUL_RB < out ? o0 + LM_MATMUL_RB : out;
 #if defined(LM_HAVE_AVX2)
-        for (int t0 = 0; t0 < Tfull; t0 += LM_MATMUL_TB) {
+        int nt = LM_MATMUL_TB;
+        for (int t0 = 0; t0 < Tpair; t0 += nt) {
+            nt = t0 < Tfull ? LM_MATMUL_TB : 2;
             __m256 acc[LM_MATMUL_RB][LM_MATMUL_TB];
             for (int r = 0; r < o1 - o0; r++)
                 for (int k = 0; k < LM_MATMUL_TB; k++) acc[r][k] = _mm256_setzero_ps();
             for (int g0 = 0; g0 < ng; g0 += LM_MATMUL_KB) {
                 const int g1 = g0 + LM_MATMUL_KB < ng ? g0 + LM_MATMUL_KB : ng;
-                for (int o = o0; o < o1; o++)
-                    q8_tile4_avx2(acc[o - o0], X + (size_t)t0 * in, in, q + (size_t)o * in, scales + (size_t)o * ng, g0, g1);
+                for (int o = o0; o < o1; o++) {
+                    const int8_t *qr = q + (size_t)o * in;
+                    const float *sr = scales + (size_t)o * ng, *xt = X + (size_t)t0 * in;
+                    if (nt == LM_MATMUL_TB) q8_tile_avx2(acc[o - o0], xt, in, qr, sr, g0, g1, LM_MATMUL_TB);
+                    else q8_tile_avx2(acc[o - o0], xt, in, qr, sr, g0, g1, 2);
+                }
             }
             for (int o = o0; o < o1; o++)
-                for (int k = 0; k < LM_MATMUL_TB; k++) Y[(size_t)(t0 + k) * out + o] = hsum8_avx2(acc[o - o0][k]);
+                for (int k = 0; k < nt; k++) Y[(size_t)(t0 + k) * out + o] = hsum8_avx2(acc[o - o0][k]);
         }
-        for (int t = Tfull; t < T; t++)
+        for (int t = Tpair; t < T; t++)
             for (int o = o0; o < o1; o++)
                 Y[(size_t)t * out + o] = q8_row_avx2(q + (size_t)o * in, scales + (size_t)o * ng, X + (size_t)t * in, ng);
 #elif defined(LM_HAVE_NEON)
-        for (int t0 = 0; t0 < Tfull; t0 += LM_MATMUL_TB) {
+        int nt = LM_MATMUL_TB;
+        for (int t0 = 0; t0 < Tpair; t0 += nt) {
+            nt = t0 < Tfull ? LM_MATMUL_TB : 2;
             float32x4_t acc[LM_MATMUL_RB][2 * LM_MATMUL_TB];
             for (int r = 0; r < o1 - o0; r++)
                 for (int k = 0; k < 2 * LM_MATMUL_TB; k++) acc[r][k] = vdupq_n_f32(0.0f);
             for (int g0 = 0; g0 < ng; g0 += LM_MATMUL_KB) {
                 const int g1 = g0 + LM_MATMUL_KB < ng ? g0 + LM_MATMUL_KB : ng;
-                for (int o = o0; o < o1; o++)
-                    q8_tile4_neon(acc[o - o0], X + (size_t)t0 * in, in, q + (size_t)o * in, scales + (size_t)o * ng, g0, g1);
+                for (int o = o0; o < o1; o++) {
+                    const int8_t *qr = q + (size_t)o * in;
+                    const float *sr = scales + (size_t)o * ng, *xt = X + (size_t)t0 * in;
+                    if (nt == LM_MATMUL_TB) q8_tile_neon(acc[o - o0], xt, in, qr, sr, g0, g1, LM_MATMUL_TB);
+                    else q8_tile_neon(acc[o - o0], xt, in, qr, sr, g0, g1, 2);
+                }
             }
             for (int o = o0; o < o1; o++)
-                for (int k = 0; k < LM_MATMUL_TB; k++)
+                for (int k = 0; k < nt; k++)
                     Y[(size_t)(t0 + k) * out + o] = hsum8_neon(acc[o - o0][2 * k], acc[o - o0][2 * k + 1]);
         }
-        for (int t = Tfull; t < T; t++)
+        for (int t = Tpair; t < T; t++)
             for (int o = o0; o < o1; o++)
                 Y[(size_t)t * out + o] = q8_row_neon(q + (size_t)o * in, scales + (size_t)o * ng, X + (size_t)t * in, ng);
 #else
