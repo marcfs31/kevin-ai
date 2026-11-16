@@ -528,14 +528,26 @@ class FixtureCmpTests(unittest.TestCase):
     def test_equal_bytes_agree(self):
         self.assertIsNone(fixture_cmp.diff("a.bin", b"xy", b"xy"))
 
-    def test_last_digit_libm_difference_is_accepted(self):
-        a = 0.9206484225686468
-        b = math.nextafter(a, 1.0)
-        self.assertIsNone(fixture_cmp.diff("r.json", json.dumps({"y": [a, 2]}).encode(), json.dumps({"y": [b, 2]}).encode()))
+    def test_libm_sized_differences_are_accepted(self):
+        # seen between macOS and glibc 2.43: a few ulps, ~1e-15 after a few layers, and the 9th
+        # digit of a value rounded to 9 digits
+        for a, b in ((0.9206484225686468, math.nextafter(0.9206484225686468, 1.0)),
+                     (-0.052746952018474, -0.05274695201847405),
+                     (0.13016312995592572, 0.13016312995592594),
+                     (-9.39033843e-06, -9.39033842e-06)):
+            with self.subTest(a=a):
+                self.assertIsNone(fixture_cmp.diff("r.json", json.dumps({"y": [a, 2]}).encode(),
+                                                   json.dumps({"y": [b, 2]}).encode()))
 
     def test_real_differences_fail(self):
         x = json.dumps({"y": [0.5, 2], "s": "a"}).encode()
-        for other, needle in ((json.dumps({"y": [0.5 + 1e-12, 2], "s": "a"}), "ulps"),
+        self.assertIn("tolerance", fixture_cmp.diff("f.json", json.dumps({"y": [1e-300]}).encode(),
+                                                    json.dumps({"y": [2e-300]}).encode()))
+        self.assertIn("tolerance", fixture_cmp.diff("f.json", json.dumps({"y": [0.0]}).encode(),
+                                                    json.dumps({"y": [1e-20]}).encode()))
+        for other, needle in ((json.dumps({"y": [2e-300, 2], "s": "a"}), "tolerance"),
+                              (json.dumps({"y": [0.50000002, 2], "s": "a"}), "tolerance"),
+                              (json.dumps({"y": [1e-20, 2], "s": "a"}), "tolerance"),
                               (json.dumps({"y": [0.5, 3], "s": "a"}), "2 != 3"),
                               (json.dumps({"y": [0.5], "s": "a"}), "length"),
                               (json.dumps({"s": "a", "y": [0.5, 2]}), "keys"),
@@ -544,6 +556,7 @@ class FixtureCmpTests(unittest.TestCase):
                               (json.dumps({"y": [0.5, 2], "s": "a"}, indent=1), "formatting")):
             with self.subTest(needle):
                 self.assertIn(needle, fixture_cmp.diff("f.json", x, other.encode()))
+        self.assertIn("tolerance", fixture_cmp.diff("f.json", b"[-9.39033843e-06]", b"[-9.39034843e-06]"))
         self.assertIn("bytes differ", fixture_cmp.diff("f.safetensors", b"\x00\x01", b"\x00\x02"))
         self.assertIn("not JSON", fixture_cmp.diff("f.json", b"{", b"{}"))
 

@@ -2,15 +2,19 @@
 
 The generators print float64 results of math.exp, math.cos and friends, and those are not
 correctly rounded: macOS's libm and glibc can differ in the last bit, so a JSON fixture made on
-one can differ from the same run on the other in the 16th or 17th digit. Bytes must match
-exactly, except that in a .json file two numbers may differ by at most MAX_ULPS units in the
-last place; the structure, every key, every string and every integer must still be identical.
+one can differ from the same run on the other. Through a few layers the difference grows to
+about 1e-15 relative, and a value rounded to 9 significant digits can then flip its last digit.
+Bytes must match exactly, except that in a .json file two floats may differ by REL_TOL of the
+larger (one unit in the 9th digit is at most 1e-8 of the value); the structure, every key,
+every string and every integer must still be identical. REL_TOL is far below what any
+consumer of the fixtures can see (the C tests allow 2e-4 of a row's largest value) and far
+above what libm can move; a zero must stay exactly zero.
 """
 
 import json
 import math
 
-MAX_ULPS = 4
+REL_TOL = 1e-8
 
 
 def _walk(a, b, where):
@@ -21,8 +25,8 @@ def _walk(a, b, where):
             return None
         if not (math.isfinite(a) and math.isfinite(b)):
             return "%s: %r != %r" % (where, a, b)
-        tol = MAX_ULPS * math.ulp(max(abs(a), abs(b)))
-        return None if abs(a - b) <= tol else "%s: %r != %r (more than %d ulps)" % (where, a, b, MAX_ULPS)
+        tol = REL_TOL * max(abs(a), abs(b))
+        return None if abs(a - b) <= tol else "%s: %r != %r (beyond the tolerance)" % (where, a, b)
     if type(a) is not type(b):
         return "%s: %s != %s" % (where, type(a).__name__, type(b).__name__)
     if isinstance(a, dict):
