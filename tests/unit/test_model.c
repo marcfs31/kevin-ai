@@ -6,6 +6,7 @@
 #include "lm_test.h"
 
 #include "lm/lm.h"
+#include "io/lm_sysmem.h"
 
 #define FIX "tests/fixtures/qwen35-tiny"
 #include <limits.h>
@@ -88,6 +89,18 @@ static void test_invariants(const char *weights, const char *label)
     lm_close(m);
 
     /* a full context window: LM_ERR_CTX, nothing fed, the cached state is not disturbed */
+    {   /* a window whose state cannot fit in this machine's memory is refused before allocating */
+        uint64_t avail;
+        if (lm_mem_available(&avail) == LM_MEM_OK) {
+            char err[512] = "";
+            LmOpts big = { weights, 1 << 30, 0, 0, 0 };
+            LmModel *b = lm_open(FIX, &big, err, sizeof err);
+            CHECK(b == NULL);
+            CHECK_MSG(strstr(err, "-token context needs") != NULL, "%s", err);
+            lm_close(b);
+        }
+    }
+
     m = open_model(weights, 5);
     CHECK(m && lm_n_ctx(m) == 5);
     if (m) {

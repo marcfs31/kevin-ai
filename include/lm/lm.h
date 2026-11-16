@@ -30,7 +30,11 @@ enum {
 typedef struct {
     const char *weights; /* path to the weights: a q8 file from lm-quant, or NULL for the
                             bf16 safetensors in model_dir (sharded, with index) */
-    int ctx;             /* positions the KV cache can hold. 0 = 4096 */
+    int ctx;             /* positions the KV cache can hold. 0 = the largest window that keeps
+                            the weights and the state in free memory, up to the model's
+                            max_position_embeddings (4096 when free memory is unknown or the
+                            weights do not fit). A window whose state does not fit is refused.
+                            lm_n_ctx gives the window chosen. */
     int threads;         /* 0 = the OpenMP default */
     int q8_int8_acts;    /* 1 = fast path: round the activations of every q8 matrix multiply to
                             int8 (per group of 32). Faster, NOT bit-identical to 0 and slightly

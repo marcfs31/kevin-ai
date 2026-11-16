@@ -24,7 +24,8 @@
 
 typedef struct LmGemma LmGemma;
 
-/* weights: a q8 file or NULL for the bf16 checkpoint in model_dir. ctx > 0. NULL on failure
+/* weights: a q8 file or NULL for the bf16 checkpoint in model_dir. ctx: 0 = automatic,
+ * see lm_ctx.h. NULL on failure
  * with a message in err. */
 LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, int fast, char *err, size_t errlen);
 void     lm_gemma_close(LmGemma *g);

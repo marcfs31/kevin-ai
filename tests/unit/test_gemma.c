@@ -7,6 +7,7 @@
 #include "lm_test.h"
 
 #include "lm/lm.h"
+#include "io/lm_sysmem.h"
 #include "json.h"
 #include "model/lm_gemma.h"
 #include "model/lm_gemma_config.h"
@@ -174,6 +175,17 @@ static void test_family(const char *weights, const char *golden, const char *lab
      * below the sliding window (ring of 5), ctx 12 is above it (ring of 8, wrapped), ctx 40 holds
      * the whole golden: every prefix is bitwise equal to the ctx 4096 run, so the ring and the
      * mask are independent of how big the cache is */
+    {   /* a window whose state cannot fit in this machine's memory is refused before allocating */
+        uint64_t avail;
+        if (lm_mem_available(&avail) == LM_MEM_OK) {
+            char err[512] = "";
+            LmOpts big = { weights, 1 << 30, 0, 0, 0 };
+            LmModel *b = lm_open(FIX, &big, err, sizeof err);
+            CHECK(b == NULL);
+            CHECK_MSG(strstr(err, "-token context needs") != NULL, "%s", err);
+            lm_close(b);
+        }
+    }
     static const int ctxs[3] = { 5, 12, 40 };
     for (int ci = 0; ci < 3; ci++) {
         const int ctx = ctxs[ci];
@@ -512,7 +524,7 @@ static void test_e4b_memory(void)
         "{\"model_type\":\"gemma4\",\"tie_word_embeddings\":true,\"text_config\":{\"model_type\":\"gemma4_text\","
         "\"hidden_size\":2560,\"intermediate_size\":10240,\"num_hidden_layers\":42,\"vocab_size\":262144,"
         "\"vocab_size_per_layer_input\":262144,\"rms_norm_eps\":1e-06,\"num_attention_heads\":8,\"num_key_value_heads\":2,"
-        "\"head_dim\":256,\"global_head_dim\":512,\"hidden_activation\":\"gelu_pytorch_tanh\",\"sliding_window\":512,"
+        "\"head_dim\":256,\"global_head_dim\":512,\"max_position_embeddings\":131072,\"hidden_activation\":\"gelu_pytorch_tanh\",\"sliding_window\":512,"
         "\"num_kv_shared_layers\":18,\"hidden_size_per_layer_input\":256,\"final_logit_softcapping\":30.0,"
         "\"tie_word_embeddings\":true,\"enable_moe_block\":false,\"attention_k_eq_v\":false,\"use_double_wide_mlp\":false,"
         "\"attention_bias\":false,\"use_bidirectional_attention\":null,\"num_global_key_value_heads\":null,"
@@ -524,7 +536,7 @@ static void test_e4b_memory(void)
     LmGemmaCfg c;
     char err[512] = "";
     CHECK_MSG(lm_gemma_config_load(P("e4b"), &c, err, sizeof err) == 0, "real E4B config: %s", err);
-    CHECK(c.first_shared == 24 && c.kv_shared == 18 && c.ple_dim == 256);
+    CHECK(c.first_shared == 24 && c.kv_shared == 18 && c.ple_dim == 256 && c.max_pos == 131072);
     CHECK(c.producer[24] == 22 && c.producer[29] == 23 && c.producer[30] == 22 && c.producer[41] == 23 && c.producer[0] == 0);
     CHECK(c.embed_scale == 50.5f && c.ple_scale == 16.0f);
 

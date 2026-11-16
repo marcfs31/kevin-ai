@@ -37,6 +37,7 @@ const LmTensor *lm_bind_need(LmBind *b, const char *name, int ndim, int64_t d0, 
                 (long long)d0, (long long)d1);
         return NULL;
     }
+    b->bytes += (uint64_t)t->nbytes;
     return t;
 }
 

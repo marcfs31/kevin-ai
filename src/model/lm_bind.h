@@ -20,6 +20,7 @@ typedef struct {
     LmSt   st;
     int    q8;                 /* weights come from an lm-q8 file */
     int    fast;               /* set before binding: q8 matrices multiply with int8 activations */
+    uint64_t bytes;            /* file bytes of every tensor bound so far: what stays resident */
     void **owned;
     int    nowned, capowned;
 } LmBind;

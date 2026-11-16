@@ -508,7 +508,10 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 ```
 
 - Thinking is off by default (`--no-think`). A thinking block costs many tokens at this speed.
-- `--stats` prints tokens/s to stderr.
+- `--stats` prints tokens/s to stderr, and the context window chosen.
+- `--ctx N` sets the context window. Without it the window is the largest that keeps the
+  weights and the caches in free memory, up to the model's limit; a window that does not fit
+  is refused with the largest that does.
 - Without `--max-tokens` an answer runs until the model stops or the context fills; Ctrl-C
   ends it early.
 - `--fast` (experimental, needs a q8 `--weights` file) rounds the activations of every matrix
@@ -608,7 +611,7 @@ scripts/doctor.sh [--read-speed] [MODEL_DIR]
 
 ## Troubleshooting
 
-- **Out of memory.** Use the q8 file, not bf16. Lower `--ctx`. Close other programs and
+- **Out of memory.** Use the q8 file, not bf16. Leave out `--ctx` (it then fits free memory) or lower it. Close other programs and
   check `scripts/doctor.sh` for available memory. A swap file helps as a safety margin.
 - **Slow.** Keep the model directory on the SSD, not the HDD. Use q8 rather than bf16. Then
   check the `cpu clock` line of `scripts/doctor.sh` (next entry).

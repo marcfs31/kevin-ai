@@ -21,6 +21,7 @@ typedef struct {
     int    rot;                   /* rotary dims per head = (int)(head_dim * partial_rotary_factor) */
     int    lk_heads, lv_heads, lk_dim, lv_dim, conv_k;
     int    tied;                  /* tie_word_embeddings */
+    int    max_pos;               /* max_position_embeddings */
     int    key_dim, value_dim, conv_dim;   /* derived */
 } LmCfg;
 
