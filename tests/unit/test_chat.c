@@ -120,7 +120,9 @@ static int fk_restore(void *c, void *snap)
     return LM_OK;
 }
 static void fk_drop(void *c, void *snap) { ((Fake *)c)->drops++; ((Fake *)c)->live--; free(snap); }
+static size_t fk_bytes(void *c, void *snap) { (void)c; return 1000 + (size_t)((const FkSnap *)snap)->pos; }
 static int g_use_cache; /* mk() gives the backend the prefix-cache hooks when set */
+static size_t g_cache_bytes; /* and this budget */
 static void fk_reset(void *c) { Fake *f = (Fake *)c; f->pos = 0; f->resets++; f->nlog = 0; }
 static int fk_pos(void *c) { return ((Fake *)c)->pos; }
 
@@ -149,7 +151,9 @@ static LmChat *mk(Fake *f, int thinking, int strict, const char *system)
     cc.tok = g_tok;
     cc.tpl = g_tpl;
     cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos, g_use_prefill ? fk_prefill : NULL,
-                              g_use_cache ? fk_save : NULL, g_use_cache ? fk_restore : NULL, g_use_cache ? fk_drop : NULL };
+                              g_use_cache ? fk_save : NULL, g_use_cache ? fk_restore : NULL, g_use_cache ? fk_drop : NULL,
+                              g_use_cache ? fk_bytes : NULL };
+    cc.cache_bytes = g_cache_bytes;
     cc.temperature = 0;
     cc.top_p = 1;
     cc.seed = 1;
@@ -484,7 +488,7 @@ static void test_same_seed_same_text(void)
         LmChatConfig cc;
         memset(&cc, 0, sizeof cc);
         cc.tok = g_tok; cc.tpl = g_tpl;
-        cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL, NULL, NULL, NULL };
+        cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL, NULL, NULL, NULL, NULL };
         cc.temperature = 1.0; cc.top_p = 0.9; cc.top_k = 5; cc.seed = 42;
         char err[100];
         LmChat *c = lm_chat_new(&cc, err, sizeof err);
@@ -737,6 +741,64 @@ static void test_prefix_cache_sync(void)
     g_use_cache = 0;
 }
 
+/* lm-serve style: each request is one conversation with its own system prompt */
+static int conv(LmChat *c, Fake *f, const char *system, const char *user, LmTurn *t)
+{
+    char err[200];
+    LmMsg m[] = { { LM_ROLE_SYSTEM, system, NULL, NULL, 0, 0 } };
+    if (lm_chat_sync(c, m, 1, err, sizeof err) != 0) return -1;
+    script(f, "Hello", "<|im_end|>", NULL);
+    return turn(c, user, 0, t, NULL, NULL);
+}
+
+static void test_prefix_cache_slots(void)
+{
+    const char *A = "You are terse. Answer in one short line.", *B = "You are verbose. Answer in many long lines.",
+               *C = "You are a pirate. Answer like one, briefly.";
+    const int LA = shared_prefix(A), LB = shared_prefix(B), LC = shared_prefix(C);
+    g_use_cache = 1;
+    g_cache_bytes = 2 * 1000 + LA + LB + 50;   /* room for two snapshots (fk_bytes: 1000 + ids), not three */
+    Fake f, o;
+    fake_init(&f, 4096);
+    LmChat *c = mk(&f, 0, 0, NULL);
+    LmTurn t;
+    /* A is cached after its second conversation, as with one slot */
+    CHECK(conv(c, &f, A, "Hi", &t) == LM_OK && conv(c, &f, A, "Yo", &t) == LM_OK && lm_chat_cache_slots(c) == 1);
+    /* B gets its own slot and A's stays */
+    CHECK(conv(c, &f, B, "Hi", &t) == LM_OK && conv(c, &f, B, "Yo", &t) == LM_OK);
+    CHECK(lm_chat_cache_slots(c) == 2 && lm_chat_cached(c) == LB && f.maxlive == 2);
+    CHECK(lm_chat_cache_bytes(c) == 2000 + (size_t)LA + LB);
+    /* alternating clients restore each time: no saves, the state as if fed */
+    const int saves = f.saves;
+    for (int k = 0; k < 2; k++) {
+        CHECK(conv(c, &f, A, "Hey", &t) == LM_OK && t.n_cached == LA && lm_chat_cached(c) == LA);
+        oracle(&o, A, "Hey");
+        CHECK(same_state(&f, &o));
+        CHECK(conv(c, &f, B, "Hey", &t) == LM_OK && t.n_cached == LB && lm_chat_cached(c) == LB);
+        oracle(&o, B, "Hey");
+        CHECK(same_state(&f, &o));
+    }
+    CHECK(f.saves == saves);
+    /* a third system prompt evicts the least recently used one (A), never past the budget */
+    CHECK(conv(c, &f, C, "Hi", &t) == LM_OK && conv(c, &f, C, "Yo", &t) == LM_OK);
+    CHECK(lm_chat_cache_slots(c) == 2 && lm_chat_cached(c) == LC && lm_chat_cache_bytes(c) <= g_cache_bytes);
+    CHECK(f.live == 2);
+    CHECK(conv(c, &f, B, "Hey", &t) == LM_OK && t.n_cached == LB);
+    CHECK(conv(c, &f, A, "Hey", &t) == LM_OK && t.n_cached == 0);   /* NEGATIVE: evicted */
+    oracle(&o, A, "Hey");
+    CHECK(same_state(&f, &o));
+    /* a slot that fails to restore is dropped, the turn fed in full */
+    f.restore_fail = 1;
+    const int slots = lm_chat_cache_slots(c);
+    CHECK(conv(c, &f, B, "Hey", &t) == LM_OK && t.n_cached == 0 && lm_chat_cache_slots(c) == slots - 1);
+    oracle(&o, B, "Hey");
+    CHECK(same_state(&f, &o));
+    lm_chat_free(c);
+    CHECK(f.live == 0);
+    g_use_cache = 0;
+    g_cache_bytes = 0;
+}
+
 static void test_prefix_cache_failures(void)
 {
     g_use_cache = 1;
@@ -785,13 +847,15 @@ static void test_prefix_cache_failures(void)
     CHECK(f.saves == 0 && lm_chat_cached(c) == 0);
     lm_chat_free(c);
 
-    /* the hooks come all three or none */
+    /* the hooks come all four or none */
     LmChatConfig cc;
     memset(&cc, 0, sizeof cc);
     cc.tok = g_tok; cc.tpl = g_tpl;
     fake_init(&f, 4096);
-    cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL, fk_save, fk_restore, NULL };
+    cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL, fk_save, fk_restore, NULL, fk_bytes };
     char err[100];
+    CHECK(lm_chat_new(&cc, err, sizeof err) == NULL);
+    cc.backend = (LmBackend){ &f, f.n_vocab, f.n_ctx, fk_feed, fk_reset, fk_pos, NULL, fk_save, fk_restore, fk_drop, NULL };
     CHECK(lm_chat_new(&cc, err, sizeof err) == NULL);
     g_use_cache = 0;
 }
@@ -820,6 +884,7 @@ int main(void)
     test_prefix_cache();
     test_prefix_cache_sync();
     test_prefix_cache_failures();
+    test_prefix_cache_slots();
 
     lm_template_free(g_tpl);
     lm_tok_close(g_tok);

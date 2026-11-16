@@ -60,6 +60,7 @@ static int be_pos(void *ctx) { return lm_pos((const LmModel *)ctx); }
 static void *be_save(void *ctx) { return lm_snapshot((const LmModel *)ctx); }
 static int be_restore(void *ctx, void *snap) { return lm_restore((LmModel *)ctx, (const LmSnapshot *)snap); }
 static void be_drop(void *ctx, void *snap) { (void)ctx; lm_snapshot_free((LmSnapshot *)snap); }
+static size_t be_snap_bytes(void *ctx, void *snap) { (void)ctx; return lm_snapshot_bytes((const LmSnapshot *)snap); }
 
 /* ---- output ----------------------------------------------------------------------- */
 
@@ -220,6 +221,7 @@ int main(int argc, char **argv)
     cc.backend.save = be_save;
     cc.backend.restore = be_restore;
     cc.backend.drop = be_drop;
+    cc.backend.snap_bytes = be_snap_bytes;
     cc.temperature = temperature;
     cc.top_p = top_p;
     cc.top_k = (int)top_k;
