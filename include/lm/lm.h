@@ -71,12 +71,6 @@ int  lm_feed(LmModel *m, int token, float *logits);
  * return LM_ERR_IO if a per-layer embedding row cannot be read. */
 int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
 
-/* A copy of the model state at the current position: every recurrent and conv state, the KV
- * caches up to lm_pos (whole sliding-window rings) and the position. lm_restore puts the model
- * back exactly there -- the state, and so every later logit, BIT-IDENTICAL to the moment it was
- * taken -- whatever was fed or reset in between, as often as needed. A shared prompt prefix
- * (a system prompt) is then fed once and restored instead of fed again. Size: lm_snapshot_bytes;
- * for Qwen3.5-4B about 50 MiB (conv and delta-rule state) plus 64 KiB per position. */
 /* ---- speculative decoding with the MTP head (LmOpts.mtp) ----
  * The head drafts the token after next; one batched forward checks the draft, and a rejected
  * draft is rolled back without feeding again. Greedy decoding with them gives exactly the ids
@@ -89,12 +83,26 @@ int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
  * head's lm_n_vocab() floats for the id AFTER it. Needs lm_pos >= 1. The model is unchanged. */
 int lm_draft(LmModel *m, int token, float *logits);
 /* lm_prefill of n tokens (1 <= n <= LM_VERIFY_MAX) with logits for EVERY one of them: rows is
- * n * lm_n_vocab() floats. Errors as lm_prefill, plus LM_ERR_STATE without the MTP head. */
+ * n * lm_n_vocab() floats. Errors as lm_prefill, plus LM_ERR_STATE without the MTP head, for n
+ * out of range or for rows NULL. */
 #define LM_VERIFY_MAX 2
 int lm_verify(LmModel *m, const int *tokens, int n, float *rows);
 /* Right after lm_verify: keep its first k tokens (1 <= k <= n); the model is then exactly as if
  * only those k had been fed. LM_ERR_STATE if the last call was not lm_verify. */
 int lm_accept(LmModel *m, int k);
+/* The greedy step above after lm_draft: verify {token, draft}, keep the draft if the argmax of
+ * rows[0] (lowest id wins a tie) is draft. *kept is then 2 or 1, and logits gets the row after
+ * the last kept token. rows: LM_VERIFY_MAX * lm_n_vocab() floats of scratch. Errors as
+ * lm_verify; on an error nothing is kept. */
+int lm_greedy_check(LmModel *m, int token, int draft, float *rows, float *logits, int *kept);
+
+/* A copy of the model state at the current position: every recurrent and conv state, the KV
+ * caches up to lm_pos (whole sliding-window rings) and the position. lm_restore puts the model
+ * back exactly there -- the state, and so every later logit, BIT-IDENTICAL to the moment it was
+ * taken -- whatever was fed or reset in between, as often as needed. A shared prompt prefix
+ * (a system prompt) is then fed once and restored instead of fed again. Size: lm_snapshot_bytes;
+ * for Qwen3.5-4B about 50 MiB (conv and delta-rule state) plus 64 KiB per position, 72 KiB
+ * with the MTP head. */
 
 typedef struct LmSnapshot LmSnapshot;
 LmSnapshot *lm_snapshot(const LmModel *m);                 /* NULL on allocation failure */

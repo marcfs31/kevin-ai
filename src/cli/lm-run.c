@@ -163,19 +163,15 @@ int main(int argc, char **argv)
         if (mtp && k + 1 < greedy && lm_pos(m) + 2 <= lm_n_ctx(m)) {
             /* draft the id after best, check both in one pass, keep what greedy agrees with */
             float *dl = rows + (size_t)LM_VERIFY_MAX * vocab;
+            int kept = 0;
             r = lm_draft(m, best, dl);
-            const int pair[2] = { best, r == LM_OK ? argmax(dl, vocab) : 0 };
-            if (r == LM_OK) r = lm_verify(m, pair, 2, rows);
-            if (r == LM_OK) {
-                drafts++;
-                const int ok = argmax(rows, vocab) == pair[1];
-                r = lm_accept(m, ok ? 2 : 1);
-                if (ok) {
-                    accepted++;
-                    printf("%d\n", pair[1]);
-                    k++;
-                }
-                memcpy(logits, rows + (ok ? (size_t)vocab : 0), (size_t)vocab * sizeof(float));
+            const int d = argmax(dl, vocab);
+            if (r == LM_OK) r = lm_greedy_check(m, best, d, rows, logits, &kept);
+            if (r == LM_OK) drafts++;
+            if (kept == 2) {
+                accepted++;
+                printf("%d\n", d);
+                k++;
             }
         } else {
             r = lm_feed(m, best, logits);

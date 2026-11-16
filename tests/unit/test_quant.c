@@ -221,7 +221,7 @@ static void test_checkpoint(void)
     uint16_t *conv = rand_bf16(12 * 1 * 4, 1.0f);                /* 3-D conv weight: copied */
     float alog[4] = { 0.5f, -1.0f, 2.0f, 0.25f };                /* F32, copied */
     uint16_t *vis = rand_bf16(16 * 32, 1.0f);                    /* visual: dropped */
-    uint16_t *mtp = rand_bf16(16 * 32, 1.0f);                    /* mtp: dropped */
+    uint16_t *mtp = rand_bf16(16 * 32, 1.0f);                    /* mtp: kept like the text weights */
     uint16_t *visbad = rand_bf16(8 * 30, 1.0f);                  /* visual with in=30: must be IGNORED, not an error */
     float f32w[8 * 32];                                          /* F32 2-D weight: quantised from f32 */
     for (int i = 0; i < 8 * 32; i++) f32w[i] = lt_rand();

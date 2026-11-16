@@ -574,6 +574,23 @@ int lm_accept(LmModel *m, int k)
     return LM_OK;
 }
 
+int lm_greedy_check(LmModel *m, int token, int draft, float *rows, float *logits, int *kept)
+{
+    *kept = 0;
+    const int pair[2] = { token, draft };
+    int r = lm_verify(m, pair, 2, rows);
+    if (r != LM_OK) return r;
+    const int V = m->cfg.vocab;
+    int best = 0;
+    for (int i = 1; i < V; i++) if (rows[i] > rows[best]) best = i;
+    const int k = best == draft ? 2 : 1;
+    r = lm_accept(m, k);
+    if (r != LM_OK) return r;
+    memcpy(logits, rows + (size_t)(k - 1) * V, (size_t)V * sizeof(float));
+    *kept = k;
+    return LM_OK;
+}
+
 int lm_feed(LmModel *m, int token, float *logits)
 {
     LM_TIMES_T0(t0);
