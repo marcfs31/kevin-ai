@@ -102,6 +102,7 @@ int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
         req_int(t, "linear_num_key_heads", &c->lk_heads, err, errlen) || req_int(t, "linear_num_value_heads", &c->lv_heads, err, errlen) ||
         req_int(t, "linear_key_head_dim", &c->lk_dim, err, errlen) || req_int(t, "linear_value_head_dim", &c->lv_dim, err, errlen) ||
         req_int(t, "linear_conv_kernel_dim", &c->conv_k, err, errlen) ||
+        req_int(t, "max_position_embeddings", &c->max_pos, err, errlen) ||
         req_str(t, "hidden_act", &act, err, errlen)) goto out;
 
     jval *g = json_get(t, "attn_output_gate");

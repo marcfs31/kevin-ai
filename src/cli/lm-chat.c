@@ -232,6 +232,7 @@ int main(int argc, char **argv)
 
     signal(SIGINT, on_sigint);
     Session s = { chat, { show_thinking, 0, 0, isatty(2) }, stats, (int)max_tokens };
+    if (stats) fprintf(stderr, "[context %d tokens]\n", lm_n_ctx(m));
     int status = 0;
     if (prompt) {
         status = run_turn(&s, prompt);

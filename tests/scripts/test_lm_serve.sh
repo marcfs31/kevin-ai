@@ -272,6 +272,7 @@ printf 'gamma\n/reset\ndelta\n/reset\ngamma\n' | bin/lm-chat --model "$tmp/model
     --ctx 256 --temperature 0 --max-tokens 4 --stats --system "You answer in one short line." > /dev/null 2> "$tmp/chat.err"
 check '[ "$(grep -c " 0 from cache" "$tmp/chat.err")" = 2 ] && [ "$(grep "from cache" "$tmp/chat.err" | tail -1 | grep -c " [1-9][0-9]* from cache")" = 1 ]' \
       "lm-chat did not restore the third conversation from the cache: $(grep "from cache" "$tmp/chat.err")"
+check '[ "$(grep -c "^\[context 256 tokens\]$" "$tmp/chat.err")" = 1 ]' "lm-chat --stats did not print the context window once"
 
 if [ "$fails" -ne 0 ]; then echo "test_lm_serve: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_lm_serve: $checks checks passed"

@@ -20,6 +20,7 @@ typedef struct {
     int    heads, kv_heads;
     int    head_dim, global_head_dim;   /* sliding / full attention head size */
     int    window;                      /* sliding_window */
+    int    max_pos;                     /* max_position_embeddings */
     int    ple_dim;                     /* hidden_size_per_layer_input (P) */
     int    kv_shared, first_shared;     /* num_kv_shared_layers; first reuse layer = layers - kv_shared */
     float  eps, cap;                    /* rms_norm_eps, final_logit_softcapping */

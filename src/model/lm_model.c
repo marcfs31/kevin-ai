@@ -43,6 +43,7 @@
 #include "io/lm_st.h"
 #include "model/lm_bind.h"
 #include "model/lm_config.h"
+#include "model/lm_ctx.h"
 #include "model/lm_gemma.h"
 #include "model/lm_layers.h"
 #include "model/lm_times.h"
@@ -165,6 +166,34 @@ fail:
     return -1;
 }
 
+/* Bytes lm_open allocates for a window of ctx positions: it mirrors the allocations below and
+ * in bind_mtp, so a change there changes this too. */
+typedef struct { const LmCfg *c; const LmLinDims *ld; const LmAttnDims *ad; int mtp; } QwenState;
+
+static size_t qwen_state_bytes(const void *arg, int ctx)
+{
+    const QwenState *q = (const QwenState *)arg;
+    const LmCfg *c = q->c;
+    const size_t kvd = (size_t)c->kv_heads * c->head_dim, H = (size_t)c->hidden, T = LM_PREFILL_CHUNK;
+    size_t nfull = 0;
+    for (int i = 0; i < c->layers; i++) nfull += c->layer_type[i] == LM_LAYER_FULL;
+    const size_t nlin = (size_t)c->layers - nfull;
+    size_t f = nfull * 2 * (size_t)ctx * kvd
+             + nlin * ((size_t)c->conv_dim * (size_t)(c->conv_k - 1) + 1 + (size_t)c->lv_heads * c->lk_dim * c->lv_dim);
+    size_t sc = lm_linear_scratch(q->ld);
+    const size_t sa = lm_attn_scratch(q->ad, ctx);
+    f += (sa > sc ? sa : sc) + 4 * H + lm_mlp_scratch(c->inter);
+    size_t bs = lm_linear_batch_scratch(q->ld, LM_PREFILL_CHUNK);
+    const size_t ba = lm_attn_batch_scratch(q->ad, ctx, LM_PREFILL_CHUNK), bm = lm_mlp_batch_scratch(c->inter, LM_PREFILL_CHUNK);
+    if (ba > bs) bs = ba;
+    if (bm > bs) bs = bm;
+    f += 3 * T * H + bs;
+    if (q->mtp)
+        f += 2 * (size_t)ctx * kvd + H + 4 * T * H + (size_t)LM_VERIFY_MAX * H
+           + nlin * (size_t)(LM_VERIFY_MAX - 1) * lm_linear_state_floats(q->ld);
+    return f * sizeof(float);
+}
+
 LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t errlen)
 {
     LmModel *m = (LmModel *)calloc(1, sizeof *m);
@@ -174,8 +203,6 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
     const char *weights = opts ? opts->weights : NULL;
     int ctx = opts ? opts->ctx : 0;
     if (ctx < 0) { lm_fail(err, errlen, "ctx must not be negative"); free(m); return NULL; }
-    if (ctx == 0) ctx = 4096;
-    m->ctx = ctx;
     const int fast = opts ? opts->q8_int8_acts : 0;
     if (fast < 0 || fast > 1) { lm_fail(err, errlen, "q8_int8_acts must be 0 or 1"); free(m); return NULL; }
     if (fast && !weights) { lm_fail(err, errlen, "the int8 fast path needs a q8 weights file (--weights)"); free(m); return NULL; }
@@ -192,7 +219,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
                 if (opts && opts->mtp) { lm_fail(err, errlen, "Gemma 4 has no MTP head; mtp is for Qwen3.5"); free(m); return NULL; }
                 m->gemma = lm_gemma_open(model_dir, weights, ctx, fast, err, errlen);
                 if (!m->gemma) { free(m); return NULL; }
-                m->ctx = ctx;
+                m->ctx = lm_gemma_n_ctx(m->gemma);
                 return m;
             }
             if (strcmp(mt, "qwen3_5") != 0) {
@@ -262,6 +289,15 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
     /* state and scratch */
     m->ld = (LmLinDims){ c->lk_heads, c->lv_heads, c->lk_dim, c->lv_dim, c->conv_k, c->eps };
     m->ad = (LmAttnDims){ c->heads, c->kv_heads, c->head_dim, c->rot, c->theta, c->eps };
+    {
+        const QwenState qs = { c, &m->ld, &m->ad, opts && opts->mtp };
+        uint64_t weights = m->b.bytes;
+        if (qs.mtp)   /* bind_mtp binds them after the state is sized */
+            for (int i = 0; i < m->b.st.nt; i++)
+                if (!strncmp(m->b.st.t[i].name, "mtp.", 4)) weights += (uint64_t)m->b.st.t[i].nbytes;
+        if (lm_ctx_choose_here(ctx, c->max_pos, weights, qwen_state_bytes, &qs, &ctx, err, errlen) != 0) goto fail;
+        m->ctx = ctx;
+    }
     const size_t kvd = (size_t)c->kv_heads * c->head_dim;
     m->conv = (float **)calloc((size_t)c->layers, sizeof(float *));
     m->S = (float **)calloc((size_t)c->layers, sizeof(float *));

@@ -116,6 +116,7 @@ int lm_gemma_config_load(const char *path, LmGemmaCfg *c, char *err, size_t errl
         req_int(t, "num_attention_heads", 1, &c->heads, err, errlen) || req_int(t, "num_key_value_heads", 1, &c->kv_heads, err, errlen) ||
         req_int(t, "head_dim", 1, &c->head_dim, err, errlen) || req_int(t, "global_head_dim", 1, &c->global_head_dim, err, errlen) ||
         req_int(t, "sliding_window", 1, &c->window, err, errlen) ||
+        req_int(t, "max_position_embeddings", 1, &c->max_pos, err, errlen) ||
         req_int(t, "num_kv_shared_layers", 0, &c->kv_shared, err, errlen) ||
         req_int(t, "hidden_size_per_layer_input", 0, &c->ple_dim, err, errlen) ||
         req_str(t, "hidden_activation", &act, err, errlen)) goto out;
