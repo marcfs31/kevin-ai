@@ -1,5 +1,6 @@
 /* lm-run.c - bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
  *                       [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]
+ *                       [--mtp [--mtp-out F]]
  *
  * Feeds the token ids (through lm_prefill when no logits are written, token by token with
  * --no-prefill or --logits-out: the results are bit-identical), writes one little-endian f32
@@ -7,6 +8,10 @@
  * line on stdout. Nothing else goes to stdout; errors go to stderr with a non-zero exit.
  * --profile prints, on stderr, where the time went for the prompt and for the generation
  * (lm_times_get: multiplies, linear attention, attention, the rest); the ids are unchanged.
+ * --mtp loads Qwen3.5's MTP head and generates by speculative decoding (lm_draft, lm_verify,
+ * lm_accept): the ids are exactly those without it; stderr gets how many drafts were accepted.
+ * --mtp-out F (with --mtp) writes the head's draft logits for each token position but the last
+ * (position p sees the token at p+1), one row each, fed token by token.
  * Original code; contract in docs/PLAN.md. */
 #include <errno.h>
 #include <stdint.h>
@@ -19,7 +24,8 @@
 static int usage(void)
 {
     fprintf(stderr, "usage: lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]\n"
-                    "              [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]\n");
+                    "              [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]\n"
+                    "              [--mtp [--mtp-out F]]\n");
     return 2;
 }
 
@@ -39,8 +45,16 @@ static const char *code_name(int rc)
     case LM_ERR_CTX:   return "context window full";
     case LM_ERR_TOKEN: return "token id outside the vocabulary";
     case LM_ERR_IO:    return "weight read failed";
+    case LM_ERR_STATE: return "call out of order";
     default:           return "unknown error";
     }
+}
+
+static int argmax(const float *row, int n)
+{
+    int best = 0;
+    for (int i = 1; i < n; i++) if (row[i] > row[best]) best = i;
+    return best;
 }
 
 /* One stderr line: the time between two lm_times_get snapshots, split by stage. */
@@ -59,8 +73,8 @@ static void print_profile(const char *what, int ntok, const LmTimes *a, const Lm
 
 int main(int argc, char **argv)
 {
-    const char *model = NULL, *weights = NULL, *tokstr = NULL, *outp = NULL;
-    int greedy = 0, ctx = 0, threads = 0, fast = 0, no_prefill = 0, profile = 0;
+    const char *model = NULL, *weights = NULL, *tokstr = NULL, *outp = NULL, *mtp_out = NULL;
+    int greedy = 0, ctx = 0, threads = 0, fast = 0, no_prefill = 0, profile = 0, mtp = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         const int has = i + 1 < argc;
@@ -73,10 +87,12 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--fast")) fast = 1;
         else if (!strcmp(a, "--no-prefill")) no_prefill = 1;
         else if (!strcmp(a, "--profile")) profile = 1;
+        else if (!strcmp(a, "--mtp")) mtp = 1;
+        else if (!strcmp(a, "--mtp-out") && has) mtp_out = argv[++i];
         else if (!strcmp(a, "--threads") && has) { if (parse_int(argv[++i], 1, &threads)) { fprintf(stderr, "lm-run: bad --threads\n"); return 2; } }
         else return usage();
     }
-    if (!model || !tokstr) return usage();
+    if (!model || !tokstr || (mtp_out && !mtp)) return usage();
 
     int ntok = 0;
     int *tok = (int *)malloc((strlen(tokstr) / 2 + 2) * sizeof(int));
@@ -93,14 +109,28 @@ int main(int argc, char **argv)
     if (ntok == 0) { fprintf(stderr, "lm-run: --tokens is empty\n"); free(tok); return 2; }
 
     char err[1024] = "";
-    LmOpts o = { weights, ctx, threads, fast };
+    LmOpts o = { weights, ctx, threads, fast, mtp };
     LmModel *m = lm_open(model, &o, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-run: %s\n", err); free(tok); return 1; }
     const int vocab = lm_n_vocab(m);
     float *logits = (float *)malloc((size_t)vocab * sizeof(float));
+    float *rows = (float *)malloc((size_t)(LM_VERIFY_MAX + 1) * vocab * sizeof(float)); /* verify rows + a draft row */
     FILE *fo = NULL;
     int rc = 1;
-    if (!logits) { fprintf(stderr, "lm-run: out of memory\n"); goto done; }
+    if (!logits || !rows) { fprintf(stderr, "lm-run: out of memory\n"); goto done; }
+    if (mtp_out) {   /* the head's rows, then a fresh state for the run below */
+        FILE *fm = fopen(mtp_out, "wb");
+        if (!fm) { fprintf(stderr, "lm-run: cannot create %s: %s\n", mtp_out, strerror(errno)); goto done; }
+        int r = lm_feed(m, tok[0], NULL);
+        for (int p = 0; r == LM_OK && p + 1 < ntok; p++) {
+            r = lm_draft(m, tok[p + 1], rows);
+            if (r == LM_OK && fwrite(rows, sizeof(float), (size_t)vocab, fm) != (size_t)vocab) r = LM_ERR_IO;
+            if (r == LM_OK) r = lm_feed(m, tok[p + 1], NULL);
+        }
+        if (fclose(fm) != 0 && r == LM_OK) r = LM_ERR_IO;
+        if (r != LM_OK) { fprintf(stderr, "lm-run: --mtp-out: %s\n", code_name(r)); goto done; }
+        lm_reset(m);
+    }
     if (outp) {
         fo = fopen(outp, "wb");
         if (!fo) { fprintf(stderr, "lm-run: cannot create %s: %s\n", outp, strerror(errno)); goto done; }
@@ -124,15 +154,36 @@ int main(int argc, char **argv)
         }
     }
     lm_times_get(&t_prompt);
-    for (int k = 0; k < greedy; k++) {
-        int best = 0;
-        for (int i = 1; i < vocab; i++) if (logits[i] > logits[best]) best = i;
+    int drafts = 0, accepted = 0;
+    for (int k = 0; k < greedy;) {
+        const int best = argmax(logits, vocab);
         printf("%d\n", best);
-        if (k + 1 < greedy) {
-            const int r = lm_feed(m, best, logits);
-            if (r != LM_OK) { fprintf(stderr, "lm-run: generating token %d: %s\n", k + 1, code_name(r)); goto done; }
+        if (++k == greedy) break;
+        int r;
+        if (mtp && k + 1 < greedy && lm_pos(m) + 2 <= lm_n_ctx(m)) {
+            /* draft the id after best, check both in one pass, keep what greedy agrees with */
+            float *dl = rows + (size_t)LM_VERIFY_MAX * vocab;
+            r = lm_draft(m, best, dl);
+            const int pair[2] = { best, r == LM_OK ? argmax(dl, vocab) : 0 };
+            if (r == LM_OK) r = lm_verify(m, pair, 2, rows);
+            if (r == LM_OK) {
+                drafts++;
+                const int ok = argmax(rows, vocab) == pair[1];
+                r = lm_accept(m, ok ? 2 : 1);
+                if (ok) {
+                    accepted++;
+                    printf("%d\n", pair[1]);
+                    k++;
+                }
+                memcpy(logits, rows + (ok ? (size_t)vocab : 0), (size_t)vocab * sizeof(float));
+            }
+        } else {
+            r = lm_feed(m, best, logits);
         }
+        if (r != LM_OK) { fprintf(stderr, "lm-run: generating token %d: %s\n", k, code_name(r)); goto done; }
     }
+    if (mtp && greedy > 0)
+        fprintf(stderr, "lm-run: mtp drafts %d, accepted %d (%.0f%%)\n", drafts, accepted, drafts ? 100.0 * accepted / drafts : 0.0);
     if (fflush(stdout) != 0) { fprintf(stderr, "lm-run: write to stdout failed\n"); goto done; }
     lm_times_get(&t_end);
     if (profile) {
@@ -143,6 +194,7 @@ int main(int argc, char **argv)
 done:
     if (fo && fclose(fo) != 0 && rc == 0) { fprintf(stderr, "lm-run: close of %s failed\n", outp); rc = 1; }
     free(logits);
+    free(rows);
     lm_close(m);
     free(tok);
     return rc;

@@ -24,7 +24,7 @@ static const Case CASES[] = {
 static LmModel *open_model(const Case *c, int ctx)
 {
     char err[512] = "";
-    LmOpts o = { c->weights, ctx, 0, c->fast };
+    LmOpts o = { c->weights, ctx, 0, c->fast, 0 };
     LmModel *m = lm_open(c->dir, &o, err, sizeof err);
     CHECK_MSG(m != NULL, "%s: lm_open: %s", c->label, err);
     return m;
