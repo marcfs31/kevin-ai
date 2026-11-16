@@ -558,7 +558,7 @@ use the model. One request at a time; others wait their turn.
 ```
 bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
              [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N]
-             [--timeout S] [--fast]
+             [--timeout S] [--cache-mb N] [--fast]
 ```
 
 - `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (with `"stream": true` too).
@@ -577,10 +577,12 @@ bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
 - Otherwise a prefix cache helps: when two conversations in a row share their system prompt
   (at least 16 tokens), the server keeps a snapshot of the state at its end, and a later
   conversation with the same system prompt is restored from it and feeds only the rest. The
-  log line says `N from cache`. The answer is the same as without the cache. One snapshot is
-  kept, never longer than the system prompt; for Qwen3.5-4B it takes about 50 MiB plus 64 KiB
-  per token (about 82 MiB for a 500-token system prompt). Clients that alternate between two
-  system prompts replace it each time. `lm-chat` uses the same cache after `/reset`.
+  log line says `N from cache`. The answer is the same as without the cache. A snapshot is
+  never longer than the system prompt; for Qwen3.5-4B it takes about 50 MiB plus 64 KiB per
+  token (about 82 MiB for a 500-token system prompt). One snapshot per system prompt is kept,
+  most recently used first, in `--cache-mb` MiB (512 by default: about ten short system
+  prompts), so clients that alternate between system prompts each restore their own. With
+  `--cache-mb 0` one snapshot is kept. `lm-chat` uses the same cache after `/reset`.
 - `scripts/lm-serve.service` runs it as a systemd user service; its comments say how to install it.
 
 ```bash

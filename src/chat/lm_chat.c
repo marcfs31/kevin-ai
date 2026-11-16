@@ -21,6 +21,8 @@ typedef struct {
 
 typedef struct { char *s; size_t n, cap; } Buf;
 
+typedef struct { void *snap; LmIds ids; size_t bytes; } Slot;   /* a backend snapshot of ids */
+
 struct LmChat {
     LmChatConfig cfg;
     char *system;
@@ -30,8 +32,9 @@ struct LmChat {
     LmIds fed;       /* ids the backend holds, in order */
     int dirty;       /* backend state unknown (error mid-feed): next turn must reset */
     LmIds prev;      /* what was fed before the last lm_chat_reset */
-    void *snap;      /* the prefix cache: a backend snapshot of snap_ids, or NULL */
-    LmIds snap_ids;
+    Slot *slot;      /* the prefix cache, most recently used first */
+    int nslot, capslot;
+    size_t slot_bytes;   /* sum of slot[].bytes */
     int reprefills;
     float *logits;
 };
@@ -80,7 +83,8 @@ LmChat *lm_chat_new(const LmChatConfig *cfg, char *err, size_t errlen)
 {
     if (!cfg || !cfg->tok || !cfg->tpl || !cfg->backend.feed || !cfg->backend.reset ||
         !cfg->backend.pos || cfg->backend.n_vocab <= 0 || cfg->backend.n_ctx <= 0 ||
-        !cfg->backend.save != !cfg->backend.restore || !cfg->backend.save != !cfg->backend.drop) {
+        !cfg->backend.save != !cfg->backend.restore || !cfg->backend.save != !cfg->backend.drop ||
+        !cfg->backend.save != !cfg->backend.snap_bytes) {
         set_err(err, errlen, "lm_chat_new: incomplete configuration or backend");
         return NULL;
     }
@@ -99,6 +103,15 @@ LmChat *lm_chat_new(const LmChatConfig *cfg, char *err, size_t errlen)
     return c;
 }
 
+static void drop_slot(LmChat *c, int i)
+{
+    c->cfg.backend.drop(c->cfg.backend.ctx, c->slot[i].snap);
+    lm_ids_free(&c->slot[i].ids);
+    c->slot_bytes -= c->slot[i].bytes;
+    memmove(c->slot + i, c->slot + i + 1, (size_t)(c->nslot - i - 1) * sizeof *c->slot);
+    c->nslot--;
+}
+
 void lm_chat_free(LmChat *c)
 {
     if (!c) return;
@@ -106,8 +119,8 @@ void lm_chat_free(LmChat *c)
     free(c->h);
     lm_ids_free(&c->fed);
     lm_ids_free(&c->prev);
-    if (c->snap) c->cfg.backend.drop(c->cfg.backend.ctx, c->snap);
-    lm_ids_free(&c->snap_ids);
+    while (c->nslot > 0) drop_slot(c, c->nslot - 1);
+    free(c->slot);
     lm_sampler_free(&c->smp);
     free(c->system);
     free(c->logits);
@@ -127,7 +140,9 @@ void lm_chat_reset(LmChat *c)
 
 int lm_chat_reprefills(const LmChat *c) { return c->reprefills; }
 int lm_chat_fed(const LmChat *c) { return c->fed.n; }
-int lm_chat_cached(const LmChat *c) { return c->snap ? c->snap_ids.n : 0; }
+int lm_chat_cached(const LmChat *c) { return c->nslot ? c->slot[0].ids.n : 0; }
+int lm_chat_cache_slots(const LmChat *c) { return c->nslot; }
+size_t lm_chat_cache_bytes(const LmChat *c) { return c->slot_bytes; }
 
 int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen)
 {
@@ -248,37 +263,57 @@ static int system_end(const LmChat *c, const LmRenderOpts *ro)
     return n;
 }
 
-/* The backend is at position 0. Restore the cache if it covers a prefix of the prompt (leaving
- * at least the last id to feed); returns the ids now held, 0 if none. */
+/* The backend is at position 0. Restore the longest slot that covers a prefix of the prompt
+ * (leaving at least the last id to feed) and make it the most recently used; returns the ids
+ * now held, 0 if none. A slot that fails to restore is dropped. */
 static int restore_cache(LmChat *c, const LmIds *prompt)
 {
     const LmBackend *be = &c->cfg.backend;
-    const int n = c->snap_ids.n;
-    if (!c->snap || n >= prompt->n || memcmp(c->snap_ids.ids, prompt->ids, (size_t)n * sizeof(int)))
-        return 0;
+    int best = -1;
+    for (int k = 0; k < c->nslot; k++) {
+        const LmIds *ids = &c->slot[k].ids;
+        if (ids->n < prompt->n && (best < 0 || ids->n > c->slot[best].ids.n) &&
+            !memcmp(ids->ids, prompt->ids, (size_t)ids->n * sizeof(int)))
+            best = k;
+    }
+    if (best < 0) return 0;
+    const Slot s = c->slot[best];
+    memmove(c->slot + 1, c->slot, (size_t)best * sizeof *c->slot);
+    c->slot[0] = s;
     c->fed.n = 0;
-    if (be->restore(be->ctx, c->snap) != LM_OK || lm_ids_append(&c->fed, c->snap_ids.ids, n)) {
+    if (be->restore(be->ctx, s.snap) != LM_OK || lm_ids_append(&c->fed, s.ids.ids, s.ids.n)) {
         be->reset(be->ctx);
         c->fed.n = 0;
+        drop_slot(c, 0);
         return 0;
     }
-    return n;
+    return s.ids.n;
 }
 
-/* Replace the cache with a snapshot of the state, which holds c->fed. A failure leaves it empty. */
+/* Add a snapshot of the state, which holds c->fed, as the most recently used slot, then drop
+ * the least recently used ones while the slots exceed the budget (the new one always stays).
+ * With no budget the old slot goes first: two snapshots alive at once could be what exhausts
+ * memory. A failure adds nothing. */
 static void save_cache(LmChat *c)
 {
     const LmBackend *be = &c->cfg.backend;
+    if (c->nslot == c->capslot) {
+        const int nc = c->capslot ? 2 * c->capslot : 4;
+        Slot *p = (Slot *)realloc(c->slot, (size_t)nc * sizeof *p);
+        if (!p) return;
+        c->slot = p;
+        c->capslot = nc;
+    }
     LmIds ids = { 0 };
     if (lm_ids_append(&ids, c->fed.ids, c->fed.n)) return;
-    /* the old one goes first: two snapshots alive at once could be what exhausts memory */
-    if (c->snap) be->drop(be->ctx, c->snap);
-    c->snap = NULL;
-    lm_ids_free(&c->snap_ids);
-    void *s = be->save(be->ctx);
-    if (!s) { lm_ids_free(&ids); return; }
-    c->snap = s;
-    c->snap_ids = ids;
+    if (!c->cfg.cache_bytes) while (c->nslot > 0) drop_slot(c, c->nslot - 1);
+    void *snap = be->save(be->ctx);
+    if (!snap) { lm_ids_free(&ids); return; }
+    memmove(c->slot + 1, c->slot, (size_t)c->nslot * sizeof *c->slot);
+    c->slot[0] = (Slot){ snap, ids, be->snap_bytes(be->ctx, snap) };
+    c->nslot++;
+    c->slot_bytes += c->slot[0].bytes;
+    while (c->nslot > 1 && c->slot_bytes > c->cfg.cache_bytes) drop_slot(c, c->nslot - 1);
 }
 
 int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTurn *res,

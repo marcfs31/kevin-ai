@@ -12,15 +12,17 @@
  * template's own history rendering instead (reasoning dropped), which costs a full
  * re-feed on every turn after the first. lm_chat_reprefills() counts them.
  *
- * Prefix cache. A backend with save/restore/drop keeps one snapshot of the state, taken at the
- * end of the system message. When a turn cannot extend the fed ids (another conversation, a
+ * Prefix cache. A backend with save/restore/drop/snap_bytes keeps snapshots of the state, each
+ * taken at the end of a system message. When a turn cannot extend the fed ids (another conversation, a
  * /reset, an edited history) and the snapshot's ids are a prefix of the new prompt, the state
  * is restored from it and only the rest is fed. When the old ids (fed, or fed before the last
  * lm_chat_reset) and the new prompt share the system message and the cache does not cover it,
  * the turn snapshots the state as its prefill passes that point, replacing the cache: the
  * second conversation that starts with the same system prompt pays for it once, every later
- * one restores it. One slot: clients alternating between two system prompts replace it each
- * time (a copy of the state, never a wrong answer). No system message, no cache. A shared prefix shorter than
+ * one restores it. Snapshots are kept most recently used first while their bytes fit
+ * cfg.cache_bytes (the newest always stays, so the peak is the budget plus one snapshot);
+ * with a budget of 0 there is one slot, and clients alternating between two system prompts
+ * replace it each time (a copy of the state, never a wrong answer). No system message, no cache. A shared prefix shorter than
  * LM_CHAT_CACHE_MIN ids (a template's opening tokens) does not replace the cache: it would
  * evict a snapshot that saves more than it does. Restoring is bit-identical to
  * feeding (lm_restore), so the cache changes speed, never output.
@@ -51,12 +53,13 @@ typedef struct {
      * LM_CHAT_PREFILL_CHUNK ids and polls cancellation between them; an error code other than
      * LM_ERR_CTX leaves the backend state unknown (the next turn re-feeds from scratch). */
     int  (*prefill)(void *ctx, const int *ids, int n, float *logits);
-    /* Optional, all three or none (the prefix cache): a copy of the current state or NULL on
+    /* Optional, all four or none (the prefix cache): a copy of the current state or NULL on
      * failure (the turn then goes on without caching); put a copy back, LM_OK or an error
-     * (after an error the loop resets the backend); free a copy. */
+     * (after an error the loop resets the backend); free a copy; the bytes a copy holds. */
     void *(*save)(void *ctx);
     int   (*restore)(void *ctx, void *snap);
     void  (*drop)(void *ctx, void *snap);
+    size_t (*snap_bytes)(void *ctx, void *snap);
 } LmBackend;
 
 #define LM_CHAT_CACHE_MIN 16       /* the shortest shared prefix worth a snapshot */
@@ -72,6 +75,7 @@ typedef struct {
     int thinking;               /* generation prompt opens a think block */
     int strict_history;         /* 1 = the model template's history rendering (re-feeds every turn) */
     const char *system;         /* NULL = no system message */
+    size_t cache_bytes;         /* prefix-cache budget: 0 = one slot */
 } LmChatConfig;
 
 typedef struct LmChat LmChat;
@@ -89,8 +93,11 @@ void lm_chat_reset(LmChat *c);
 int lm_chat_reprefills(const LmChat *c);
 /* Ids the backend currently holds, i.e. the prompt prefix known to be fed. */
 int lm_chat_fed(const LmChat *c);
-/* Ids the prefix cache covers (0 = empty or no cache). */
+/* Ids the most recently used prefix-cache slot covers (0 = empty or no cache), the number of
+ * slots, and the bytes they hold. */
 int lm_chat_cached(const LmChat *c);
+int lm_chat_cache_slots(const LmChat *c);
+size_t lm_chat_cache_bytes(const LmChat *c);
 
 /* Replace the conversation with msgs[0..n): an optional system message first, then user and
  * assistant messages (content only; reasoning and gen_ids are ignored). This is how a client

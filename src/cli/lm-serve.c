@@ -2,7 +2,10 @@
  *
  *   lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
  *            [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N]
- *            [--timeout S] [--fast]
+ *            [--timeout S] [--cache-mb N] [--fast]
+ *
+ *   --cache-mb N  memory for snapshots of system prompts (default 512): a request whose system
+ *                 prompt was seen before restores it instead of feeding it again. 0 = one.
  *
  *   GET  /health               {"status":"ok"} once the model is loaded (no key needed)
  *   GET  /v1/models            the one model, as id --name (default: DIR's last component)
@@ -702,6 +705,7 @@ static int be_pos(void *ctx) { return lm_pos((const LmModel *)ctx); }
 static void *be_save(void *ctx) { return lm_snapshot((const LmModel *)ctx); }
 static int be_restore(void *ctx, void *snap) { return lm_restore((LmModel *)ctx, (const LmSnapshot *)snap); }
 static void be_drop(void *ctx, void *snap) { (void)ctx; lm_snapshot_free((LmSnapshot *)snap); }
+static size_t be_snap_bytes(void *ctx, void *snap) { (void)ctx; return lm_snapshot_bytes((const LmSnapshot *)snap); }
 
 /* Listen on host:port. *loopback says whether only this machine can connect. */
 static int listen_on(const char *host, const char *port, char *bound, size_t boundlen, int *loopback)
@@ -751,7 +755,7 @@ static void usage(FILE *f)
 {
     fputs("usage: lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]\n"
           "       [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N]\n"
-          "       [--timeout S] [--fast]\n"
+          "       [--timeout S] [--cache-mb N] [--fast]\n"
           "       (set LM_SERVE_API_KEY to require a bearer key on /v1 paths)\n", f);
 }
 
@@ -775,7 +779,7 @@ int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *host = "127.0.0.1", *port = "8080", *name = NULL;
     int think = 0, fast = 0;
-    long max_tokens = 0, seed = 1, ctx = 0, threads = 0, port_n, timeout_s = 30;
+    long max_tokens = 0, seed = 1, ctx = 0, threads = 0, port_n, timeout_s = 30, cache_mb = 512;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
 #define VAL need_value(argc, argv, &i)
@@ -793,6 +797,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--ctx")) { if (parse_long(VAL, 1, 1 << 24, &ctx)) BAD; }
         else if (!strcmp(a, "--threads")) { if (parse_long(VAL, 1, 4096, &threads)) BAD; }
         else if (!strcmp(a, "--timeout")) { if (parse_long(VAL, 1, 3600, &timeout_s)) BAD; }
+        else if (!strcmp(a, "--cache-mb")) { if (parse_long(VAL, 0, 1L << 20, &cache_mb)) BAD; }
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(stdout); return 0; }
         else { fprintf(stderr, "lm-serve: unknown option %s\n", a); usage(stderr); return 2; }
     }
@@ -837,7 +842,8 @@ int main(int argc, char **argv)
     cc.tok = tok;
     cc.tpl = tpl;
     cc.backend = (LmBackend){ m, lm_n_vocab(m), lm_n_ctx(m), be_feed, be_reset, be_pos, be_prefill,
-                              be_save, be_restore, be_drop };
+                              be_save, be_restore, be_drop, be_snap_bytes };
+    cc.cache_bytes = (size_t)cache_mb << 20;
     cc.temperature = s.temperature;
     cc.top_p = s.top_p;
     cc.top_k = s.top_k;
@@ -858,8 +864,8 @@ int main(int argc, char **argv)
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     signal(SIGPIPE, SIG_IGN);
-    fprintf(stderr, "lm-serve: listening on %s (model %s, context %d%s)\n", bound, name, lm_n_ctx(m),
-            key ? ", API key required" : "");
+    fprintf(stderr, "lm-serve: listening on %s (model %s, context %d, prefix cache %ld MiB%s)\n", bound, name,
+            lm_n_ctx(m), cache_mb, key ? ", API key required" : "");
     if (!loopback && !key)
         fputs("lm-serve: warning: reachable from other machines and LM_SERVE_API_KEY is not set: "
               "anyone who can connect can use the model\n", stderr);
