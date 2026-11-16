@@ -271,12 +271,8 @@ int  lm_gemma_pos(const LmGemma *g)     { return g->pos; }
 
 void lm_gemma_reset(LmGemma *g)
 {
-    const LmGemmaCfg *c = &g->cfg;
-    for (int i = 0; i < c->first_shared; i++) {
-        const size_t n = (size_t)slots_of(c, c->full[i], g->ctx) * c->kv_heads * hd_of(c, c->full[i]);
-        memset(g->kc[i], 0, n * sizeof(float));
-        memset(g->vc[i], 0, n * sizeof(float));
-    }
+    /* the KV caches are not cleared: attention reads only slots written since the reset, and
+     * clearing a large window would touch every page of it */
     g->pos = 0;
 }
 

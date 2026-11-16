@@ -359,18 +359,13 @@ void lm_reset(LmModel *m)
 {
     if (m->gemma) { lm_gemma_reset(m->gemma); return; }
     const LmCfg *c = &m->cfg;
-    const size_t kvd = (size_t)c->kv_heads * c->head_dim;
+    /* the KV caches are not cleared: attention reads only positions below pos, each written
+     * before it is read, and clearing a large window would touch every page of it */
     for (int i = 0; i < c->layers; i++) {
         if (m->conv[i]) memset(m->conv[i], 0, ((size_t)c->conv_dim * (size_t)(c->conv_k - 1) + 1) * sizeof(float));
         if (m->S[i]) memset(m->S[i], 0, (size_t)c->lv_heads * c->lk_dim * c->lv_dim * sizeof(float));
-        if (m->kc[i]) memset(m->kc[i], 0, (size_t)m->ctx * kvd * sizeof(float));
-        if (m->vc[i]) memset(m->vc[i], 0, (size_t)m->ctx * kvd * sizeof(float));
     }
-    if (m->mtp) {
-        memset(m->mkc, 0, (size_t)m->ctx * kvd * sizeof(float));
-        memset(m->mvc, 0, (size_t)m->ctx * kvd * sizeof(float));
-        memset(m->hlast, 0, (size_t)c->hidden * sizeof(float));
-    }
+    if (m->mtp) memset(m->hlast, 0, (size_t)c->hidden * sizeof(float));
     m->pos = 0;
     m->vn = 0;
 }
