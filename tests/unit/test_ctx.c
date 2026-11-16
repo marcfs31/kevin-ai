@@ -56,6 +56,9 @@ int main(void)
      * default, as long as its state alone fits */
     CHECK(choose(0, 262144, 16 * GIB, &qwen, LM_MEM_OK, 11 * GIB, &ctx, err) == 0 && ctx == LM_CTX_DEFAULT);
     CHECK(choose(0, 262144, 10 * GIB + 300 * MIB, &qwen, LM_MEM_OK, 11 * GIB, &ctx, err) == 0 && ctx == LM_CTX_DEFAULT);
+    /* an explicit window is judged by the same rule: no refusal that ctx 0 would then ignore */
+    CHECK(choose(4096, 262144, 10 * GIB + 300 * MIB, &qwen, LM_MEM_OK, 11 * GIB, &ctx, err) == 0 && ctx == 4096);
+    CHECK(choose(8192, 262144, 10 * GIB + 300 * MIB, &qwen, LM_MEM_OK, 11 * GIB, &ctx, err) == 0 && ctx == 8192);
     /* ...and refused when even that state does not fit */
     ctx = -7;
     err[0] = 0;
