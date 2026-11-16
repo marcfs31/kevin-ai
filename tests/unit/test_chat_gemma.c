@@ -373,7 +373,7 @@ static LmChat *mk_chat(Fake *f, int strict)
     memset(&cc, 0, sizeof cc);
     cc.tok = g_tok;
     cc.tpl = g_tpl;
-    cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos, NULL };
+    cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos, NULL, NULL, NULL, NULL };
     cc.temperature = 0;
     cc.top_p = 1;
     cc.seed = 1;
