@@ -21,7 +21,9 @@ the model type named in MODEL_DIR/config.json (qwen3.5-4b or gemma-4-e4b), that
 model's files and sizes, the q8 file, whether MODEL_DIR is on a rotational disk, and
 whether the engine binaries are built.
 
-  MODEL_DIR      default: $HOME/models/qwen3.5-4b
+  MODEL_DIR      default: <root>/qwen3.5-4b, where <root> is what scripts/models-root.sh
+                 prints ($LM_MODELS_DIR, else /mnt/models when you can write it, else
+                 $HOME/models)
   --read-speed   time a direct read of the first 2 GiB of the q8 file (or of the first
                  bf16 weight file when there is no q8 file yet). Linux, dd iflag=direct.
   --help         show this help
@@ -48,7 +50,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-MODEL_DIR="${MODEL_DIR_ARG:-$HOME/models/qwen3.5-4b}"
+MODEL_DIR="${MODEL_DIR_ARG:-$("$REPO_DIR/scripts/models-root.sh")/qwen3.5-4b}"
 # Where the CPU facts are read from; the tests point these at fixture files.
 CPUINFO="${LM_DOCTOR_CPUINFO:-/proc/cpuinfo}"
 CPUFREQ_DIR="${LM_DOCTOR_CPUFREQ_DIR:-/sys/devices/system/cpu/cpu0/cpufreq}"
