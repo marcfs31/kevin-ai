@@ -8,8 +8,8 @@ REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 GIB=1073741824
 TWO_GIB=$((2 * GIB))
 Q8_NAME=model.q8.safetensors
-Q8_MIN_AVAIL_KIB=$((5 * 1048576))     # q8 Qwen keeps about 5 GiB resident
-GEMMA_Q8_MIN_AVAIL_KIB=$((11 * 524288))  # q8 Gemma: about 5.5 GiB hot (estimate, not measured)
+Q8_MIN_AVAIL_KIB=$((21 * 262144))     # q8 Qwen: 5.25 GiB (peak RSS measured 5.06 GiB, 2026-11-16)
+GEMMA_Q8_MIN_AVAIL_KIB=$((6 * 1048576))  # q8 Gemma: 6 GiB (peak RSS measured 5.73 GiB, 2026-11-16)
 BF16_QWEN_BYTES=9319828096            # bf16 Qwen checkpoint, both shards
 
 usage() {
@@ -312,9 +312,9 @@ case "$model_id" in
   qwen3.5-4b)
     if is_uint "$mem_avail_kb"; then
       if [ "$mem_avail_kb" -ge "$Q8_MIN_AVAIL_KIB" ]; then
-        report OK "RAM for q8" "$(kb_to_gib "$mem_avail_kb") available; q8 Qwen needs about 5 GiB"
+        report OK "RAM for q8" "$(kb_to_gib "$mem_avail_kb") available; q8 Qwen needs about 5.1 GiB"
       else
-        report FAIL "RAM for q8" "only $(kb_to_gib "$mem_avail_kb") available; q8 Qwen needs about 5 GiB. Stop other programs, then retry"
+        report FAIL "RAM for q8" "only $(kb_to_gib "$mem_avail_kb") available; q8 Qwen needs about 5.1 GiB. Stop other programs, then retry"
       fi
     else
       report UNKNOWN "RAM for q8" "MemAvailable unknown"
@@ -332,9 +332,9 @@ case "$model_id" in
   gemma-4-e4b)
     if is_uint "$mem_avail_kb"; then
       if [ "$mem_avail_kb" -ge "$GEMMA_Q8_MIN_AVAIL_KIB" ]; then
-        report OK "RAM for q8" "$(kb_to_gib "$mem_avail_kb") available; q8 Gemma needs about 5.5 GiB hot (estimate)"
+        report OK "RAM for q8" "$(kb_to_gib "$mem_avail_kb") available; q8 Gemma needs about 5.8 GiB"
       else
-        report FAIL "RAM for q8" "only $(kb_to_gib "$mem_avail_kb") available; q8 Gemma needs about 5.5 GiB hot (estimate). Stop other programs, then retry"
+        report FAIL "RAM for q8" "only $(kb_to_gib "$mem_avail_kb") available; q8 Gemma needs about 5.8 GiB. Stop other programs, then retry"
       fi
     else
       report UNKNOWN "RAM for q8" "MemAvailable unknown"
