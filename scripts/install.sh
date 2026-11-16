@@ -21,8 +21,7 @@ Steps, in order, each stopping the script on failure:
 
   --model NAME    qwen3.5-4b (default), gemma-4-e4b, both, or none (build and test only)
   --model-dir DIR where model folders go: DIR/<NAME>. Default: what scripts/models-root.sh
-                  prints ($LM_MODELS_DIR, else /mnt/models when you can write it, else
-                  $HOME/models)
+                  prints ($LM_MODELS_DIR, else $HOME/models)
   --skip-tests    skip step 3 (not recommended on the first run: it is the first AVX2 run)
   --allow-hdd     pass through to the downloader. Not recommended.
   --help          show this help
