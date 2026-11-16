@@ -18,13 +18,15 @@ int lm_ctx_choose(int requested, int max_pos, uint64_t weights, LmStateBytesFn f
         return 0;
     }
     const uint64_t room = avail > LM_CTX_MARGIN ? avail - LM_CTX_MARGIN : 0;
-    const int resident = weights <= room;
-    int best = 0;   /* the largest window that keeps the weights and the state in memory */
-    if (resident && weights + (uint64_t)fn(arg, 1) <= room) {
-        int lo = 1, hi = max_pos;
+    /* the weights count as resident only when they fit with the default window; otherwise they
+     * stream from disk (bf16 on a small machine) and only the state must fit */
+    const int resident = weights <= room && (uint64_t)fn(arg, fallback) <= room - weights;
+    int best = fallback;   /* resident: the largest window that keeps weights and state in memory */
+    if (resident) {
+        int lo = fallback, hi = max_pos;
         while (lo < hi) {
             const int mid = lo + (hi - lo + 1) / 2;
-            if (weights + (uint64_t)fn(arg, mid) <= room) lo = mid;
+            if ((uint64_t)fn(arg, mid) <= room - weights) lo = mid;
             else hi = mid - 1;
         }
         best = lo;
@@ -45,18 +47,15 @@ int lm_ctx_choose(int requested, int max_pos, uint64_t weights, LmStateBytesFn f
         *ctx = requested;
         return 0;
     }
-    if (best >= fallback) {
-        int c = best == max_pos ? best : best - best % LM_CTX_ALIGN;
+    if (resident) {
+        const int c = best == max_pos ? best : best - best % LM_CTX_ALIGN;
         *ctx = c < fallback ? fallback : c;
         return 0;
     }
-    /* the weights leave no room for a default window: they stream from disk, the state must fit */
     const uint64_t s = fn(arg, fallback);
-    if (s > room) {
-        lm_fail(err, errlen, "even a %d-token context needs %.2f GiB of state and %.2f GiB is available "
-                "(%.1f GiB kept free)", fallback, GIB(s), GIB(avail), GIB(LM_CTX_MARGIN));
-        return -1;
-    }
+    if (s > room)
+        return lm_fail(err, errlen, "even a %d-token context needs %.2f GiB of state and %.2f GiB is available "
+                       "(%.1f GiB kept free)", fallback, GIB(s), GIB(avail), GIB(LM_CTX_MARGIN));
     *ctx = fallback;
     return 0;
 }

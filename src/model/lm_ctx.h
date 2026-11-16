@@ -4,7 +4,8 @@
  * plus its state: KV caches and scratch that grow with the context window. With ctx 0 the
  * window is the largest that keeps both in memory, up to the model's max_position_embeddings;
  * an explicit ctx is refused when its state would push resident weights out of memory or
- * would not fit at all. Weights larger than memory (bf16 streamed from disk) stay allowed:
+ * would not fit at all. Weights that do not fit together with a LM_CTX_DEFAULT window (bf16
+ * on a small machine) are treated as streamed from disk, by ctx 0 and an explicit ctx alike:
  * then only the state must fit, and ctx 0 means LM_CTX_DEFAULT.
  *
  * Pure: the caller passes the memory reading, so every case is testable. */
