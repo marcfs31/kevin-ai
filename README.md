@@ -2,7 +2,7 @@
 
 A C99 CPU inference engine for small language models, written from scratch for a small
 machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512), about
-11 GB RAM, Ubuntu Server 26.04.1 LTS, with the models on a SATA SSD at `/mnt/models`.
+11 GB RAM, Ubuntu Server 26.04.1 LTS, with the models on the NVMe SSD in `~/models`.
 
 ## Status
 
@@ -18,11 +18,15 @@ machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512
   (4.6 tokens/s before that; the batched multiply itself got 1.35x faster, with 73% fewer L1
   misses). `--profile` on a 64-token prompt puts 75% of the prompt time in the multiplies,
   17% in linear attention, 4% in full attention and 4% elsewhere.
-  Replies read about 4.75 GB per
-  token, so at about 11 GB/s they are bounded by memory bandwidth.
+  Replies read about 4.75 GB per token, so at about 11 GB/s they are bounded by memory
+  bandwidth.
 - **Gemma 4 E4B runs on the real checkpoint** (first run 2026-11-16, on the target machine).
   It answers correctly. With the q8 weights: about **1.9 tokens/s** generating and 3.5 to 5.9
   tokens/s on a short prompt, at a peak of 5.7 GiB resident.
+- **The context window is chosen from free memory** when `--ctx` is not given: 81,408 tokens
+  for Qwen q8 and 131,072 (the model's maximum) for Gemma q8 on the target. See `--ctx` below.
+- **MTP speculative decoding** (`lm-run --mtp`, Qwen only) accepts 78% of its drafts, but it
+  runs at 0.91x the plain speed on this CPU, so it stays opt-in.
 
 The full plan, with the normative model equations and test gates, is in
 [docs/PLAN.md](docs/PLAN.md).
@@ -38,7 +42,7 @@ The engine is developed and measured on one machine. Every number in this README
 | memory | about 11 GB (the OS reports 11,328 MiB usable; about 10.8 GiB available when idle) |
 | GPU | Intel HD Graphics 530, not used |
 | system disk | Samsung MZVLB256HAHQ, 238.5 GB NVMe SSD (reads 1.7 GB/s) |
-| models disk | Samsung SSD 850, 465.8 GB SATA SSD, ext4 at `/mnt/models` (reads about 0.55 GB/s) |
+| spare disk | Samsung SSD 850, 465.8 GB SATA SSD, ext4 at `/mnt/models`, not used by the engine (reads about 0.55 GB/s) |
 | network | Realtek RTL8111/8168 gigabit Ethernet, Intel Wireless 8265/8275 (unused) |
 | OS | Ubuntu Server 26.04.1 LTS, kernel 7.0.0-43-generic, x86-64 |
 | toolchain | gcc 15.2.0, GNU make 4.4.1, Python 3.14.4 |
@@ -54,9 +58,9 @@ What this means for the engine:
   8.5 GB file includes a per-layer table read one row per token), bf16 Qwen 8.0 GiB. bf16
   Qwen now stays resident instead of streaming from disk, but it is still slower than q8:
   about 1.1 tokens/s generating.
-- **The models disk is only read at load.** The q8 file is read once and stays in the page
-  cache, so the SATA SSD costs about 9 s on the first load after a boot (the NVMe would take
-  3 s) and nothing afterwards.
+- **Models on the NVMe.** The q8 file is read once per boot and then stays in the page cache.
+  The NVMe reads at 1.7 GB/s, so the first load after a boot takes about 3 s; the SATA SSD
+  would take about 9 s.
 - **Verified on this machine (first run, 2026-11-14):** the build, all unit tests and both
   golden gates pass under gcc 15 with OpenMP and the AVX2 kernels. The real Qwen3.5-4B
   checkpoint loads and answers; the speed is in the Status section above.
@@ -85,7 +89,7 @@ Full machine specs are in [Target machine](#target-machine). The disks are used 
 | disk | use |
 |---|---|
 | Samsung 238.5 GB NVMe SSD | Ubuntu, `/`, `/boot`, `/boot/efi` |
-| Samsung 465.8 GB SATA SSD | the models, in `/mnt/models` (set up after the install; see below) |
+| Samsung 465.8 GB SATA SSD | spare: backups or other data; not used by the engine (optional, see below) |
 | SanDisk USB stick | installer media only; do not partition or use it afterwards |
 
 ### Installer steps
@@ -111,7 +115,8 @@ Full machine specs are in [Target machine](#target-machine). The disks are used 
 
    - Do not use LVM. A swap file of 2 to 4 GB can be added later for safety; it is not needed
      to run the engine.
-   - Leave the **Toshiba** unformatted during installation.
+   - Leave the second (models) SSD alone during installation; it is set up under
+     "A spare disk" below.
    - The installer warns if `/` is not mounted or no boot disk is selected; both must be set.
 4. **Profile:** choose the server name, username and a password you will remember. Use the
    same username for the SSH steps below.
@@ -148,9 +153,10 @@ sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapf
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
-### The models disk
+### A spare disk (optional)
 
-Once, after the first boot. This **erases the disk**: check that `/dev/sda` is the SATA SSD
+The engine does not need a second disk. To use the SATA SSD for backups or other data, set it
+up once after the first boot. This **erases the disk**: check that `/dev/sda` is the SATA SSD
 (`lsblk -o NAME,SIZE,MODEL,SERIAL`) before running it.
 
 ```sh
@@ -161,8 +167,8 @@ echo "UUID=$(sudo blkid -s UUID -o value /dev/sda1) /mnt/models ext4 defaults,no
 sudo systemctl daemon-reload && sudo mount /mnt/models && sudo chown "$USER:$USER" /mnt/models
 ```
 
-`nofail` lets the machine boot without the disk. Unmounted, `/mnt/models` belongs to root,
-so the scripts fall back to `~/models` instead of filling the system disk by mistake.
+`nofail` lets the machine boot without the disk. The models stay in `~/models` unless you set
+`LM_MODELS_DIR` (for example to `/mnt/models`).
 
 ## Install the engine
 
@@ -173,7 +179,8 @@ rsync -a --exclude build --exclude bin --exclude .claude --exclude .git \
   "PATH_TO_THIS_REPO/" USERNAME@SERVER_ADDRESS:~/small-llm-in-c/
 ```
 
-Then on the server:
+Or clone it on the server: `git clone https://github.com/marcfs31/small-llm-in-c.git
+~/small-llm-in-c`. Then on the server:
 
 ```sh
 cd ~/small-llm-in-c
@@ -190,7 +197,7 @@ file, and the read-only `scripts/doctor.sh` report. It prints the chat command a
 | `--model gemma-4-e4b` | about 17 GB download, 8.5 GB q8 file |
 | `--model both` | both of the above |
 | `--model none` | build and test only |
-| `--model-dir DIR` | where models go. Default: `$LM_MODELS_DIR`, else `/mnt/models` when you can write it, else `~/models` (`scripts/models-root.sh` prints the choice) |
+| `--model-dir DIR` | where models go. Default: `$LM_MODELS_DIR`, else `~/models` (`scripts/models-root.sh` prints the choice) |
 | `--skip-tests` | skip `make test` and `make gate` (not recommended on the first run) |
 | `--allow-hdd` | allow downloading to a rotational disk (not recommended) |
 
@@ -387,6 +394,7 @@ flowchart TD
     gemma["lm_gemma: Gemma 4, PLE and KV sharing"]
     cfg["lm_config, lm_gemma_config: strict readers"]
     bind["lm_bind: tensor lookup and binding"]
+    ctxw["lm_ctx: context window from free memory"]
   end
 
   subgraph CORE["src/core: maths"]
@@ -418,6 +426,7 @@ flowchart TD
   api --> model
   model --> cfg
   model --> bind
+  model --> ctxw
   model --> layers
   model --> gemma
   layers --> kern
@@ -433,12 +442,14 @@ flowchart TD
 
 ### What each part does
 
-- **Public API (`lm.h`).** Six calls: `lm_open`, `lm_close`, `lm_feed` (one token, optional
-  logits), `lm_reset`, `lm_pos` and the two size queries. Errors are small integer codes
-  (`LM_ERR_CTX`, `LM_ERR_TOKEN`, `LM_ERR_IO`). A model is never truncated, because
-  linear-attention state cannot be rewound; a caller that changes the prompt resets and
-  re-feeds, or restores a snapshot: `lm_snapshot` copies the state at the current position
-  and `lm_restore` puts it back bit-identically.
+- **Public API (`lm.h`).** `lm_open` and `lm_close`; `lm_feed` (one token, optional logits),
+  `lm_prefill` (a batch of tokens), `lm_reset`, `lm_pos` and the size queries. Speculative
+  decoding adds `lm_draft`, `lm_verify`, `lm_accept` and `lm_greedy_check` (Qwen's MTP head).
+  Errors are small integer codes (`LM_ERR_CTX`, `LM_ERR_TOKEN`, `LM_ERR_IO`). A model is
+  never truncated, because linear-attention state cannot be rewound; a caller that changes
+  the prompt resets and re-feeds, or restores a snapshot: `lm_snapshot` copies the state at
+  the current position and `lm_restore` puts it back bit-identically. `lm_times_enable` and
+  `lm_times_get` report where the time went (what `--profile` prints).
 - **`src/model`.** `lm_open` reads `config.json` and dispatches on `model_type`: `qwen3_5`
   goes to `lm_layers`, `gemma4` to `lm_gemma`. Each reader is strict: a missing field is an
   error, never a default. `lm_bind` looks up tensors by name, and it is the only place that
@@ -446,15 +457,17 @@ flowchart TD
 - **`src/core`.** The arithmetic. `lm_kernels` holds the matrix-vector products for each
   weight format; the AVX2 and NEON paths are checked bit-for-bit against the scalar path.
   `lm_ops` holds the per-token operations: normalisation, rotary embeddings, the causal
-  convolution, the delta-rule step and attention over a cache.
+  convolution, the delta-rule step and attention over a cache. `lm_ctx` picks the context
+  window from the memory the machine can hand out (a pure function, tested with synthetic
+  sizes).
 - **`src/io`.** Files and memory. `lm_st` maps safetensors files (including sharded ones)
   without copying them, so the OS page cache decides what stays in RAM. `lm_quantfile`
   defines the q8 layout, and `lm_stw` writes files as they are produced rather than
   buffering them.
 - **`src/chat` and `src/tokenizer`.** Text in and text out, kept outside the engine.
   `lm_chat` extends the fed prefix when the conversation grows and only re-feeds from
-  scratch when it must; then a one-snapshot prefix cache saves feeding a shared system
-  prompt again. `lm_template` renders each family's chat format. `lm_tok` does the
+  scratch when it must; then a prefix cache, one snapshot per system prompt, saves feeding
+  a shared system prompt again. `lm_template` renders each family's chat format. `lm_tok` does the
   byte-level BPE; for Gemma it uses a heap-ordered merge, so long words stay fast.
 - **`third_party`.** Vendored headers (JSON parser, tokenizer, Unicode tables) with their
   modifications recorded in [NOTICE](NOTICE).
@@ -479,6 +492,7 @@ flowchart LR
   tests --> fix["fixtures/: synthetic models, ops, tokenizers"]
   root --> scripts["scripts/: install, download, doctor, CI"]
   root --> docs["docs/: PLAN, QUICKSTART"]
+  tests --> scripts_t["scripts/: shell tests for the CLIs and the scripts"]
 ```
 
 The Makefile discovers sources with wildcards, so a new file under `src/` or a
@@ -534,8 +548,9 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 - Thinking is off by default (`--no-think`). A thinking block costs many tokens at this speed.
 - `--stats` prints tokens/s to stderr, and the context window chosen.
 - `--ctx N` sets the context window. Without it the window is the largest that keeps the
-  weights and the caches in free memory, up to the model's limit; a window that does not fit
-  is refused with the largest that does.
+  weights and the state in free memory (less 512 MiB), up to the model's
+  `max_position_embeddings`; an explicit window whose state does not fit is refused with the
+  largest that does. A bigger window costs memory up front; attention slows down only as the context actually fills.
 - Without `--max-tokens` an answer runs until the model stops or the context fills; Ctrl-C
   ends it early.
 - `--fast` (experimental, needs a q8 `--weights` file) rounds the activations of every matrix
@@ -615,7 +630,9 @@ draft is thrown away and the model state rolled back, so the ids are exactly tho
 draft logits for every prompt position but the last (the golden gate checks them). The head
 needs the `mtp.*` tensors: a q8 file written by an older `lm-quant` has none and must be
 written again. For Qwen3.5-4B the head adds about 136 MB of q8 weights, 8 KiB of cache per
-token, and about 50 MiB for the rollback state. Not yet in `lm-chat` or `lm-serve`.
+token, and about 50 MiB for the rollback state. Measured on the target: 78% of drafts
+accepted, but 0.91x the plain speed, because a two-token verify costs more than one token on
+this CPU. It is not in `lm-chat` or `lm-serve`.
 
 ### bin/lm-quant
 
@@ -637,10 +654,11 @@ scripts/doctor.sh [--read-speed] [MODEL_DIR]
 
 ## Troubleshooting
 
-- **Out of memory.** Use the q8 file, not bf16. Leave out `--ctx` (it then fits free memory) or lower it. Close other programs and
-  check `scripts/doctor.sh` for available memory. A swap file helps as a safety margin.
-- **Slow.** Keep the model directory on an SSD. Use q8 rather than bf16. Then
-  check the `cpu clock` line of `scripts/doctor.sh` (next entry).
+- **Out of memory.** Use the q8 file, not bf16. Leave out `--ctx` (the window then fits free
+  memory) or lower it. Close other programs and check `scripts/doctor.sh` for available
+  memory. A swap file helps as a safety margin.
+- **Slow.** Keep the model directory on an SSD. Use q8 rather than bf16. Then check the
+  `cpu clock` line of `scripts/doctor.sh` (next entry).
 - **`cpu clock` NOTE in doctor: the CPU is capped far below its rated speed.** On the
   OptiPlex 3050 this once held the i5-6500T at 800 MHz (`cat
   /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq` printed 800000, turbo off), which

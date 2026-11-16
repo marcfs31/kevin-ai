@@ -4,9 +4,13 @@
 
 Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2, no AVX-512), Ubuntu Server 26.04.1 LTS.
 Planned for 8 GB RAM, a 238 GB NVMe SSD and a 931 GB HDD; upgraded 2026-11-16 to about 11 GB
-RAM, with the HDD replaced by a 466 GB SATA SSD for the models. Owner's choice (2026-11-13): run
+RAM, with the HDD replaced by a 466 GB SATA SSD (spare; the models stay on the NVMe). Owner's choice (2026-11-13): run
 **Qwen3.5-4B** and **Gemma 4 E4B** with a from-scratch C engine in the style of
 kimi-k3-in-c, replacing the earlier gpt-oss-20b plan.
+
+**Status (2026-11-16):** both models are implemented and run on the real checkpoints on the
+target machine. This document is the design and the normative equations. The measured
+results are in the README; the build tracks at the end of each phase are the historical plan.
 
 | model | params (text) | checkpoint | order | why |
 |---|---:|---:|---|---|
@@ -17,11 +21,12 @@ Both Apache-2.0, ungated. Vision and audio are out of scope (text only); Qwen's 
 used as a speculative draft (see Later).
 
 **Weights: q8 resident, bf16 exact.** bf16 Qwen is 8.4 GB of text weights, more than
-RAM. `bin/lm-quant` writes a q8 file (int8, one f32 scale per 32 weights, about
-4.75 GB) that the engine mmaps and keeps resident. The original bf16 safetensors also
+the 8 GB the plan was written for. `bin/lm-quant` writes a q8 file (int8, one f32 scale per
+32 weights, about 4.75 GB) that the engine mmaps and keeps resident. The original bf16 safetensors also
 load directly; on 8 GB they streamed through the page cache (the kimi-k3-in-c
-technique), slow but exact; in 11 GB bf16 Qwen stays resident (8.0 GiB measured). Speed is **an estimate until measured on the box: roughly
-2 to 4 tokens/s for q8**, bounded by memory bandwidth (~4.75 GB read per token).
+technique), slow but exact; in 11 GB bf16 Qwen stays resident (8.0 GiB measured). Speed was an estimate of 2 to 4
+tokens/s for q8; measured on the box it is 2.3 tokens/s generating, bounded by memory bandwidth
+(~4.75 GB read per token).
 
 **Repo: from scratch, porting by file** from kimi-k3-in-c (Apache-2.0, attribution in
 `NOTICE`): safetensors reader, bf16 and int8 matmul kernels, ShortConv and the
@@ -108,7 +113,8 @@ Symbols `lm_`, files `lm_*.c/h`, headers included relative to `src/`. The Makefi
 discovers sources by wildcard; nobody edits it to add a file.
 
 `bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F] [--greedy N]
-[--ctx N] [--threads N] [--profile]` feeds the tokens, writes one little-endian f32 row of `vocab`
+[--ctx N] [--threads N] [--profile] [--mtp [--mtp-out F]]` (the flags are described in the
+README; this is the original contract) feeds the tokens, writes one little-endian f32 row of `vocab`
 logits per fed token to `F`, then generates `N` tokens by argmax (lowest id wins a tie)
 and prints one id per line on stdout. Nothing else goes to stdout.
 
@@ -234,10 +240,11 @@ mask. So only layers `< first` keep a KV cache; a sliding cache needs only the l
 **Output.** `logits = cap * tanh((embed_tokens @ rms(x, norm)) / cap)`, `cap` =
 `final_logit_softcapping` (the unembedding is the unscaled tied embedding).
 
-**Memory on 8 GB.** Text weights in q8 are about 8.5 GB: the per-layer table is about
+**Memory.** Text weights in q8 are about 8.5 GB: the per-layer table is about
 3.2 GB but is read one 12 KB row per token (page cache, evictable), and the shared
 layers' unused K/V tensors are never touched, so the hot working set is about 5.3 GB.
-Tighter than Qwen. Measured 2026-11-16 with 11 GB: peak 5.7 GiB resident, 1.9 tokens/s.
+Tighter than Qwen. Measured 2026-11-16 with 11 GB: peak 5.7 GiB resident, 1.9 tokens/s
+generating. The 3.2 GB table is read one row per token and never resident.
 
 **Tokenizer** (`tokenizer.json` BPE): normalizer replaces `" "` with `"▁"` (U+2581);
 the Split pre-tokenizer then never fires, so each text segment between added tokens is
@@ -279,8 +286,9 @@ window. Same golden files, q8 file and gate as Qwen.
 ## Later
 
 Batched prefill, the OpenAI-compatible endpoint (`bin/lm-serve`, with
-`scripts/lm-serve.service`) and the prefix cache (`lm_snapshot` / `lm_restore`, one snapshot in
-`lm_chat`) are done.
+`scripts/lm-serve.service`) and the prefix cache (`lm_snapshot` / `lm_restore`, one snapshot per
+system prompt in `lm_chat`, within a byte budget, `lm-serve --cache-mb`) are done. The context
+window is chosen from free memory when not given (`src/model/lm_ctx.c`).
 
 **MTP speculative decoding (Qwen3.5), phase 1 done: engine and `lm-run --mtp`.** The head (as
 in vLLM's `qwen3_5_mtp.py`) takes h_p, the main model's final normed hidden at position p, and
@@ -298,8 +306,8 @@ its norms are zero-centred.
 - Oracle: speculative greedy gives exactly the plain greedy ids; `tests/unit/test_mtp.c`
   checks draft, verify and accept bit-exact against plain decoding, and `check_golden.py`
   checks the head's rows against `ref_qwen35.Model.mtp_rows`.
-- Cost on the i5: a two-token verify is about 1.1 forwards and a draft about 0.16 (mostly the
-  lm_head), so 70-80% accepted drafts would give about 1.3-1.4x. Not measured yet.
-- Next: phase 2, `lm_chat` / `lm-serve` with speculative sampling (rejection sampling when
-  temperature > 0); phase 3, measure the acceptance rate and speed on the server (needs the
-  q8 file written again).
+- Measured on the i5 (2026-11-16): 78% of drafts accepted (277 of 353). The speed is 0.80x the
+  plain greedy path on main, and 0.91x with the two-token matmul tile (PR 33): the two-token
+  verify costs more than one token here, so MTP stays opt-in. The 1.3-1.4x estimate was wrong.
+- Next: `lm_chat` / `lm-serve` with speculative sampling (rejection sampling when
+  temperature > 0). Not planned while MTP is slower than plain decoding on this CPU.
