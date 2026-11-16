@@ -16,7 +16,8 @@ Downloads the pinned checkpoint files for one model into MODEL_DIR.
                 engine reads the weights from this directory and an HDD is far too slow.
   --help        Show this help and exit.
 
-  MODEL_DIR     default: $HOME/models/<NAME>
+  MODEL_DIR     default: <root>/<NAME>, where <root> is what scripts/models-root.sh prints
+                ($LM_MODELS_DIR, else /mnt/models when you can write it, else $HOME/models)
 
 qwen3.5-4b (phase 1, Apache-2.0)
   Qwen/Qwen3.5-4B at revision 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
@@ -103,7 +104,7 @@ case "$MODEL" in
     ;;
 esac
 
-MODEL_DIR="${MODEL_DIR_ARG:-$HOME/models/$MODEL}"
+MODEL_DIR="${MODEL_DIR_ARG:-$("$(dirname "${BASH_SOURCE[0]}")/models-root.sh")/$MODEL}"
 MIN_FREE_BYTES=$((CHECKPOINT_BYTES + ONE_GB))
 
 for cmd in curl sha256sum; do

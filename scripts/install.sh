@@ -20,13 +20,15 @@ Steps, in order, each stopping the script on failure:
   6. scripts/doctor.sh   read-only pre-flight report, then the chat command
 
   --model NAME    qwen3.5-4b (default), gemma-4-e4b, both, or none (build and test only)
-  --model-dir DIR where model folders go: DIR/<NAME>. Default: $HOME/models
+  --model-dir DIR where model folders go: DIR/<NAME>. Default: what scripts/models-root.sh
+                  prints ($LM_MODELS_DIR, else /mnt/models when you can write it, else
+                  $HOME/models)
   --skip-tests    skip step 3 (not recommended on the first run: it is the first AVX2 run)
   --allow-hdd     pass through to the downloader. Not recommended.
   --help          show this help
 
 Disk needed: qwen3.5-4b about 10.3 GB download + 4.8 GB q8; gemma-4-e4b about 17 GB
-download + 8.5 GB q8. Put --model-dir on the NVMe SSD, not the 5400 rpm HDD.
+download + 8.5 GB q8. --model-dir must be on an SSD: the downloader refuses a rotational disk.
 Re-running is safe: finished downloads and an existing q8 file are skipped.
 EOF
 }
@@ -35,7 +37,7 @@ die() { echo "error: $*" >&2; exit 1; }
 step() { echo; echo "==> $*"; }
 
 MODEL=qwen3.5-4b
-MODELS_ROOT="$HOME/models"
+MODELS_ROOT=$("$REPO_DIR/scripts/models-root.sh")
 SKIP_TESTS=0
 ALLOW_HDD=""
 while [ $# -gt 0 ]; do
