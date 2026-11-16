@@ -22,8 +22,7 @@ model's files and sizes, the q8 file, whether MODEL_DIR is on a rotational disk,
 whether the engine binaries are built.
 
   MODEL_DIR      default: <root>/qwen3.5-4b, where <root> is what scripts/models-root.sh
-                 prints ($LM_MODELS_DIR, else /mnt/models when you can write it, else
-                 $HOME/models)
+                 prints ($LM_MODELS_DIR, else $HOME/models)
   --read-speed   time a direct read of the first 2 GiB of the q8 file (or of the first
                  bf16 weight file when there is no q8 file yet). Linux, dd iflag=direct.
   --help         show this help
