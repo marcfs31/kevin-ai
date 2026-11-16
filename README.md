@@ -585,7 +585,7 @@ draft is thrown away and the model state rolled back, so the ids are exactly tho
 `--greedy`; stderr reports how many drafts were accepted. `--mtp-out F` writes the head's
 draft logits for every prompt position but the last (the golden gate checks them). The head
 needs the `mtp.*` tensors: a q8 file written by an older `lm-quant` has none and must be
-written again. For Qwen3.5-4B the head adds about 125 MB of q8 weights, 8 KiB of cache per
+written again. For Qwen3.5-4B the head adds about 136 MB of q8 weights, 8 KiB of cache per
 token, and about 50 MiB for the rollback state. Not yet in `lm-chat` or `lm-serve`.
 
 ### bin/lm-quant
