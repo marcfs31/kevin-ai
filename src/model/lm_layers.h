@@ -80,8 +80,12 @@ size_t lm_mlp_batch_scratch(int inter, int T);                       /* floats *
 void   lm_mlp_batch(float *out, const float *x, const LmMlpW *w, float *scratch, int T);
 
 size_t lm_linear_batch_scratch(const LmLinDims *d, int T);           /* floats */
+/* ckpt (NULL = none): after each token t < T-1 the conv state and S are copied to
+ * ckpt + t * lm_linear_state_floats(d) (conv first), so a caller can go back to after any of
+ * them (speculative decoding's rejected drafts). */
+size_t lm_linear_state_floats(const LmLinDims *d);
 void   lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const LmLinDims *d,
-                             float *conv_state, float *S, float *scratch, int T);
+                             float *conv_state, float *S, float *scratch, int T, float *ckpt);
 
 /* pos0 is the position of the first of the T tokens; they go to cache slots pos0..pos0+T-1. */
 size_t lm_attn_batch_scratch(const LmAttnDims *d, int ctx, int T);   /* floats */

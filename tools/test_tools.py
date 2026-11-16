@@ -592,6 +592,17 @@ FAKE_RUN = textwrap.dedent('''\
         ids.append(0)
     if mode == "noise":
         print("hello")
+    if mode == "mtpwrongid" and "--mtp" in a and ids:
+        ids[-1] = (ids[-1] + 1) % model.cfg.vocab
+    if opt("--mtp-out"):
+        mrows = model.mtp_rows(tokens)
+        if mode == "mtpperturb":
+            mrows[4][2] += 0.05
+        if mode == "mtpmissing":
+            mrows = mrows[:-1]
+        with open(opt("--mtp-out"), "wb") as f:
+            for r in mrows:
+                f.write(struct.pack("<%df" % len(r), *r))
     if opt("--logits-out"):
         with open(opt("--logits-out"), "wb") as f:
             for r in rows:
@@ -655,7 +666,17 @@ class CheckGoldenTests(unittest.TestCase):
         self.assertEqual(p.stdout, "")
 
     def test_perturbed_logits_fail(self):
-        self.assert_fails(self.go(fake_mode="perturb"), "bf16 row 5")
+        self.assert_fails(self.go(fake_mode="perturb"), "bf16 logits row 5")
+
+    def test_qwen_checks_the_mtp_head(self):
+        self.assertIn("23 mtp rows", self.go().stdout)
+
+    def test_wrong_mtp_rows_fail(self):
+        self.assert_fails(self.go(fake_mode="mtpperturb"), "bf16 mtp row 4")
+        self.assert_fails(self.go(fake_mode="mtpmissing"), "bf16 mtp file has")
+
+    def test_mtp_greedy_must_equal_plain_greedy(self):
+        self.assert_fails(self.go(fake_mode="mtpwrongid"), "bf16 mtp greedy id 15")
 
     def test_wrong_greedy_id_fails(self):
         self.assert_fails(self.go(fake_mode="wrongid"), "greedy id 0")
@@ -695,6 +716,7 @@ class CheckGoldenTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("[gemma4]", p.stdout)
         self.assertIn("40 rows", p.stdout)
+        self.assertNotIn("mtp", p.stdout)
 
     def test_qwen_summary_is_unchanged_by_family_detection(self):
         self.assertNotIn("[", self.go().stdout)

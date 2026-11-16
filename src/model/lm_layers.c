@@ -172,8 +172,14 @@ size_t lm_linear_batch_scratch(const LmLinDims *d, int T)
     return (size_t)T * (conv_dim + 2 * vd + 2 * (size_t)d->n_v) + 2 * (size_t)d->n_v;
 }
 
+size_t lm_linear_state_floats(const LmLinDims *d)
+{
+    const size_t conv_dim = (size_t)2 * d->n_k * d->dk + (size_t)d->n_v * d->dv;
+    return conv_dim * (size_t)(d->conv_k - 1) + (size_t)d->n_v * d->dk * d->dv;
+}
+
 void lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const LmLinDims *d,
-                           float *conv_state, float *S, float *scratch, int T)
+                           float *conv_state, float *S, float *scratch, int T, float *ckpt)
 {
     const int kd = d->n_k * d->dk, vd = d->n_v * d->dv, conv_dim = 2 * kd + vd;
     float *qkv = scratch, *z = qkv + (size_t)T * conv_dim, *o = z + (size_t)T * vd;
@@ -200,6 +206,12 @@ void lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const Lm
         (void)lm_gated_delta_step(S, o_t, q, k, v, g, beta, d->n_k, d->n_v, d->dk, d->dv);
         for (int h = 0; h < d->n_v; h++)
             lm_rmsnorm_gated(o_t + h * d->dv, o_t + h * d->dv, z_t + h * d->dv, w->norm_w, d->dv, d->eps);
+        if (ckpt && t < T - 1) {
+            const size_t nc = (size_t)conv_dim * (size_t)(d->conv_k - 1);
+            float *ck = ckpt + (size_t)t * lm_linear_state_floats(d);
+            memcpy(ck, conv_state, nc * sizeof(float));
+            memcpy(ck + nc, S, (size_t)d->n_v * d->dk * d->dv * sizeof(float));
+        }
     }
     lm_mat_mul_batch(&w->out, out, o, T);
     LM_TIMES_ADD_OWN(linear, t0, mm0);

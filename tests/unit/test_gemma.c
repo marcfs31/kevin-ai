@@ -45,7 +45,7 @@ static char *read_all(const char *path, size_t *len)
 static LmModel *open_model(const char *weights, int ctx)
 {
     char err[512];
-    LmOpts o = { weights, ctx, 0, 0 };
+    LmOpts o = { weights, ctx, 0, 0, 0 };
     LmModel *m = lm_open(FIX, &o, err, sizeof err);
     CHECK_MSG(m != NULL, "lm_open: %s", err);
     return m;
@@ -247,7 +247,7 @@ static void test_reuse_layers_never_bind(const char *weights, const char *file, 
             snprintf(cur, sizeof cur, "%s", next);
         }
     CHECK_MSG(renamed >= 12, "%s: only %d tensor names patched", label, renamed);
-    LmOpts o = { NULL, 0, 0, 0 };
+    LmOpts o = { NULL, 0, 0, 0, 0 };
     char wpath[1024];
     if (weights) { snprintf(wpath, sizeof wpath, "%s", cur); o.weights = wpath; }
     else {
@@ -281,7 +281,7 @@ static void test_reuse_layers_never_bind(const char *weights, const char *file, 
         cfg = read_all(FIX "/config.json", NULL);
         lt_write_text(P("kvbad/config.json"), cfg);
         free(cfg);
-        LmOpts ob = { NULL, 0, 0, 0 };
+        LmOpts ob = { NULL, 0, 0, 0, 0 };
         char bpath[1024];
         if (weights) { snprintf(bpath, sizeof bpath, "%s", P("kv/bad.safetensors")); ob.weights = bpath; }
         else {
@@ -476,7 +476,7 @@ static void test_binding_rejections(void)
     }
 
     /* the bf16 file passed as q8 weights; the q8 file used as a bf16 checkpoint */
-    LmOpts o = { FIX "/model.safetensors", 0, 0, 0 };
+    LmOpts o = { FIX "/model.safetensors", 0, 0, 0, 0 };
     expect_open_fail(FIX, &o, "not an lm-q8 group-32 file", "bf16 file as q8");
     {
         char err[512] = "";
@@ -492,9 +492,9 @@ static void test_binding_rejections(void)
         CHECK_MSG(m == NULL && strstr(err, "q8 file"), "q8 as bf16: \"%s\"", err);
         if (m) lm_close(m);
     }
-    LmOpts bad = { NULL, -1, 0, 0 };
+    LmOpts bad = { NULL, -1, 0, 0, 0 };
     expect_open_fail(FIX, &bad, "ctx", "negative ctx");
-    LmOpts miss = { "/nonexistent/model.q8.safetensors", 0, 0, 0 };
+    LmOpts miss = { "/nonexistent/model.q8.safetensors", 0, 0, 0, 0 };
     expect_open_fail(FIX, &miss, "cannot open", "missing weights file");
 }
 

@@ -16,7 +16,16 @@
  *
  * STATE (all allocated in lm_open, nothing per token): per linear-attention layer a conv
  * state [conv_dim][k-1] and a delta-rule state S [n_v][dk][dv]; per full-attention layer an
- * f32 KV cache [ctx][kv_heads*head_dim] for K and for V. */
+ * f32 KV cache [ctx][kv_heads*head_dim] for K and for V.
+ *
+ * MTP HEAD (LmOpts.mtp; the maths in tools/ref_qwen35.py mtp_step). Its entry at position p is
+ * computed from the final normed hidden h_p and the token at p+1, so after the token at pos-1
+ * is fed the head's KV cache holds entries 0..pos-2 and hlast holds h_{pos-1}: every fed chunk
+ * also runs the head over the entries its tokens complete. lm_draft computes entry pos-1 from
+ * the next token (writing a slot the next feed rewrites with the same values) and its logits.
+ * lm_verify runs a chunk with logits for every token and keeps, per linear layer, the state
+ * after each token but the last (the attention caches need no copy: a rolled-back position is
+ * just rewritten later), so lm_accept can roll a rejected draft back. */
 #include "io/lm_portable_io.h"
 
 #include <math.h>
@@ -61,6 +70,18 @@ struct LmModel {
     float  **S;
     float  **kc, **vc;                       /* per layer, NULL for linear layers */
 
+    /* MTP head */
+    int      mtp;
+    Layer    mtpL;
+    LmMat    mtp_fc;                         /* [hidden][2*hidden] */
+    const float *mtp_pre_e, *mtp_pre_h, *mtp_norm;
+    float   *mkc, *mvc;                      /* its KV cache [ctx][kvd] */
+    float   *hlast;                          /* final normed hidden of the last fed position */
+    float   *mx, *mn, *min2;                 /* head batch: x, normed x [CHUNK][hidden], fc input [CHUNK][2*hidden] */
+    float  **ck;                             /* per linear layer: lm_verify's state after each token but the last */
+    float   *vh;                             /* [LM_VERIFY_MAX][hidden]: lm_verify's normed hidden per token */
+    int      vstart, vn;                     /* the last lm_verify: start position and tokens (0 = none) */
+
     /* scratch */
     float *h, *n, *mix, *mlp_out, *scratch, *mlp_scratch;
     float *bh, *bn, *bmix, *bscratch;        /* prefill: LM_PREFILL_CHUNK tokens of hidden, normed, mixer output; layer scratch */
@@ -85,9 +106,63 @@ void lm_close(LmModel *m)
     free(m->layers);
     free(m->h); free(m->n); free(m->mix); free(m->mlp_out); free(m->scratch); free(m->mlp_scratch);
     free(m->bh); free(m->bn); free(m->bmix); free(m->bscratch);
+    for (int i = 0; i < L && m->ck; i++) free(m->ck[i]);
+    free(m->ck); free(m->mkc); free(m->mvc); free(m->hlast); free(m->mx); free(m->mn); free(m->min2); free(m->vh);
     lm_bind_free(&m->b);
     lm_config_free(&m->cfg);
     free(m);
+}
+
+/* The MTP head's weights (shaped like a full-attention layer plus fc and three norms) and its
+ * buffers. */
+static int bind_mtp(LmModel *m, int ctx, char *err, size_t errlen)
+{
+    const LmCfg *c = &m->cfg;
+    if (!lm_st_find(&m->b.st, "mtp.fc.weight")) {
+        lm_fail(err, errlen, "the weights have no MTP head (mtp.*): a q8 file needs re-quantising with this lm-quant");
+        return -1;
+    }
+    Layer *L = &m->mtpL;
+    const int qd = c->heads * c->head_dim, kvd = c->kv_heads * c->head_dim, H = c->hidden;
+    L->full = 1;
+    BIND_MAT(m->mtp_fc, H, 2 * H, "mtp.fc.weight");
+    BIND_VEC(m->mtp_pre_e, H, 1, H, 0, "mtp.pre_fc_norm_embedding.weight");
+    BIND_VEC(m->mtp_pre_h, H, 1, H, 0, "mtp.pre_fc_norm_hidden.weight");
+    BIND_VEC(m->mtp_norm, H, 1, H, 0, "mtp.norm.weight");
+    BIND_VEC(L->in_norm, H, 1, H, 0, "mtp.layers.0.input_layernorm.weight");
+    BIND_VEC(L->post_norm, H, 1, H, 0, "mtp.layers.0.post_attention_layernorm.weight");
+    L->mlp.inter = c->inter;
+    BIND_MAT(L->mlp.gate, c->inter, H, "mtp.layers.0.mlp.gate_proj.weight");
+    BIND_MAT(L->mlp.up, c->inter, H, "mtp.layers.0.mlp.up_proj.weight");
+    BIND_MAT(L->mlp.down, H, c->inter, "mtp.layers.0.mlp.down_proj.weight");
+    BIND_MAT(L->attn.q, 2 * qd, H, "mtp.layers.0.self_attn.q_proj.weight");
+    BIND_MAT(L->attn.k, kvd, H, "mtp.layers.0.self_attn.k_proj.weight");
+    BIND_MAT(L->attn.v, kvd, H, "mtp.layers.0.self_attn.v_proj.weight");
+    BIND_MAT(L->attn.o, H, qd, "mtp.layers.0.self_attn.o_proj.weight");
+    BIND_VEC(L->attn.q_norm, c->head_dim, 1, c->head_dim, 0, "mtp.layers.0.self_attn.q_norm.weight");
+    BIND_VEC(L->attn.k_norm, c->head_dim, 1, c->head_dim, 0, "mtp.layers.0.self_attn.k_norm.weight");
+
+    m->mkc = (float *)calloc((size_t)ctx * kvd, sizeof(float));
+    m->mvc = (float *)calloc((size_t)ctx * kvd, sizeof(float));
+    m->hlast = (float *)calloc((size_t)H, sizeof(float));
+    m->mx = (float *)calloc((size_t)LM_PREFILL_CHUNK * H, sizeof(float));
+    m->mn = (float *)calloc((size_t)LM_PREFILL_CHUNK * H, sizeof(float));
+    m->min2 = (float *)calloc((size_t)LM_PREFILL_CHUNK * 2 * H, sizeof(float));
+    m->vh = (float *)calloc((size_t)LM_VERIFY_MAX * H, sizeof(float));
+    m->ck = (float **)calloc((size_t)c->layers, sizeof(float *));
+    if (!m->mkc || !m->mvc || !m->hlast || !m->mx || !m->mn || !m->min2 || !m->vh || !m->ck) {
+        lm_fail(err, errlen, "out of memory allocating the MTP head's state");
+        return -1;
+    }
+    for (int i = 0; i < c->layers; i++) {
+        if (m->layers[i].full) continue;
+        m->ck[i] = (float *)malloc((size_t)(LM_VERIFY_MAX - 1) * lm_linear_state_floats(&m->ld) * sizeof(float));
+        if (!m->ck[i]) { lm_fail(err, errlen, "out of memory allocating the verify checkpoints"); return -1; }
+    }
+    m->mtp = 1;
+    return 0;
+fail:
+    return -1;
 }
 
 LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t errlen)
@@ -114,6 +189,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
         char mt[64] = "";
         if (lm_config_model_type(model_dir, mt, sizeof mt) == 0) {
             if (!strcmp(mt, "gemma4")) {
+                if (opts && opts->mtp) { lm_fail(err, errlen, "Gemma 4 has no MTP head; mtp is for Qwen3.5"); free(m); return NULL; }
                 m->gemma = lm_gemma_open(model_dir, weights, ctx, fast, err, errlen);
                 if (!m->gemma) { free(m); return NULL; }
                 m->ctx = ctx;
@@ -216,6 +292,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
         lm_fail(err, errlen, "out of memory allocating scratch");
         goto fail;
     }
+    if (opts && opts->mtp && bind_mtp(m, ctx, err, errlen) != 0) goto fail;
     {   /* prefill buffers: one chunk of tokens, sized for the largest of the three sub-layers */
         size_t bs = lm_linear_batch_scratch(&m->ld, LM_PREFILL_CHUNK);
         const size_t ba = lm_attn_batch_scratch(&m->ad, ctx, LM_PREFILL_CHUNK);
@@ -253,7 +330,13 @@ void lm_reset(LmModel *m)
         if (m->kc[i]) memset(m->kc[i], 0, (size_t)m->ctx * kvd * sizeof(float));
         if (m->vc[i]) memset(m->vc[i], 0, (size_t)m->ctx * kvd * sizeof(float));
     }
+    if (m->mtp) {
+        memset(m->mkc, 0, (size_t)m->ctx * kvd * sizeof(float));
+        memset(m->mvc, 0, (size_t)m->ctx * kvd * sizeof(float));
+        memset(m->hlast, 0, (size_t)c->hidden * sizeof(float));
+    }
     m->pos = 0;
+    m->vn = 0;
 }
 
 /* ---- snapshots ------------------------------------------------------------------- */
@@ -271,6 +354,11 @@ static void state_regions(LmModel *m, int pos, LmRegionFn fn, void *user)
         if (m->S[i]) fn(user, m->S[i], (size_t)c->lv_heads * c->lk_dim * c->lv_dim);
         if (m->kc[i]) fn(user, m->kc[i], (size_t)pos * kvd);
         if (m->vc[i]) fn(user, m->vc[i], (size_t)pos * kvd);
+    }
+    if (m->mtp) {
+        fn(user, m->mkc, (size_t)pos * kvd);
+        fn(user, m->mvc, (size_t)pos * kvd);
+        fn(user, m->hlast, (size_t)c->hidden);
     }
 }
 
@@ -308,7 +396,7 @@ int lm_restore(LmModel *m, const LmSnapshot *s)
     Walk w = { s->data, 0, 2 };
     state_regions(m, s->pos, walk, &w);
     if (m->gemma) lm_gemma_set_pos(m->gemma, s->pos);
-    else m->pos = s->pos;
+    else { m->pos = s->pos; m->vn = 0; }
     return LM_OK;
 }
 
@@ -316,12 +404,39 @@ int    lm_snapshot_pos(const LmSnapshot *s)   { return s->pos; }
 size_t lm_snapshot_bytes(const LmSnapshot *s) { return s->n * sizeof(float); }
 void   lm_snapshot_free(LmSnapshot *s)        { if (s) { free(s->data); free(s); } }
 
+/* The MTP head over n entries starting at position q0: entry j from hidden hid[j] and token
+ * tok[j]. Writes the head's KV slots q0..q0+n-1; logits (may be NULL) after the last entry. */
+static void mtp_run(LmModel *m, const float *const *hid, const int *tok, int q0, int n, float *logits)
+{
+    const LmCfg *c = &m->cfg;
+    const int H = c->hidden;
+    const Layer *L = &m->mtpL;
+    for (int j = 0; j < n; j++) {
+        float *e = m->min2 + (size_t)j * 2 * H;
+        lm_mat_row(&m->embed, tok[j], e);
+        lm_rmsnorm(e, e, m->mtp_pre_e, H, c->eps);
+        lm_rmsnorm(e + H, hid[j], m->mtp_pre_h, H, c->eps);
+    }
+    lm_mat_mul_batch(&m->mtp_fc, m->mx, m->min2, n);
+    for (int j = 0; j < n; j++) lm_rmsnorm(m->mn + (size_t)j * H, m->mx + (size_t)j * H, L->in_norm, H, c->eps);
+    lm_attn_mixer_batch(m->bmix, m->mn, &L->attn, &m->ad, m->mkc, m->mvc, q0, m->ctx, m->bscratch, n);
+    for (size_t j = 0; j < (size_t)n * H; j++) m->mx[j] += m->bmix[j];
+    for (int j = 0; j < n; j++) lm_rmsnorm(m->mn + (size_t)j * H, m->mx + (size_t)j * H, L->post_norm, H, c->eps);
+    lm_mlp_batch(m->bmix, m->mn, &L->mlp, m->bscratch, n);
+    for (size_t j = 0; j < (size_t)n * H; j++) m->mx[j] += m->bmix[j];
+    if (logits) {
+        lm_rmsnorm(m->n, m->mx + (size_t)(n - 1) * H, m->mtp_norm, H, c->eps);
+        lm_mat_mul(&m->head, logits, m->n);
+    }
+}
+
 static int feed(LmModel *m, int token, float *logits)
 {
     if (m->gemma) return lm_gemma_feed(m->gemma, token, logits);
     const LmCfg *c = &m->cfg;
     if (token < 0 || token >= c->vocab) return LM_ERR_TOKEN;
     if (m->pos >= m->ctx) return LM_ERR_CTX;
+    m->vn = 0;
 
     lm_mat_row(&m->embed, token, m->h);
     for (int i = 0; i < c->layers; i++) {
@@ -336,30 +451,37 @@ static int feed(LmModel *m, int token, float *logits)
         lm_mlp(m->mlp_out, m->n, &L->mlp, m->mlp_scratch);
         for (int j = 0; j < c->hidden; j++) m->h[j] += m->mlp_out[j];
     }
-    m->pos++;
-    if (logits) {
-        lm_rmsnorm(m->n, m->h, m->final_norm, c->hidden, c->eps);
-        lm_mat_mul(&m->head, logits, m->n);
+    if (m->mtp && m->pos > 0) {   /* the head's entry pos-1 is complete now that its next token is known */
+        const float *hid = m->hlast;
+        mtp_run(m, &hid, &token, m->pos - 1, 1, NULL);
     }
+    m->pos++;
+    if (logits || m->mtp) lm_rmsnorm(m->n, m->h, m->final_norm, c->hidden, c->eps);
+    if (m->mtp) memcpy(m->hlast, m->n, (size_t)c->hidden * sizeof(float));
+    if (logits) lm_mat_mul(&m->head, logits, m->n);
     return LM_OK;
 }
 
-static int prefill(LmModel *m, const int *tokens, int n, float *logits)
+/* The checks every batched entry point shares: LM_OK when the n tokens can be fed. */
+static int batch_ok(const LmModel *m, const int *tokens, int n)
 {
     if (n < 0 || (n > 0 && !tokens)) return LM_ERR_TOKEN;
     const int V = lm_n_vocab(m);
     for (int i = 0; i < n; i++)
         if (tokens[i] < 0 || tokens[i] >= V) return LM_ERR_TOKEN;
     if (n > lm_n_ctx(m) - lm_pos(m)) return LM_ERR_CTX;
-    if (n == 0) return LM_OK;
-    if (m->gemma) return lm_gemma_prefill(m->gemma, tokens, n, logits);
+    return LM_OK;
+}
 
+/* Feed n checked tokens in chunks. rows: logits for every token (n rows) when all_rows, else
+ * after the last one only (may be NULL). ckpt: lm_verify's state checkpoints (one chunk). */
+static void run_chunks(LmModel *m, const int *tokens, int n, float *rows, int all_rows, int ckpt)
+{
     const LmCfg *c = &m->cfg;
-    const int H = c->hidden;
-    int last_T = 0;
+    const int H = c->hidden, V = c->vocab;
     for (int s = 0; s < n; s += LM_PREFILL_CHUNK) {
         const int T = n - s < LM_PREFILL_CHUNK ? n - s : LM_PREFILL_CHUNK;
-        last_T = T;
+        const int pos0 = m->pos, last = s + T == n;
         for (int t = 0; t < T; t++) lm_mat_row(&m->embed, tokens[s + t], m->bh + (size_t)t * H);
         for (int i = 0; i < c->layers; i++) {
             const Layer *L = &m->layers[i];
@@ -367,18 +489,88 @@ static int prefill(LmModel *m, const int *tokens, int n, float *logits)
             if (L->full)
                 lm_attn_mixer_batch(m->bmix, m->bn, &L->attn, &m->ad, m->kc[i], m->vc[i], m->pos, m->ctx, m->bscratch, T);
             else
-                lm_linear_mixer_batch(m->bmix, m->bn, &L->lin, &m->ld, m->conv[i], m->S[i], m->bscratch, T);
+                lm_linear_mixer_batch(m->bmix, m->bn, &L->lin, &m->ld, m->conv[i], m->S[i], m->bscratch, T,
+                                      ckpt ? m->ck[i] : NULL);
             for (size_t j = 0; j < (size_t)T * H; j++) m->bh[j] += m->bmix[j];
             for (int t = 0; t < T; t++) lm_rmsnorm(m->bn + (size_t)t * H, m->bh + (size_t)t * H, L->post_norm, H, c->eps);
             lm_mlp_batch(m->bmix, m->bn, &L->mlp, m->bscratch, T);
             for (size_t j = 0; j < (size_t)T * H; j++) m->bh[j] += m->bmix[j];
         }
         m->pos += T;
+        /* final normed hidden, into bn: every token for the head or all_rows, else the last */
+        const int from = m->mtp || all_rows ? 0 : T - 1;
+        if (m->mtp || all_rows || (last && rows))
+            for (int t = from; t < T; t++) lm_rmsnorm(m->bn + (size_t)t * H, m->bh + (size_t)t * H, m->final_norm, H, c->eps);
+        if (all_rows)
+            for (int t = 0; t < T; t++) lm_mat_mul(&m->head, rows + (size_t)(s + t) * V, m->bn + (size_t)t * H);
+        else if (last && rows)
+            lm_mat_mul(&m->head, rows, m->bn + (size_t)(T - 1) * H);
+        if (m->mtp) {
+            /* entries pos0-1 .. pos0+T-2: hidden of the previous position, token of this one */
+            const float *hid[LM_PREFILL_CHUNK];
+            const int q0 = pos0 > 0 ? pos0 - 1 : 0, ne = pos0 + T - 1 - q0;
+            for (int j = 0; j < ne; j++) {
+                const int q = q0 + j;
+                hid[j] = q == pos0 - 1 ? m->hlast : m->bn + (size_t)(q - pos0) * H;
+            }
+            if (ne > 0) mtp_run(m, hid, tokens + s + (q0 + 1 - pos0), q0, ne, NULL);
+            memcpy(m->hlast, m->bn + (size_t)(T - 1) * H, (size_t)H * sizeof(float));
+            if (ckpt) memcpy(m->vh, m->bn, (size_t)T * H * sizeof(float));
+        }
     }
-    if (logits) {
-        lm_rmsnorm(m->n, m->bh + (size_t)(last_T - 1) * H, m->final_norm, H, c->eps);
-        lm_mat_mul(&m->head, logits, m->n);
+}
+
+static int prefill(LmModel *m, const int *tokens, int n, float *logits)
+{
+    const int rc = batch_ok(m, tokens, n);
+    if (rc != LM_OK || n == 0) return rc;
+    if (m->gemma) return lm_gemma_prefill(m->gemma, tokens, n, logits);
+    m->vn = 0;
+    run_chunks(m, tokens, n, logits, 0, 0);
+    return LM_OK;
+}
+
+int lm_draft(LmModel *m, int token, float *logits)
+{
+    if (m->gemma || !m->mtp || m->pos < 1) return LM_ERR_STATE;
+    if (token < 0 || token >= m->cfg.vocab) return LM_ERR_TOKEN;
+    LM_TIMES_T0(t0);
+    const float *hid = m->hlast;
+    mtp_run(m, &hid, &token, m->pos - 1, 1, logits);
+    LM_TIMES_ADD(total, t0);
+    return LM_OK;
+}
+
+int lm_verify(LmModel *m, const int *tokens, int n, float *rows)
+{
+    if (m->gemma || !m->mtp || n < 1 || n > LM_VERIFY_MAX || !rows) return LM_ERR_STATE;
+    const int rc = batch_ok(m, tokens, n);
+    if (rc != LM_OK) return rc;
+    LM_TIMES_T0(t0);
+    m->vstart = m->pos;
+    run_chunks(m, tokens, n, rows, 1, 1);
+    m->vn = n;
+    LM_TIMES_ADD(total, t0);
+    return LM_OK;
+}
+
+int lm_accept(LmModel *m, int k)
+{
+    if (m->gemma || !m->mtp || m->vn < 1 || k < 1 || k > m->vn) return LM_ERR_STATE;
+    const LmCfg *c = &m->cfg;
+    if (k < m->vn) {
+        const size_t nst = lm_linear_state_floats(&m->ld);
+        const size_t nc = (size_t)c->conv_dim * (size_t)(c->conv_k - 1);
+        for (int i = 0; i < c->layers; i++) {
+            if (!m->ck[i]) continue;
+            const float *ck = m->ck[i] + (size_t)(k - 1) * nst;
+            memcpy(m->conv[i], ck, nc * sizeof(float));
+            memcpy(m->S[i], ck + nc, (nst - nc) * sizeof(float));
+        }
+        memcpy(m->hlast, m->vh + (size_t)(k - 1) * c->hidden, (size_t)c->hidden * sizeof(float));
+        m->pos = m->vstart + k;
     }
+    m->vn = 0;
     return LM_OK;
 }
 

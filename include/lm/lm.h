@@ -22,7 +22,9 @@ enum {
     LM_OK        = 0,
     LM_ERR_CTX   = 1, /* context window full; nothing was fed */
     LM_ERR_TOKEN = 2, /* token id outside [0, vocab) */
-    LM_ERR_IO    = 3  /* a weight read failed; the model state is no longer valid */
+    LM_ERR_IO    = 3, /* a weight read failed; the model state is no longer valid */
+    LM_ERR_STATE = 4  /* the call does not apply now (no MTP head, nothing fed, no lm_verify
+                         to accept); nothing changed */
 };
 
 typedef struct {
@@ -33,6 +35,10 @@ typedef struct {
     int q8_int8_acts;    /* 1 = fast path: round the activations of every q8 matrix multiply to
                             int8 (per group of 32). Faster, NOT bit-identical to 0 and slightly
                             less exact; requires `weights` (a q8 file). 0 = exact, the default */
+    int mtp;             /* 1 = also load Qwen3.5's multi-token-prediction head (mtp.* in the
+                            weights; q8 files from an lm-quant older than the head lack it) for
+                            lm_draft / lm_verify / lm_accept. Every fed token then also runs the
+                            head's one layer to keep its cache. lm_open fails if there is none */
 } LmOpts;
 
 /* model_dir holds config.json in the Hugging Face layout. Every architecture number
@@ -71,6 +77,25 @@ int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
  * taken -- whatever was fed or reset in between, as often as needed. A shared prompt prefix
  * (a system prompt) is then fed once and restored instead of fed again. Size: lm_snapshot_bytes;
  * for Qwen3.5-4B about 50 MiB (conv and delta-rule state) plus 64 KiB per position. */
+/* ---- speculative decoding with the MTP head (LmOpts.mtp) ----
+ * The head drafts the token after next; one batched forward checks the draft, and a rejected
+ * draft is rolled back without feeding again. Greedy decoding with them gives exactly the ids
+ * plain lm_feed decoding gives (the logits are BIT-IDENTICAL), in fewer weight passes when
+ * drafts are accepted:
+ *     t = argmax(last logits); lm_draft(m, t, dl); d = argmax(dl);
+ *     lm_verify(m, (int[]){t, d}, 2, rows);       rows[0] decides d, rows[1] follows it
+ *     lm_accept(m, argmax(rows[0]) == d ? 2 : 1);
+ * lm_draft: token is the id about to be fed (sampled from the last logits); logits receives the
+ * head's lm_n_vocab() floats for the id AFTER it. Needs lm_pos >= 1. The model is unchanged. */
+int lm_draft(LmModel *m, int token, float *logits);
+/* lm_prefill of n tokens (1 <= n <= LM_VERIFY_MAX) with logits for EVERY one of them: rows is
+ * n * lm_n_vocab() floats. Errors as lm_prefill, plus LM_ERR_STATE without the MTP head. */
+#define LM_VERIFY_MAX 2
+int lm_verify(LmModel *m, const int *tokens, int n, float *rows);
+/* Right after lm_verify: keep its first k tokens (1 <= k <= n); the model is then exactly as if
+ * only those k had been fed. LM_ERR_STATE if the last call was not lm_verify. */
+int lm_accept(LmModel *m, int k);
+
 typedef struct LmSnapshot LmSnapshot;
 LmSnapshot *lm_snapshot(const LmModel *m);                 /* NULL on allocation failure */
 /* LM_OK, or -1 (nothing changed) if s was taken from another LmModel. */

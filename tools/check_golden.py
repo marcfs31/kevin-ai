@@ -14,6 +14,12 @@ For bf16 (weights from the fixture dir) and q8 (`--weights model.q8.safetensors`
      (lowest id wins a tie) is the golden argmax;
   2. `lm-run ... --tokens <greedy prompt> --greedy N`: stdout is exactly N ids, one per line,
      equal to the golden `greedy.out`.
+When the golden holds "mtp" (Qwen3.5's multi-token-prediction head, one row per token position
+but the last), also:
+  3. `lm-run ... --tokens <golden tokens> --mtp --mtp-out TMP`: TMP is exactly len(tokens)-1 rows,
+     each within the same tolerance of the golden head row with the same argmax;
+  4. `lm-run ... --tokens <greedy prompt> --greedy N --mtp`: speculative greedy prints exactly the
+     golden ids (the head only proposes; the main model decides every id).
 Then `lm-quant --model DIR --out TMP`: its file must be byte-identical to model.q8.safetensors.
 
 Fails closed: a missing binary or fixture, non-zero exit, timeout, wrong row count, NaN/Inf,
@@ -87,6 +93,62 @@ def load_golden(path, vocab):
     return tokens, logits, prompt, out
 
 
+def load_mtp(path, n_tokens, vocab):
+    with open(path) as f:
+        rows = json.load(f).get("mtp")
+    if rows is None:
+        return None
+    if len(rows) != n_tokens - 1 or any(len(r) != vocab for r in rows):
+        raise Failure("%s: mtp is not [%d positions][%d vocab]" % (path, n_tokens - 1, vocab))
+    return rows
+
+
+def compare_rows(label, path, golden, tokens, vocab):
+    """The f32 rows in `path` against `golden` (2e-4 * max|golden row|, same argmax); returns the
+    worst error as a fraction of the tolerance."""
+    if not os.path.isfile(path):
+        raise Failure("%s run did not write %s" % (label, path))
+    with open(path, "rb") as f:
+        raw = f.read()
+    want = len(golden) * vocab * 4
+    if len(raw) != want:
+        raise Failure("%s file has %d bytes, expected %d (%d rows of %d f32)"
+                      % (label, len(raw), want, len(golden), vocab))
+    flat = struct.unpack("<%df" % (len(golden) * vocab), raw)
+    max_err = 0.0
+    for t in range(len(golden)):
+        row = flat[t * vocab:(t + 1) * vocab]
+        if not all(math.isfinite(v) for v in row):
+            raise Failure("%s row %d contains NaN or Inf" % (label, t))
+        ref = golden[t]
+        tol = REL_TOL * max(abs(v) for v in ref)
+        err = max(abs(a - b) for a, b in zip(row, ref))
+        if err > tol:
+            worst = max(range(vocab), key=lambda i: abs(row[i] - ref[i]))
+            raise Failure("%s row %d (token %d): logit %d is %.6g, golden %.6g, |diff| %.3g > tol %.3g"
+                          % (label, t, tokens[t], worst, row[worst], ref[worst], err, tol))
+        if argmax(row) != argmax(ref):
+            raise Failure("%s row %d: argmax %d, golden %d" % (label, t, argmax(row), argmax(ref)))
+        max_err = max(max_err, err / tol if tol else 0.0)
+    return max_err
+
+
+def check_greedy(label, stdout, out):
+    lines = stdout.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    try:
+        ids = [int(x) for x in lines]
+    except ValueError:
+        raise Failure("%s stdout has a non-integer line: %r" % (label, stdout[:80]))
+    if len(ids) != len(out):
+        raise Failure("%s printed %d ids, expected %d" % (label, len(ids), len(out)))
+    for i, (a, b) in enumerate(zip(ids, out)):
+        if a != b:
+            raise Failure("%s id %d is %d, golden %d" % (label, i, a, b))
+    return len(ids)
+
+
 def check_variant(label, run_bin, model_dir, weights, golden_path, vocab, timeout, tmp):
     tokens, logits, prompt, out = load_golden(golden_path, vocab)
     base = [run_bin, "--model", model_dir]
@@ -100,47 +162,26 @@ def check_variant(label, run_bin, model_dir, weights, golden_path, vocab, timeou
     if stdout.strip():
         raise Failure("%s logits run wrote to stdout (contract: nothing but greedy ids): %r"
                       % (label, stdout[:80]))
-    if not os.path.isfile(lpath):
-        raise Failure("%s logits run did not write %s" % (label, lpath))
-    with open(lpath, "rb") as f:
-        raw = f.read()
-    want = len(tokens) * vocab * 4
-    if len(raw) != want:
-        raise Failure("%s logits file has %d bytes, expected %d (%d rows of %d f32)"
-                      % (label, len(raw), want, len(tokens), vocab))
-    flat = struct.unpack("<%df" % (len(tokens) * vocab), raw)
-    max_err = 0.0
-    for t in range(len(tokens)):
-        row = flat[t * vocab:(t + 1) * vocab]
-        if not all(math.isfinite(v) for v in row):
-            raise Failure("%s row %d contains NaN or Inf" % (label, t))
-        ref = logits[t]
-        tol = REL_TOL * max(abs(v) for v in ref)
-        err = max(abs(a - b) for a, b in zip(row, ref))
-        if err > tol:
-            worst = max(range(vocab), key=lambda i: abs(row[i] - ref[i]))
-            raise Failure("%s row %d (token %d): logit %d is %.6g, golden %.6g, |diff| %.3g > tol %.3g"
-                          % (label, t, tokens[t], worst, row[worst], ref[worst], err, tol))
-        if argmax(row) != argmax(ref):
-            raise Failure("%s row %d: argmax %d, golden %d" % (label, t, argmax(row), argmax(ref)))
-        max_err = max(max_err, err / tol if tol else 0.0)
+    max_err = compare_rows(label + " logits", lpath, logits, tokens, vocab)
 
     # greedy
     stdout = run(base + ["--tokens", csv(prompt), "--greedy", str(len(out))], timeout, label + " greedy run")
-    lines = stdout.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    try:
-        ids = [int(x) for x in lines]
-    except ValueError:
-        raise Failure("%s greedy stdout has a non-integer line: %r" % (label, stdout[:80]))
-    if len(ids) != len(out):
-        raise Failure("%s greedy printed %d ids, expected %d" % (label, len(ids), len(out)))
-    for i, (a, b) in enumerate(zip(ids, out)):
-        if a != b:
-            raise Failure("%s greedy id %d is %d, golden %d" % (label, i, a, b))
-    return "%s %d rows (worst error %.0f%% of tolerance) + %d greedy ids" % (
-        label, len(tokens), 100 * max_err, len(ids))
+    n_ids = check_greedy(label + " greedy", stdout, out)
+
+    mtp = load_mtp(golden_path, len(tokens), vocab)
+    if mtp is None:
+        return "%s %d rows (worst error %.0f%% of tolerance) + %d greedy ids" % (
+            label, len(tokens), 100 * max_err, n_ids)
+    mpath = os.path.join(tmp, label + ".mtp.f32")
+    stdout = run(base + ["--tokens", csv(tokens), "--mtp", "--mtp-out", mpath], timeout, label + " mtp run")
+    if stdout.strip():
+        raise Failure("%s mtp run wrote to stdout: %r" % (label, stdout[:80]))
+    mtp_err = compare_rows(label + " mtp", mpath, mtp, tokens, vocab)
+    stdout = run(base + ["--tokens", csv(prompt), "--greedy", str(len(out)), "--mtp"], timeout,
+                 label + " mtp greedy run")
+    check_greedy(label + " mtp greedy", stdout, out)
+    return "%s %d rows (worst error %.0f%% of tolerance) + %d greedy ids + %d mtp rows (%.0f%%) and mtp greedy" % (
+        label, len(tokens), 100 * max_err, n_ids, len(mtp), 100 * mtp_err)
 
 
 def check_quantiser(quant_bin, model_dir, golden_q8, timeout, tmp):
