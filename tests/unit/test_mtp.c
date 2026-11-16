@@ -9,10 +9,13 @@
  *     a model that was only ever fed the kept tokens;
  *   - a snapshot carries the head's state.
  * Negative cases: calls out of order return LM_ERR_STATE and change nothing; a model opened
- * without the head, a Gemma model, or a q8 file without the head refuse it. */
+ * without the head and a Gemma model refuse it, and a q8 file without the head is refused with
+ * it (and opens without it). */
 #include "lm_test.h"
 
 #include "lm/lm.h"
+#include "io/lm_st.h"
+#include "io/lm_stw.h"
 
 #define DIR "tests/fixtures/qwen35-tiny"
 #define Q8 DIR "/model.q8.safetensors"
@@ -139,8 +142,8 @@ static void test_verify_accept(const Case *c)
     lm_close(r);
 }
 
-/* greedy decoding through lm_verify / lm_accept gives the plain greedy ids, with drafts both
- * accepted and rejected */
+/* greedy decoding through lm_greedy_check (what lm-run --mtp runs) gives the plain greedy ids,
+ * with drafts both accepted and rejected */
 static void test_greedy_equal(const Case *c)
 {
     LmModel *m = open_m(c, 1);
@@ -159,14 +162,13 @@ static void test_greedy_equal(const Case *c)
     while (n < 23) {
         spec[n] = argmax(lg, V);
         const int d = (n % 3 == 2) ? (plain[n + 1] + 1) % V : plain[n + 1];
-        const int pair[2] = { spec[n], d };
-        CHECK(lm_verify(m, pair, 2, rows) == LM_OK);
-        const int ok = argmax(rows, V) == d;
-        CHECK(lm_accept(m, ok ? 2 : 1) == LM_OK);
+        int kept = 0;
+        CHECK(lm_greedy_check(m, spec[n], d, rows, lg, &kept) == LM_OK && lm_pos(m) == 8 + n + kept);
         n++;
-        if (ok) { spec[n++] = d; accepted++; memcpy(lg, rows + V, row); }
-        else { rejected++; memcpy(lg, rows, row); }
+        if (kept == 2) { spec[n++] = d; accepted++; }
+        else { CHECK(kept == 1); rejected++; }
     }
+    if (n < 24) spec[n] = argmax(lg, V), n++;
     CHECK_MSG(accepted > 3 && rejected > 3, "%s: accepted %d rejected %d", c->label, accepted, rejected);
     CHECK_MSG(!memcmp(plain, spec, (size_t)n * sizeof(int)), "%s: speculative greedy ids differ from plain greedy", c->label);
     free(lg);
@@ -217,6 +219,8 @@ static void test_refusals(void)
     CHECK(lm_accept(m, 1) == LM_ERR_STATE && lm_pos(m) == 4); /* a feed after the verify ends it */
     CHECK(lm_verify(m, t3, 2, rows) == LM_OK && lm_accept(m, 2) == LM_OK);
     CHECK(lm_accept(m, 1) == LM_ERR_STATE && lm_pos(m) == 6);  /* once only */
+    int kept = 5;
+    CHECK(lm_greedy_check(m, V, 1, rows, rows, &kept) == LM_ERR_TOKEN && kept == 0 && lm_pos(m) == 6);
     lm_close(m);
 
     /* NEGATIVE: the context window must hold both verify tokens */
@@ -243,6 +247,48 @@ static void test_refusals(void)
     free(rows);
 }
 
+/* a q8 file written before the head was kept (no mtp.* tensors) opens without --mtp and is
+ * refused with it */
+static void test_q8_without_head(void)
+{
+    char dir[512], path[600], err[512] = "";
+    lt_mkdtemp(dir);
+    snprintf(path, sizeof path, "%s/nohead.q8.safetensors", dir);
+    LmSt st;
+    memset(&st, 0, sizeof st);
+    CHECK_MSG(lm_st_open(&st, Q8, 0, err, sizeof err) == 0, "%s", err);
+    LmStWriter *w = lm_stw_create(path, err, sizeof err);
+    int ok = w != NULL;
+    for (int f = 0; ok && f < st.nfiles; f++)
+        for (int i = 0; ok && i < st.files[f].nmeta; i++)
+            ok = lm_stw_meta(w, st.files[f].meta_key[i], st.files[f].meta_val[i], err, sizeof err) == 0;
+    for (int i = 0; ok && i < st.nt; i++)
+        if (strncmp(st.t[i].name, "mtp.", 4) != 0)
+            ok = lm_stw_declare(w, st.t[i].name, st.t[i].dtype, st.t[i].ndim, st.t[i].shape, err, sizeof err) == 0;
+    ok = ok && lm_stw_begin(w, err, sizeof err) == 0;
+    for (const char *name; ok && (name = lm_stw_next_name(w));) {
+        const LmTensor *t = lm_st_find(&st, name);
+        void *buf = t ? malloc((size_t)t->nbytes + 1) : NULL;
+        ok = buf && lm_st_read(&st, t, buf, err, sizeof err) == 0 && lm_stw_tensor_begin(w, name, err, sizeof err) == 0 &&
+             lm_stw_write(w, buf, t->nbytes, err, sizeof err) == 0 && lm_stw_tensor_end(w, err, sizeof err) == 0;
+        free(buf);
+    }
+    if (ok) ok = lm_stw_finish(w, err, sizeof err) == 0;
+    else lm_stw_abort(w);
+    lm_st_close(&st);
+    CHECK_MSG(ok, "writing %s: %s", path, err);
+    if (ok) {
+        const Case nohead = { path, 0, "q8 without head" };
+        LmModel *m = open_m(&nohead, 0);
+        CHECK(m != NULL);
+        lm_close(m);
+        LmOpts o = { path, CTX, 0, 0, 1 };
+        err[0] = 0;
+        CHECK_MSG(lm_open(DIR, &o, err, sizeof err) == NULL && strstr(err, "no MTP head"), "err: %s", err);
+    }
+    lt_rmtree(dir);
+}
+
 int main(void)
 {
     if (access(DIR "/config.json", R_OK) != 0 || access(Q8, R_OK) != 0) {
@@ -256,5 +302,6 @@ int main(void)
         test_snapshot_carries_head(&CASES[i]);
     }
     test_refusals();
+    test_q8_without_head();
     return lt_finish("test_mtp");
 }
