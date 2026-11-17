@@ -642,6 +642,32 @@ Writes the q8 file from the bf16 checkpoint.
 bin/lm-quant --model DIR --out FILE
 ```
 
+### tools/bench_serve.py
+
+Measures `lm-serve` through its API: it starts the server itself, sends one streamed request
+per prompt length and stops it. Python 3, standard library only.
+
+```
+python3 tools/bench_serve.py --model DIR [--weights FILE] [--lens 128,512,1024,2048]
+                             [--gen 32] [--cache-test] [--time-budget-min 60] [--out bench_serve.json]
+```
+
+- Without `--weights` it runs the bf16 checkpoint, the mode that uses the most RAM (about
+  8 GiB resident on this machine). Run one mode at a time: both would not fit in 11 GB.
+- Per prompt length it reports the server's own prompt token count, the time to first token,
+  prompt tokens/s (it includes decoding that first token), generation tokens/s, and the server's
+  peak RSS and the free memory read from `/proc` (Linux; elsewhere "unknown").
+- It also prints the CPU's maximum clock, so a capped CPU shows in the results.
+- **Peak memory at the full context window is an estimate**: a line through the runs' peak RSS,
+  extended to the window `lm-serve` printed. KV memory is only touched as tokens arrive, so RSS
+  grows with the tokens fed, not with the window. Filling the window is not practical (a
+  prompt feeds at about 4 to 5 tokens/s), so `--time-budget-min` skips lengths that would not
+  finish in time.
+- `--cache-test` sends three requests with one long system prompt; the third is restored from
+  the prefix cache, and the report says how many tokens came from it.
+- Tests: `python3 -m unittest discover -s tools -p 'test_bench_serve.py'` (a fake `lm-serve`, no
+  model needed).
+
 ### scripts/doctor.sh
 
 Read-only pre-flight report: CPU flags, memory, compiler, model type and files, q8 file, and
