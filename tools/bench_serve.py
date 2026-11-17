@@ -412,7 +412,8 @@ def report(res):
     out = [format_table(res["runs"])]
     cpu = res["machine"]
     if cpu.get("scaling_max_mhz") is not None:
-        out.append("cpu max clock: %d MHz (rated %s MHz)" % (cpu["scaling_max_mhz"], cpu["cpuinfo_max_mhz"]))
+        out.append("cpu clock limit: %d MHz (scaling_max_freq), %s MHz (cpuinfo_max_freq, the firmware's limit; "
+                   "the i5-6500T is rated 2500)" % (cpu["scaling_max_mhz"], cpu["cpuinfo_max_mhz"]))
     ex = res["memory_at_context"]
     if ex["rss_at_ctx_gib"] is None:
         out.append("memory at the full context: unknown (needs /proc and at least two different prompt lengths)")
