@@ -114,6 +114,20 @@ hidden size). Seed `VISION_SEED` 1. Margins asserted by the generator: no two ro
 q8 and bf16 rows differ by at least 92x the gate tolerance (3x is required). No text goldens yet
 (phase 2 adds image-conditioned logits).
 
+## `gemma4-vl-tiny/`
+
+The Gemma 4 image encoder and `embed_vision`. Same generator (`tools/make_tiny_vl.py --family gemma4`),
+oracle `tools/ref_vision_gemma4.py`, checked once against transformers' `Gemma4VisionModel` plus
+`Gemma4MultimodalEmbedder` (float64, eager): largest difference 8.5e-7 of max|row|. About 2.6 MB.
+Same files and golden schema as `qwen35-vl-tiny/`; the text part is the `gemma4-tiny` model (its
+vision stubs left out, its audio stubs kept, which the quantiser drops).
+
+Vision dimensions: 2 layers, hidden 32, 2 query heads over 1 KV head (`head_dim` 16), intermediate
+64, patch 16, pooling 3, a 16-entry position table per axis, clipped linears on (bounds drawn in
++-[1, 2.5]), out 64. Images 48x48, 96x144 and 144x96 (1, 6 and 6 tokens). Seed `GEMMA_VISION_SEED` 1.
+Margins asserted: no two rows of an image equal; q8 and bf16 rows differ by at least 154x the gate
+tolerance; turning the clamps off changes the rows by more than 3x the tolerance.
+
 ## `ops/*.json`
 
 Compact JSON, one file per op. All activations are f32-exact, all weights bf16-exact; expected

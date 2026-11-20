@@ -29,6 +29,7 @@ import make_tiny_vl  # noqa: E402
 import quant_ref  # noqa: E402
 import ref_gemma4 as gem  # noqa: E402
 import ref_qwen35 as ref  # noqa: E402
+import ref_vision_gemma4 as rgv  # noqa: E402
 import ref_vision_qwen35 as rv  # noqa: E402
 import safetensors as st  # noqa: E402
 
@@ -36,6 +37,7 @@ ROOT = os.path.dirname(TOOLS)
 TINY = os.path.join(ROOT, "tests", "fixtures", "qwen35-tiny")
 GTINY = os.path.join(ROOT, "tests", "fixtures", "gemma4-tiny")
 VLTINY = os.path.join(ROOT, "tests", "fixtures", "qwen35-vl-tiny")
+GVLTINY = os.path.join(ROOT, "tests", "fixtures", "gemma4-vl-tiny")
 OPS = os.path.join(ROOT, "tests", "fixtures", "ops")
 
 REAL_TEXT_KEYS = [
@@ -650,9 +652,12 @@ FAKE_RUN = textwrap.dedent('''\
         return a[a.index(name) + 1] if name in a else None
     mode = os.environ.get("FAKE_MODE", "ok")
     if opt("--image"):
-        import ref_vision_qwen35 as rv
+        import json
+        import ref_vision_gemma4, ref_vision_qwen35 as rv
+        gemma = json.load(open(os.path.join(opt("--model"), "config.json")))["model_type"] == "gemma4"
+        orc = ref_vision_gemma4 if gemma else rv
         rgb, w, h = rv.read_ppm(opt("--image"))
-        vrows = rv.VisionModel.load(opt("--model"), opt("--weights")).encode(rgb, h, w)
+        vrows = orc.VisionModel.load(opt("--model"), opt("--weights")).encode(rgb, h, w)
         if mode == "visionperturb":
             vrows[-1][3] += 0.05
         if mode == "visionmissing":
@@ -757,6 +762,13 @@ class CheckGoldenTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("bf16 vision 3 images, 11 rows", p.stdout)
         self.assertIn("q8 vision 3 images, 11 rows", p.stdout)
+
+    def test_gemma_vision_fixture_passes(self):
+        p = self.go(run_bin=self.gemma_run_bin, fixtures=GVLTINY)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("[gemma4]: bf16 vision 3 images, 13 rows", p.stdout)
+        self.assert_fails(self.go(fake_mode="visionperturb", run_bin=self.gemma_run_bin, fixtures=GVLTINY),
+                          "bf16 img_48x48.ppm: row 0 value 3")
 
     def test_wrong_vision_rows_fail(self):
         self.assert_fails(self.go(fake_mode="visionperturb", fixtures=VLTINY), "bf16 img_64x64.ppm: row 3 value 3")
@@ -1462,6 +1474,32 @@ class VisionOracleTests(unittest.TestCase):
 
     def test_vl_fixture_regenerates_identically(self):
         self.assertEqual(make_tiny_vl.main(["--check"]), 0)
+        self.assertEqual(make_tiny_vl.main(["--family", "gemma4", "--check"]), 0)
+
+    def test_gemma_resize_matches_transformers(self):
+        # expected values printed by transformers' gemma4 get_aspect_ratio_preserving_size @56547cb
+        # (patch 16, max_patches 2520, pooling 3)
+        for hw, want in (((1000, 800), (864, 672)), ((480, 640), (672, 912)), ((4000, 3000), (912, 672)),
+                         ((100, 2000), (144, 3552)), ((2000, 100), (3552, 144)), ((48, 48), (768, 768)),
+                         ((300, 1200), (384, 1584))):
+            self.assertEqual(rgv.aspect_ratio_size(*hw), want, hw)
+
+    def test_gemma_config_refusals(self):
+        raw = jload(os.path.join(GVLTINY, "config.json"))
+        rgv.VisionConfig(raw)
+        for key, val in (("standardize", True), ("hidden_activation", "gelu"), ("num_key_value_heads", 3)):
+            bad = json.loads(json.dumps(raw))
+            bad["vision_config"][key] = val
+            with self.assertRaises(ValueError):
+                rgv.VisionConfig(bad)
+
+    def test_gemma_pooling_order(self):
+        # a 6x9 patch grid pools to 2x3 tokens, row-major over the pooled grid
+        vm = rgv.VisionModel.load(GVLTINY)
+        rgb, w, h = rv.read_ppm(os.path.join(GVLTINY, "img_96x144.ppm"))
+        self.assertEqual(len(vm.encode(rgb, h, w)), 6)
+        with self.assertRaises(ValueError):
+            vm.encode(rgb[:64 * 144 * 3], 64, 144)
 
 
 if __name__ == "__main__":
