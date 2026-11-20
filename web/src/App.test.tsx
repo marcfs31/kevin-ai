@@ -1,0 +1,264 @@
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { App } from './App';
+import { STORAGE_KEY } from './lib/storage';
+import { DONE, FINISH, USAGE, axeViolations, delta, mockFetch, modelsResponse, sseResponse } from './test/helpers';
+
+function renderApp(languages: readonly string[] = ['en-US']) {
+  return render(<App storage={localStorage} languages={languages} />);
+}
+
+function typeAndSend(text: string) {
+  const box = screen.getByLabelText('Message');
+  fireEvent.change(box, { target: { value: text } });
+  fireEvent.keyDown(box, { key: 'Enter' });
+}
+
+function bodyOf(fetchMock: ReturnType<typeof mockFetch>, call: number) {
+  const chats = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/v1/chat/completions'));
+  return JSON.parse(String(chats[call]?.[1]?.body));
+}
+
+/** A reply that never ends until the request is aborted. */
+function heldReply(init: RequestInit | undefined) {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(delta('partial')));
+      init?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+    },
+  });
+  return new Response(stream, { status: 200 });
+}
+
+describe('App', () => {
+  it('sends with Enter, streams the reply and shows its statistics', async () => {
+    const fetchMock = mockFetch(() => sseResponse([delta('Hello'), delta(' **world**'), FINISH, USAGE, DONE]));
+    renderApp();
+    await screen.findByText('Model: qwen3.5-4b');
+    typeAndSend('hi there');
+    expect(await screen.findByText('world')).toBeTruthy();
+    expect(within(screen.getByRole('log')).getByText('hi there')).toBeTruthy();
+    const stats = await screen.findByLabelText('Reply statistics');
+    expect(stats.textContent).toContain('12 prompt tokens');
+    expect(stats.textContent).toContain('8 from cache');
+    expect(bodyOf(fetchMock, 0)).toMatchObject({ messages: [{ role: 'user', content: 'hi there' }], stream: true, stream_options: { include_usage: true } });
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
+    expect(saved.conversations[0].messages[1].content).toBe('Hello **world**');
+  });
+
+  it('re-sends the previous answer exactly as received', async () => {
+    const fetchMock = mockFetch(() => sseResponse([delta('A *b*\n\n'), delta('`c`'), FINISH, DONE]));
+    renderApp();
+    typeAndSend('one');
+    await screen.findByText('c');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    typeAndSend('two');
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(2));
+    expect(bodyOf(fetchMock, 1).messages).toEqual([
+      { role: 'user', content: 'one' },
+      { role: 'assistant', content: 'A *b*\n\n`c`' },
+      { role: 'user', content: 'two' },
+    ]);
+  });
+
+  it('stops a reply with the Stop button and with Esc', async () => {
+    mockFetch((_url, init) => heldReply(init));
+    renderApp();
+    typeAndSend('long one');
+    await screen.findByText('partial');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(await screen.findByText('Stopped.')).toBeTruthy();
+
+    typeAndSend('again');
+    await waitFor(() => expect(screen.getAllByText('partial')).toHaveLength(2));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.getAllByText('Stopped.')).toHaveLength(2));
+  });
+
+  it('shows a server error localized by its code', async () => {
+    const body = { error: { message: 'image too large', type: 'invalid_request_error', code: 'image_too_large' } };
+    mockFetch(() => new Response(JSON.stringify(body), { status: 400 }));
+    renderApp(['es-ES']);
+    const box = screen.getByLabelText('Mensaje');
+    fireEvent.change(box, { target: { value: 'hola' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect((await screen.findByRole('alert')).textContent).toBe('Una imagen es demasiado grande para el servidor.');
+  });
+
+  it('shows the server message for an unknown error code', async () => {
+    mockFetch(() => new Response(JSON.stringify({ error: { message: 'tools are not supported', type: 'invalid_request_error' } }), { status: 400 }));
+    renderApp();
+    typeAndSend('x');
+    expect((await screen.findByRole('alert')).textContent).toBe('The server answered 400: tools are not supported');
+  });
+
+  it('saves the sent message before the reply finishes', async () => {
+    mockFetch((_url, init) => heldReply(init));
+    renderApp();
+    typeAndSend('keep me');
+    await screen.findByText('partial');
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
+    expect(saved.conversations[0].messages.map((m: { typed?: string }) => m.typed)).toEqual(['keep me']);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText('Stopped.');
+  });
+
+  it('localizes proxy errors and errors sent inside a stream', async () => {
+    let call = 0;
+    mockFetch(() => {
+      call += 1;
+      return call === 1
+        ? new Response(JSON.stringify({ error: { message: 'lm-serve is not reachable', type: 'proxy_error', code: 'upstream_unreachable' } }), { status: 502 })
+        : sseResponse([delta('a'), 'data: {"error":{"message":"generation failed","type":"server_error","code":null}}\n\n']);
+    });
+    renderApp(['es']);
+    const box = screen.getByLabelText('Mensaje');
+    fireEvent.change(box, { target: { value: 'uno' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect((await screen.findByRole('alert')).textContent).toBe('El proxy no puede conectar con lm-serve. ¿Está en marcha?');
+    await screen.findByRole('button', { name: 'Enviar' });
+    fireEvent.change(box, { target: { value: 'dos' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
+    expect(screen.getAllByRole('alert')[1]?.textContent).toBe('El servidor detuvo la respuesta con un error: generation failed');
+  });
+
+  it('attaches two files that share a name', async () => {
+    mockFetch(() => sseResponse([FINISH]));
+    renderApp();
+    const files = [new File(['one'], 'notes.txt'), new File(['two'], 'notes.txt')];
+    fireEvent.change(screen.getByTestId('file-input'), { target: { files } });
+    const list = await screen.findByRole('list', { name: 'Attachments' });
+    await waitFor(() => expect(within(list).getAllByText('notes.txt')).toHaveLength(2));
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('renders raw HTML in a reply as text', async () => {
+    mockFetch(() => sseResponse([delta('<script>alert(1)</script> and <b>bold</b>'), FINISH, DONE]));
+    const { container } = renderApp();
+    typeAndSend('xss');
+    expect(await screen.findByText(/<script>alert\(1\)<\/script>/)).toBeTruthy();
+    expect(container.querySelector('.md script, .md b')).toBeNull();
+  });
+
+  it('refuses a file it cannot read', async () => {
+    mockFetch(() => sseResponse([FINISH]));
+    renderApp();
+    const input = screen.getByTestId('file-input');
+    fireEvent.change(input, { target: { files: [new File(['x'], 'song.mp3', { type: 'audio/mpeg' })] } });
+    expect((await screen.findByRole('alert')).textContent).toContain('song.mp3: this kind of file is not supported.');
+    fireEvent.change(input, { target: { files: [new File(['a\u0000b'], 'data.txt', { type: 'text/plain' })] } });
+    expect((await screen.findByRole('alert')).textContent).toContain('data.txt: not a text file.');
+  });
+
+  it('attaches a text file as a fenced block with an estimate', async () => {
+    const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+    renderApp();
+    fireEvent.change(screen.getByTestId('file-input'), { target: { files: [new File(['print(1)\n'], 'a.py')] } });
+    const list = await screen.findByRole('list', { name: 'Attachments' });
+    expect(within(list).getByText('a.py')).toBeTruthy();
+    expect(within(list).getByText(/tokens \(estimate\)/)).toBeTruthy();
+    typeAndSend('explain');
+    await screen.findByText('ok');
+    expect(bodyOf(fetchMock, 0).messages[0].content).toBe('a.py\n```python\nprint(1)\n```\n\nexplain');
+    expect(screen.getByText('Attached: a.py')).toBeTruthy();
+  });
+
+  it('disables image upload and says why when the server does not report vision', async () => {
+    mockFetch(() => sseResponse([FINISH]));
+    renderApp();
+    await screen.findByText('Model: qwen3.5-4b');
+    const button = screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-describedby')).toBe('image-reason');
+    expect(document.getElementById('image-reason')?.textContent).toBe('Images: off, because this server does not say whether it can read them.');
+  });
+
+  it('enables image upload when the server reports vision ok', async () => {
+    mockFetch(() => sseResponse([FINISH]), () => modelsResponse({ context_length: 8192, capabilities: { vision: { status: 'ok', max_pixels: 1048576, pixels_per_token: 784 } } }));
+    renderApp();
+    await screen.findByText(/Context: 8,192 tokens/);
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('refuses to send what would overflow the context', async () => {
+    mockFetch(() => sseResponse([FINISH]), () => modelsResponse({ context_length: 10 }));
+    renderApp();
+    await screen.findByText(/Context: 10 tokens/);
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'x'.repeat(100) } });
+    expect((await screen.findByRole('alert')).textContent).toContain('the context holds 10');
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows when the server is unreachable and retries', async () => {
+    let up = false;
+    mockFetch(() => sseResponse([FINISH]), () => (up ? modelsResponse() : Promise.reject(new TypeError('down')) as unknown as Response));
+    renderApp();
+    expect(await screen.findByText('Could not reach the server.')).toBeTruthy();
+    up = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Model: qwen3.5-4b')).toBeTruthy();
+  });
+
+  it('renames, deletes and deletes all conversations', async () => {
+    mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+    typeAndSend('first chat');
+    await screen.findByText('ok');
+    const nav = screen.getByRole('navigation', { name: 'Conversations' });
+    fireEvent.click(within(nav).getByRole('button', { name: 'Rename “first chat”' }));
+    fireEvent.change(within(nav).getByLabelText('Name of “first chat”'), { target: { value: 'Renamed' } });
+    fireEvent.click(within(nav).getByRole('button', { name: 'Save' }));
+    expect(within(nav).getByText('Renamed')).toBeTruthy();
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'New chat' }));
+    typeAndSend('second chat');
+    await waitFor(() => expect(within(nav).getAllByRole('listitem')).toHaveLength(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    fireEvent.click(within(nav).getByRole('button', { name: 'Delete “Renamed”' }));
+    expect(within(nav).getAllByRole('listitem')).toHaveLength(1);
+    fireEvent.click(within(nav).getByRole('button', { name: 'Delete all' }));
+    expect(within(nav).getByText('No conversations yet.')).toBeTruthy();
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations).toEqual([]);
+  });
+
+  it('switches language from settings', async () => {
+    mockFetch(() => sseResponse([FINISH]));
+    renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'es' } });
+    expect(await screen.findByRole('button', { name: 'Enviar' })).toBeTruthy();
+    expect(document.documentElement.lang).toBe('es');
+  });
+
+  it('shows the live prompt-reading timer before the first token', async () => {
+    mockFetch((_url, init) => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+        },
+      });
+      return new Response(stream);
+    });
+    renderApp();
+    typeAndSend('slow');
+    expect(await screen.findByText(/Reading the prompt… \d+ s/)).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Stop' })));
+  });
+});
+
+describe('accessibility', () => {
+  it('has no axe violations on the empty screen, a conversation and the settings', async () => {
+    mockFetch(() => sseResponse([delta('think', 'reasoning_content'), delta('# Title\n\n```js\nx()\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |'), FINISH, USAGE, DONE]));
+    const { container } = renderApp();
+    await screen.findByText('Model: qwen3.5-4b');
+    expect(await axeViolations(container)).toEqual([]);
+    typeAndSend('hello');
+    await screen.findByText('Title');
+    await screen.findByLabelText('Reply statistics');
+    expect(await axeViolations(container)).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(await axeViolations(container)).toEqual([]);
+  });
+});
