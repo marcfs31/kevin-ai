@@ -240,7 +240,12 @@ class QuantTests(unittest.TestCase):
         src = st.open_checkpoint(TINY)
         text = [n for n in src.names() if n.startswith(("model.language_model.", "mtp."))]
         self.assertTrue(any(n.startswith("mtp.") for n in text))     # the MTP head is kept
-        self.assertFalse(any(n.startswith("model.visual.") for n in q8.names()))
+        vis = [n for n in src.names() if n.startswith("model.visual.")]
+        self.assertTrue(vis)
+        for n in vis:                                                 # vision is kept; in % 32 != 0 copied
+            shape = quant_ref.out_shape(n, src.shape(n))
+            self.assertEqual((q8.dtype(n), q8.shape(n), q8.raw(n)), (src.dtype(n), shape, src.raw(n)), n)
+        self.assertEqual(q8.shape("model.visual.patch_embed.proj.weight"), (8, 24))   # 4-D flattened
         self.assertEqual(q8.metadata, {"format": "lm-q8", "group": "32", "source": src.source_sha256})
         self.assertEqual(list(q8.metadata), ["format", "group", "source"])
         self.assertEqual(q8.names(), sorted(q8.info))
@@ -256,10 +261,39 @@ class QuantTests(unittest.TestCase):
             else:
                 self.assertEqual((q8.dtype(n), q8.shape(n), q8.raw(n)),
                                  (src.dtype(n), shape, src.raw(n)), n)
-        self.assertEqual(len(q8.names()), len(text) + sum(
+        self.assertEqual(len(q8.names()), len(text) + len(vis) + sum(
             1 for n in text if n.endswith(".weight") and len(src.shape(n)) == 2))
         header_len = struct.unpack("<Q", bytes(q8.buf[:8]))[0]
         self.assertEqual(header_len % 8, 0)
+
+    def test_vision_weights_kept_and_flattened(self):
+        def bf16(shape):
+            n = 1
+            for d in shape:
+                n *= d
+            return ("BF16", shape, st.floats_to_bf16([0.5] * n))
+        store = st.MemoryCheckpoint({
+            "model.language_model.w.weight": bf16((1, 32)),
+            "model.visual.blocks.0.attn.qkv.weight": bf16((2, 64)),
+            "model.visual.merger.linear_fc1.weight": bf16((2, 16)),
+            "model.visual.patch_embed.proj.weight": bf16((2, 3, 2, 4, 4)),
+            "model.vision_tower.encoder.layers.0.self_attn.q_proj.input_max": ("F32", (), b"\0\0\x80\x3f"),
+            "model.embed_audio.embedding_projection.weight": bf16((2, 32)),
+        })
+        q8 = quant_ref.load_q8(quant_ref.quantize_store(store, "x"))
+        self.assertEqual(q8.dtype("model.visual.blocks.0.attn.qkv.weight"), "I8")
+        self.assertEqual(q8.dtype("model.visual.merger.linear_fc1.weight"), "BF16")
+        self.assertEqual(q8.shape("model.visual.patch_embed.proj.weight"), (2, 96))
+        self.assertEqual(q8.dtype("model.visual.patch_embed.proj.weight"), "I8")
+        self.assertEqual(q8.shape("model.vision_tower.encoder.layers.0.self_attn.q_proj.input_max"), ())
+        self.assertNotIn("model.embed_audio.embedding_projection.weight", q8.names())
+
+    def test_text_width_rule_unchanged_for_mtp(self):
+        store = st.MemoryCheckpoint({
+            "model.language_model.w.weight": ("BF16", (1, 32), st.floats_to_bf16([1.0] * 32)),
+            "mtp.fc.weight": ("BF16", (1, 30), st.floats_to_bf16([1.0] * 30))})
+        with self.assertRaises(quant_ref.QuantError):
+            quant_ref.quantize_store(store, "x")
 
     def test_rebuild_is_byte_identical_and_deterministic(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1264,9 +1298,12 @@ class GemmaFixtureTests(unittest.TestCase):
         self.assertEqual(c.shape(gem.PREFIX + "layers.5.self_attn.q_proj.weight"), (128, 64))
         self.assertEqual(c.shape(gem.PREFIX + "embed_tokens_per_layer.weight"), (384, 12 * 32))
 
-    def test_q8_file_is_text_only_and_quantises_the_ple_matrices(self):
+    def test_q8_file_keeps_text_and_vision_and_quantises_the_ple_matrices(self):
         q = quant_ref.load_q8(os.path.join(GTINY, "model.q8.safetensors"))
-        self.assertTrue(all(n.startswith(gem.PREFIX) for n in q.names()))
+        self.assertTrue(all(n.startswith((gem.PREFIX, "model.vision_tower.", "model.embed_vision."))
+                            for n in q.names()))
+        self.assertTrue(any(n.startswith("model.vision_tower.") for n in q.names()))
+        self.assertFalse(any("audio" in n for n in q.names()))
         for n in ("embed_tokens_per_layer.weight", "per_layer_model_projection.weight",
                   "layers.3.per_layer_projection.weight", "layers.3.per_layer_input_gate.weight"):
             self.assertEqual(q.dtype(gem.PREFIX + n), "I8", n)

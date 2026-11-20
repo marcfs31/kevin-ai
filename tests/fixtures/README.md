@@ -23,7 +23,7 @@ A complete Qwen3.5-shaped checkpoint small enough for unit tests. Seed 8 (consta
 | file | content |
 |---|---|
 | `config.json` | real schema: nested `text_config` (same keys, same order as the real 4B config), `model_type` `qwen3_5`, `layer_types`, `full_attention_interval` 4, `rope_parameters` (theta 1e7, partial_rotary_factor 0.25, mrope_section [2,1,1]); other top-level keys (`vision_config`, token ids) as in the real file |
-| `model.safetensors-0000{1,2}-of-00002.safetensors` + `model.safetensors.index.json` | two shards, real tensor names with prefix `model.language_model.`. Shard 1: embedding and layers 0-3. Shard 2: layers 4-7, final norm, and tensors the engine MUST ignore: `model.visual.*` (5 tensors) and `mtp.*` (3 tensors) |
+| `model.safetensors-0000{1,2}-of-00002.safetensors` + `model.safetensors.index.json` | two shards, real tensor names with prefix `model.language_model.`. Shard 1: embedding and layers 0-3. Shard 2: layers 4-7, final norm, fake `model.visual.*` stubs (5 tensors; kept by the quantiser, never bound by the text engine) and `mtp.*` (3 tensors) |
 | `model.q8.safetensors` | `tools/quant_ref.py` output for the dir above (format in the `quant_ref.py` docstring) |
 | `golden_bf16.json`, `golden_q8.json` | oracle results, schema below |
 
@@ -67,7 +67,7 @@ found with `--find-seed`). About 2.6 MB. Same golden schema, q8 format and gate 
 | `config.json` | real schema: top-level `model_type` `gemma4` with `audio_config`, `vision_config` and token ids (tiny stubs), nested `text_config` (same keys, same order as the real E4B config, `model_type` `gemma4_text`) |
 | `model.safetensors` | ONE bf16 file (no index): all real text tensor names with prefix `model.language_model.` (including `layer_scalar` `[1]` and, for the four reuse layers 8-11, the unused `k_proj`, `v_proj`, `k_norm`), plus 8 tensors the engine MUST ignore: `model.vision_tower.*` (4, one a rank-0 scalar), `model.embed_vision.*`, `model.embed_audio.*`, `model.audio_tower.*` |
 | `generation_config.json` | as the real file (`eos_token_id` [1, 106, 50]) |
-| `model.q8.safetensors` | `tools/quant_ref.py` output (text tensors only; byte-identical when regenerated) |
+| `model.q8.safetensors` | `tools/quant_ref.py` output (text and vision stubs, audio dropped; byte-identical when regenerated) |
 | `golden_bf16.json`, `golden_q8.json` | oracle results, same schema as above |
 
 Dimensions: 12 layers, `layer_types` 5 sliding + 1 full, twice (full at 5 and 11), hidden 64,

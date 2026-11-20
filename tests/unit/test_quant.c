@@ -220,9 +220,9 @@ static void test_checkpoint(void)
     uint16_t *norm = rand_bf16(64, 1.0f);                        /* 1-D ".weight": copied, NOT quantised */
     uint16_t *conv = rand_bf16(12 * 1 * 4, 1.0f);                /* 3-D conv weight: copied */
     float alog[4] = { 0.5f, -1.0f, 2.0f, 0.25f };                /* F32, copied */
-    uint16_t *vis = rand_bf16(16 * 32, 1.0f);                    /* visual: dropped */
+    uint16_t *vis = rand_bf16(16 * 32, 1.0f);                    /* visual: quantised like text */
     uint16_t *mtp = rand_bf16(16 * 32, 1.0f);                    /* mtp: kept like the text weights */
-    uint16_t *visbad = rand_bf16(8 * 30, 1.0f);                  /* visual with in=30: must be IGNORED, not an error */
+    uint16_t *visbad = rand_bf16(8 * 30, 1.0f);                  /* visual with in=30: copied, not an error */
     float f32w[8 * 32];                                          /* F32 2-D weight: quantised from f32 */
     for (int i = 0; i < 8 * 32; i++) f32w[i] = lt_rand();
 
@@ -254,7 +254,7 @@ static void test_checkpoint(void)
     LmQuantStats stt;
     int rc = lm_quantize_checkpoint(P("ck"), P("q8.safetensors"), &stt, err, sizeof err);
     CHECK_MSG(rc == 0, "%s", err);
-    CHECK(stt.n_quantised == 5 && stt.n_copied == 3 && stt.n_ignored == 2);   /* embed, q_proj, zrows, f32mat, mtp.fc | norm, conv, A_log | 2 visual dropped */
+    CHECK(stt.n_quantised == 6 && stt.n_copied == 4 && stt.n_ignored == 0);   /* embed, q_proj, zrows, f32mat, mtp.fc, visual qkv | norm, conv, A_log, visual merger */
     CHECK(access(P("q8.safetensors.tmp"), F_OK) != 0);
 
     LmSt o, src;
@@ -268,10 +268,16 @@ static void test_checkpoint(void)
         "model.language_model.layers.0.input_layernorm.weight",
         "model.language_model.layers.0.linear_attn.conv1d.weight",
         "model.language_model.layers.0.linear_attn.A_log",
-        "mtp.fc.weight", "mtp.fc.weight.q8scale" };          /* the MTP head is kept */
-    CHECK(names_ok(&o, want, 13));
-    CHECK(lm_st_find(&o, "model.visual.blocks.0.attn.qkv.weight") == NULL);
-    CHECK(lm_st_find(&o, "model.visual.merger.weight") == NULL);
+        "mtp.fc.weight", "mtp.fc.weight.q8scale",            /* the MTP head is kept */
+        "model.visual.blocks.0.attn.qkv.weight", "model.visual.blocks.0.attn.qkv.weight.q8scale",
+        "model.visual.merger.weight" };                      /* vision is kept too */
+    CHECK(names_ok(&o, want, 16));
+    {
+        const LmTensor *vb = lm_st_find(&o, "model.visual.merger.weight");
+        CHECK(vb && vb->dtype == LM_DT_BF16 && vb->ndim == 2 && vb->shape[0] == 8 && vb->shape[1] == 30);
+        const LmTensor *vq = lm_st_find(&o, "model.visual.blocks.0.attn.qkv.weight");
+        CHECK(vq && vq->dtype == LM_DT_I8);
+    }
 
     /* metadata */
     char want_src[65];
@@ -371,7 +377,7 @@ static void test_checkpoint(void)
             count++;
             p = d + 10;
         }
-        CHECK(count == 13);
+        CHECK(count == 16);
         struct stat sb;
         CHECK(stat(P("q8.safetensors"), &sb) == 0 && (int64_t)sb.st_size == 8 + (int64_t)N + cursor);
         free(h);
@@ -540,9 +546,10 @@ static void test_multiblock(void)
 
 /* Byte-identical to the Python reference (tools/quant_ref.py) on its tiny fixture. The
  * fixture is read in place, never copied; absence is a FAILURE, not a skip. */
-/* Regression: a checkpoint's vision tower has rank-5 tensors (Conv3d). The text-only quantiser
- * drops them, so they must not stop it. Before the fix the reader rejected them at open. */
-static void test_rank_above_four_is_ignored(void)
+/* Regression: a checkpoint's vision tower has rank-5 tensors (Conv3d). Before the first fix
+ * the reader rejected them at open; the quantiser now keeps the patch embedding, flattened to
+ * the 2-D matrix the encoder uses. */
+static void test_rank_above_four_vision_is_flattened(void)
 {
     char err[256];
     mkdir(P("r5"), 0755);
@@ -558,7 +565,28 @@ static void test_rank_above_four_is_ignored(void)
     LmQuantStats st;
     int rc = lm_quantize_checkpoint(P("r5"), P("r5.q8.safetensors"), &st, err, sizeof err);
     CHECK_MSG(rc == 0, "%s", err);
-    CHECK(st.n_quantised == 1 && st.n_copied == 1 && st.n_ignored == 1);
+    CHECK(st.n_quantised == 1 && st.n_copied == 2 && st.n_ignored == 0);
+    LmSt o;
+    CHECK_MSG(lm_st_open(&o, P("r5.q8.safetensors"), 1, err, sizeof err) == 0, "%s", err);
+    const LmTensor *pe = lm_st_find(&o, "model.visual.patch_embed.proj.weight");
+    CHECK(pe && pe->dtype == LM_DT_F32 && pe->ndim == 2 && pe->shape[0] == 1 && pe->shape[1] == 4);
+    lm_st_close(&o);
+}
+
+/* Negative case: the in % 32 leniency is for vision only; a text or MTP matrix still fails. */
+static void test_text_width_rule_unchanged(void)
+{
+    char err[256];
+    mkdir(P("w30"), 0755);
+    unsigned char data[60 + 64];
+    memset(data, 0, sizeof data);
+    lt_write_st_raw8(P("w30/model.safetensors"),
+        "{\"model.language_model.layers.0.mlp.weight\":{\"dtype\":\"BF16\",\"shape\":[1,32],\"data_offsets\":[0,64]},"
+        "\"mtp.fc.weight\":{\"dtype\":\"BF16\",\"shape\":[1,30],\"data_offsets\":[64,124]}}",
+        data, sizeof data);
+    LmQuantStats st;
+    CHECK(lm_quantize_checkpoint(P("w30"), P("w30.q8.safetensors"), &st, err, sizeof err) != 0);
+    CHECK(strstr(err, "mtp.fc.weight") != NULL);
 }
 
 static void test_reference_fixture(void)
@@ -598,7 +626,8 @@ int main(void)
     test_checkpoint();
     test_failures();
     test_multiblock();
-    test_rank_above_four_is_ignored();
+    test_rank_above_four_vision_is_flattened();
+    test_text_width_rule_unchanged();
     test_reference_fixture();
     lt_rmtree(g_dir);
     return lt_finish("test_quant");

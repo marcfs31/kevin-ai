@@ -19,10 +19,24 @@
 
 #define MTP_PREFIX "mtp."
 
-/* Only the text model and its MTP head are kept; visual and anything else is dropped. */
+static const char *const VISION_PREFIXES[] = { "model.visual.", "model.vision_tower.", "model.embed_vision." };
+
+static int has_prefix(const char *name, const char *prefix)
+{
+    return strncmp(name, prefix, strlen(prefix)) == 0;
+}
+
+static int is_vision(const char *name)
+{
+    for (size_t i = 0; i < sizeof VISION_PREFIXES / sizeof *VISION_PREFIXES; i++)
+        if (has_prefix(name, VISION_PREFIXES[i])) return 1;
+    return 0;
+}
+
+/* The text model, its MTP head and the vision encoder are kept; anything else is dropped. */
 static int ignored(const char *name)
 {
-    return strncmp(name, TEXT_PREFIX, strlen(TEXT_PREFIX)) != 0 && strncmp(name, MTP_PREFIX, strlen(MTP_PREFIX)) != 0;
+    return !has_prefix(name, TEXT_PREFIX) && !has_prefix(name, MTP_PREFIX) && !is_vision(name);
 }
 
 static int ends_with(const char *s, const char *suffix)
@@ -31,9 +45,27 @@ static int ends_with(const char *s, const char *suffix)
     return n >= m && !strcmp(s + n - m, suffix);
 }
 
+/* Output shape. A vision ".weight" of rank 3 or more (the Conv3d/Conv2d patch embedding) is
+ * written flattened to [d0, product of the rest], the matrix the encoder multiplies by. */
+static int out_shape(const LmTensor *t, int64_t shape[4])
+{
+    if (is_vision(t->name) && ends_with(t->name, ".weight") && (t->ndim > 2 || t->rank_overflow)) {
+        shape[0] = t->shape[0];
+        shape[1] = t->shape[0] > 0 ? t->numel / t->shape[0] : 0;
+        return 2;
+    }
+    for (int d = 0; d < t->ndim; d++) shape[d] = t->shape[d];
+    return t->ndim;
+}
+
+/* A vision matrix whose width is not a whole number of q8 groups is copied as it is (the
+ * engine binds either form); a text matrix like that is an error further down. */
 static int quantised(const LmTensor *t)
 {
-    return t->ndim == 2 && ends_with(t->name, ".weight");
+    int64_t s[4];
+    if (out_shape(t, s) != 2 || !ends_with(t->name, ".weight")) return 0;
+    if (is_vision(t->name) && (s[1] == 0 || s[1] % LM_Q8_GROUP != 0)) return 0;
+    return 1;
 }
 
 typedef struct { char *name; float *buf; } Pending;
@@ -96,12 +128,14 @@ int lm_quantize_checkpoint(const char *model, const char *outp, LmQuantStats *st
             lm_fail(err, errlen, "source tensor %s collides with the .q8scale suffix of the output format", t->name);
             goto out;
         }
+        int64_t oshape[4];
+        const int ondim = out_shape(t, oshape);
         if (!quantised(t)) {
-            if (t->rank_overflow) {
+            if (t->rank_overflow && ondim != 2) {
                 lm_fail(err, errlen, "tensor %s has rank above 4; the q8 format supports at most 4", t->name);
                 goto out;
             }
-            if (lm_stw_declare(w, t->name, t->dtype, t->ndim, t->shape, err, errlen) != 0) goto out;
+            if (lm_stw_declare(w, t->name, t->dtype, ondim, oshape, err, errlen) != 0) goto out;
             ls.n_copied++;
             continue;
         }
@@ -110,15 +144,15 @@ int lm_quantize_checkpoint(const char *model, const char *outp, LmQuantStats *st
                     t->name, lm_dtype_name(t->dtype));
             goto out;
         }
-        if (t->shape[1] == 0 || t->shape[1] % LM_Q8_GROUP != 0) {
+        if (oshape[1] == 0 || oshape[1] % LM_Q8_GROUP != 0) {
             lm_fail(err, errlen, "2-D weight %s has in = %lld, not a positive multiple of %d; refusing to guess",
-                    t->name, (long long)t->shape[1], LM_Q8_GROUP);
+                    t->name, (long long)oshape[1], LM_Q8_GROUP);
             goto out;
         }
         char *sn = scale_name(t->name);
         if (!sn) { lm_fail(err, errlen, "out of memory"); goto out; }
-        const int64_t sshape[2] = { t->shape[0], t->shape[1] / LM_Q8_GROUP };
-        const int r1 = lm_stw_declare(w, t->name, LM_DT_I8, 2, t->shape, err, errlen);
+        const int64_t sshape[2] = { oshape[0], oshape[1] / LM_Q8_GROUP };
+        const int r1 = lm_stw_declare(w, t->name, LM_DT_I8, 2, oshape, err, errlen);
         const int r2 = r1 == 0 ? lm_stw_declare(w, sn, LM_DT_F32, 2, sshape, err, errlen) : -1;
         free(sn);
         if (r1 != 0 || r2 != 0) goto out;
@@ -149,7 +183,9 @@ int lm_quantize_checkpoint(const char *model, const char *outp, LmQuantStats *st
             nm[strlen(nm) - 8] = '\0';
             const LmTensor *base = lm_st_find(&st, nm);
             if (!base) { lm_fail(err, errlen, "internal: no source for scale table of %s", nm); goto out; }
-            const int64_t nbytes = base->shape[0] * (base->shape[1] / LM_Q8_GROUP) * 4;
+            int64_t bs[4];
+            out_shape(base, bs);
+            const int64_t nbytes = bs[0] * (bs[1] / LM_Q8_GROUP) * 4;
             if (lm_stw_write(w, pend[k].buf, nbytes, err, errlen) != 0) goto out;
             free(pend[k].buf);
             free(pend[k].name);
@@ -161,7 +197,9 @@ int lm_quantize_checkpoint(const char *model, const char *outp, LmQuantStats *st
                     lm_stw_write(w, cbuf, n, err, errlen) != 0) goto out;
             }
         } else {
-            const int64_t rows = t->shape[0], in = t->shape[1], ng = in / LM_Q8_GROUP;
+            int64_t ts[4];
+            out_shape(t, ts);
+            const int64_t rows = ts[0], in = ts[1], ng = in / LM_Q8_GROUP;
             if (in > BLOCK_ELEMS) { lm_fail(err, errlen, "%s: row of %lld inputs is wider than the block buffer", t->name, (long long)in); goto out; }
             const int64_t nscales = rows * ng;
             float *scales = (float *)malloc((size_t)(nscales > 0 ? nscales : 1) * sizeof(float));

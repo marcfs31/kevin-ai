@@ -4,13 +4,17 @@
 CLI (same contract as lm-quant):  quant_ref.py --model DIR_OR_FILE --out FILE
 
 WHICH TENSORS
-  Only tensors whose name starts with `model.language_model.` or `mtp.` (Qwen3.5's
-  multi-token-prediction head, the draft for speculative decoding) are written.
-  `model.visual.*` and anything else are DROPPED (text-only engine). Of the kept tensors, those named `*.weight` with exactly 2 dims
+  Only tensors whose name starts with `model.language_model.`, `mtp.` (Qwen3.5's
+  multi-token-prediction head, the draft for speculative decoding) or a vision prefix
+  (`model.visual.`, `model.vision_tower.`, `model.embed_vision.`) are written; anything else
+  is DROPPED. Of the kept tensors, those named `*.weight` with exactly 2 dims
   (including `embed_tokens.weight`) are quantised; all others (1-D norms, `A_log`,
   `dt_bias`, the 3-D `conv1d.weight`) are copied byte-for-byte with their own dtype/shape.
   Source dtype of a quantised matrix must be BF16 or F32. `in` must be a multiple of 32, else
-  the quantiser fails loudly. A checkpoint with no `model.language_model.` tensor is an error.
+  the quantiser fails loudly; the one exception is a vision 2-D weight, which is copied
+  byte-for-byte instead (the engine binds either form). A vision `*.weight` of rank 3 or
+  more (the patch-embedding convolution) is first flattened to 2-D [d0, product of the
+  rest], same bytes, and then follows the 2-D rule. A checkpoint with no `model.language_model.` tensor is an error.
 
 QUANTISATION (row-major [out, in]; groups of 32 consecutive inputs inside one row)
   absmax = max |x| over the group, x = the stored value widened to double (bf16 -> exact)
@@ -50,6 +54,7 @@ import safetensors as st
 GROUP = 32
 TEXT_PREFIX = "model.language_model."
 MTP_PREFIX = "mtp."
+VISION_PREFIXES = ("model.visual.", "model.vision_tower.", "model.embed_vision.")
 SCALE_SUFFIX = ".q8scale"
 QMAX = 127
 
@@ -99,18 +104,38 @@ def dequantize_matrix(q, scales, rows, cols):
     return out
 
 
+def is_vision(name):
+    return name.startswith(VISION_PREFIXES)
+
+
+def is_kept(name):
+    return name.startswith(TEXT_PREFIX) or name.startswith(MTP_PREFIX) or is_vision(name)
+
+
+def out_shape(name, shape):
+    if is_vision(name) and name.endswith(".weight") and len(shape) > 2:
+        rest = 1
+        for d in shape[1:]:
+            rest *= d
+        return (shape[0], rest if shape[0] else 0)
+    return tuple(shape)
+
+
 def is_quantised(name, shape):
-    return name.endswith(".weight") and len(shape) == 2
+    shape = out_shape(name, shape)
+    if not (name.endswith(".weight") and len(shape) == 2):
+        return False
+    return not (is_vision(name) and (shape[1] == 0 or shape[1] % GROUP))
 
 
 def quantize_store(store, source_sha256):
     """store: Checkpoint-like (names/dtype/shape/raw/floats). Returns the q8 file bytes."""
-    names = [n for n in store.names() if n.startswith(TEXT_PREFIX) or n.startswith(MTP_PREFIX)]
+    names = [n for n in store.names() if is_kept(n)]
     if not any(n.startswith(TEXT_PREFIX) for n in names):
         raise QuantError("no tensor starts with %r" % TEXT_PREFIX)
     out = {}
     for name in names:
-        dt, shape = store.dtype(name), store.shape(name)
+        dt, shape = store.dtype(name), out_shape(name, store.shape(name))
         if not is_quantised(name, shape):
             out[name] = (dt, shape, store.raw(name))
             continue

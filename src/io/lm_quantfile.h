@@ -6,8 +6,11 @@
  *   - every 2-D tensor whose name ends in ".weight" is quantised: "<name>" as I8
  *     [out, in] and "<name>.q8scale" as F32 [out, in/32] (see src/core/lm_quant.h)
  *   - every other tensor is copied byte for byte with its name, dtype and shape
- *   - only tensors named "model.language_model.*" or "mtp.*" (Qwen3.5's multi-token-prediction
- *     head) are kept; everything else (visual) is DROPPED, as tools/quant_ref.py does
+ *   - only tensors named "model.language_model.*", "mtp.*" (Qwen3.5's multi-token-prediction
+ *     head) or vision ("model.visual.*", "model.vision_tower.*", "model.embed_vision.*") are
+ *     kept; everything else (audio) is DROPPED, as tools/quant_ref.py does
+ *   - vision only: a ".weight" of rank 3 or more is flattened to [d0, product of the rest]
+ *     first, and a 2-D vision weight whose in is not a multiple of 32 is copied, not refused
  *   - __metadata__ {"format":"lm-q8","group":"32","source":"<sha256>"} where source is
  *     the SHA-256 of model.safetensors.index.json when the checkpoint directory has one,
  *     else of the single safetensors file
@@ -23,13 +26,13 @@
 typedef struct {
     int n_quantised;   /* 2-D .weight tensors written as I8 + .q8scale */
     int n_copied;      /* everything else, byte for byte */
-    int n_ignored;     /* visual and other non-text tensors dropped */
+    int n_ignored;     /* tensors outside the text, MTP and vision prefixes, dropped */
 } LmQuantStats;
 
 /* model: a checkpoint directory (index.json or model.safetensors) or a safetensors file.
  * out: the file to write (via out + ".tmp", renamed on success; nothing is left behind on
  * failure). Returns 0, or -1 with a message in err: an unreadable or malformed source, a
- * 2-D .weight whose in is not a positive multiple of 32 or whose dtype is not BF16/F16/F32,
+ * 2-D text or MTP .weight whose in is not a positive multiple of 32 or whose dtype is not BF16/F16/F32,
  * a NaN or Inf weight, a source tensor named "*.q8scale", no 2-D weights at all, or any
  * write failure. stats may be NULL. */
 int lm_quantize_checkpoint(const char *model, const char *out, LmQuantStats *stats,
