@@ -683,14 +683,24 @@ int lm_greedy_check(LmModel *m, int token, int draft, float *rows, float *logits
     return LM_OK;
 }
 
-int lm_prefill_image(LmModel *m, const float *rows, int n, int grid_h, int grid_w,
+int lm_prefill_image(LmModel *m, const float *rows, int n, int width, int grid_h, int grid_w,
                      float *logits, int *pos_thw)
 {
-    if (!m || m->gemma) return LM_ERR_STATE;
+    if (!m) return LM_ERR_STATE;
+    /* Both families: n rows on a grid whose product is n. Qwen applies that grid as M-RoPE;
+     * Gemma only checks it, then uses one sequential position per token. */
+    if (!rows || n < 1 || width < 1 || grid_h < 1 || grid_w < 1 || grid_h > n || n % grid_h != 0 ||
+        n / grid_h != grid_w)
+        return LM_ERR_TOKEN;
+    if (m->gemma) {
+        LM_TIMES_T0(t0);
+        const int r = lm_gemma_prefill_image(m->gemma, rows, n, width, logits, pos_thw);
+        LM_TIMES_ADD(total, t0);
+        return r;
+    }
     const LmCfg *c = &m->cfg;
     if (c->vis_start < 0 || c->vis_pad < 0 || c->vis_end < 0) return LM_ERR_STATE;
-    if (!rows || n < 1 || grid_h < 1 || grid_w < 1 || grid_h > n || n % grid_h != 0 || n / grid_h != grid_w)
-        return LM_ERR_TOKEN;
+    if (width != c->hidden) return LM_ERR_TOKEN;
     if (c->vis_start >= c->vocab || c->vis_pad >= c->vocab || c->vis_end >= c->vocab) return LM_ERR_TOKEN;
     if ((long)m->pos + (long)n + 2 > m->ctx) return LM_ERR_CTX;
 

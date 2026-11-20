@@ -74,10 +74,12 @@ static void test_block(void)
     CHECK(n == 6 && gh == 2 && gw == 3);
     int thw[8 * 3];
     float *logits = (float *)malloc((size_t)lm_n_vocab(m) * sizeof(float));
-    CHECK(lm_prefill_image(m, rows, n, gh, gw, logits, thw) == LM_OK);
+    const int width = lm_vision_info(v)->out_dim;
+    CHECK(lm_prefill_image(m, rows, n, width, gh, gw, logits, thw) == LM_OK);
     expect_64x96(thw);
     CHECK(lm_pos(m) == n + 2);
-    CHECK(lm_prefill_image(m, rows, n, 2, 2, NULL, NULL) == LM_ERR_TOKEN);
+    CHECK(lm_prefill_image(m, rows, n, width, 2, 2, NULL, NULL) == LM_ERR_TOKEN);
+    CHECK(lm_prefill_image(m, rows, n, width - 1, gh, gw, NULL, NULL) == LM_ERR_TOKEN);
     CHECK(lm_pos(m) == n + 2);
 
     LmModel *m2 = lm_open(FIX, &o, err, sizeof err);
@@ -85,7 +87,7 @@ static void test_block(void)
     const int prefix[] = { 1, 2 };
     CHECK(lm_prefill(m2, prefix, 2, NULL) == LM_OK);
     int thw2[8 * 3];
-    CHECK(lm_prefill_image(m2, rows, n, gh, gw, NULL, thw2) == LM_OK);
+    CHECK(lm_prefill_image(m2, rows, n, width, gh, gw, NULL, thw2) == LM_OK);
     CHECK(thw2[0] == 2 && thw2[1] == 2 && thw2[2] == 2);
     CHECK(thw2[3] == 3 && thw2[4] == 3 && thw2[5] == 3);
     CHECK(thw2[7 * 3] == 6 && thw2[7 * 3 + 1] == 6 && thw2[7 * 3 + 2] == 6);
@@ -101,7 +103,7 @@ static void test_block(void)
     CHECK(lm_feed(m2, 7, back) == LM_OK);
     LmModel *m3 = lm_open(FIX, &o, err, sizeof err);
     CHECK(lm_prefill(m3, prefix, 2, NULL) == LM_OK);
-    CHECK(lm_prefill_image(m3, rows, n, gh, gw, NULL, NULL) == LM_OK);
+    CHECK(lm_prefill_image(m3, rows, n, width, gh, gw, NULL, NULL) == LM_OK);
     float straight[384];
     CHECK(lm_feed(m3, 7, straight) == LM_OK);
     CHECK(memcmp(back, straight, sizeof back) == 0);
@@ -129,14 +131,15 @@ static void test_refusals(void)
     LmModel *g = lm_open("tests/fixtures/gemma4-tiny", &o, err, sizeof err);
     CHECK_MSG(g != NULL, "%s", err);
     if (g) {
-        CHECK(lm_prefill_image(g, row, 1, 1, 1, NULL, NULL) == LM_ERR_STATE);
+        /* gemma4-tiny keeps the real image ids, which do not fit vocab 384. */
+        CHECK(lm_prefill_image(g, row, 1, 64, 1, 1, NULL, NULL) == LM_ERR_TOKEN);
         CHECK(lm_pos(g) == 0);
         lm_close(g);
     }
     LmModel *t = lm_open("tests/fixtures/qwen35-tiny", &o, err, sizeof err);
     CHECK_MSG(t != NULL, "%s", err);
     if (t) {
-        CHECK(lm_prefill_image(t, row, 1, 1, 1, NULL, NULL) == LM_ERR_TOKEN);
+        CHECK(lm_prefill_image(t, row, 1, 64, 1, 1, NULL, NULL) == LM_ERR_TOKEN);
         CHECK(lm_pos(t) == 0);
         lm_close(t);
     }
