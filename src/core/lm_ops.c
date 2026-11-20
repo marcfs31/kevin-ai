@@ -49,6 +49,29 @@ int lm_rope(float *x, int n_heads, int head_dim, int rot_dim, int pos, float the
     return 0;
 }
 
+int lm_mrope(float *x, int n_heads, int head_dim, int rot_dim,
+             int t, int h, int w, float theta, int h_lim, int w_lim)
+{
+    if (rot_dim < 0 || (rot_dim & 1) || rot_dim > head_dim || n_heads < 0 || head_dim < 0) return -1;
+    if (t < 0 || h < 0 || w < 0 || h_lim < 0 || w_lim < 0) return -1;
+    const int half = rot_dim / 2;
+    for (int i = 0; i < half; i++) {
+        int pos = t;
+        if (i % 3 == 1 && i < h_lim) pos = h;
+        else if (i % 3 == 2 && i < w_lim) pos = w;
+        const double inv_freq = pow((double)theta, -2.0 * (double)i / (double)rot_dim);
+        const double ang = (double)pos * inv_freq;
+        const float c = (float)cos(ang), s = (float)sin(ang);
+        for (int hd = 0; hd < n_heads; hd++) {
+            float *hv = x + (size_t)hd * head_dim;
+            const float a = hv[i], b = hv[i + half];
+            hv[i] = a * c - b * s;
+            hv[i + half] = b * c + a * s;
+        }
+    }
+    return 0;
+}
+
 void lm_conv1d_step(float *y, float *state, const float *x, const float *w, int channels, int k)
 {
     const int hist = k - 1;

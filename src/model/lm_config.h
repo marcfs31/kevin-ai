@@ -4,7 +4,9 @@
  * Every field is REQUIRED: a missing one is an error naming it, never a default. Refused
  * loudly: model_type other than "qwen3_5", rope_type other than "default", hidden_act other
  * than "silu", attn_output_gate false, layer types other than linear_attention /
- * full_attention, non-divisible head counts, an odd or empty rotary dimension. */
+ * full_attention, non-divisible head counts, an odd or empty rotary dimension,
+ * mrope_interleaved other than true, or an mrope_section that does not sum to the
+ * rotary frequency count. */
 #ifndef LM_CONFIG_H
 #define LM_CONFIG_H
 
@@ -19,6 +21,8 @@ typedef struct {
     int    heads, kv_heads, head_dim;
     float  theta;
     int    rot;                   /* rotary dims per head = (int)(head_dim * partial_rotary_factor) */
+    int    mrope_h, mrope_w;      /* mrope_section[1] * 3 and [2] * 3: frequency-index limits */
+    int    vis_start, vis_pad, vis_end; /* vision token ids, or -1 when the config has none */
     int    lk_heads, lv_heads, lk_dim, lv_dim, conv_k;
     int    tied;                  /* tie_word_embeddings */
     int    max_pos;               /* max_position_embeddings */

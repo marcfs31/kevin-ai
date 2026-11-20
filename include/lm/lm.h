@@ -75,6 +75,32 @@ int  lm_feed(LmModel *m, int token, float *logits);
  * return LM_ERR_IO if a per-layer embedding row cannot be read. */
 int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
 
+/* Feed one image block: the configured start token, n vision rows, then the end token.
+ * rows is n * width floats in encoder order; width is the text hidden size. grid_h * grid_w
+ * must equal n (the encoder's pooled grid, image sides divided by its unit). logits (nullable)
+ * is the next-token distribution after the end token. pos_thw (nullable) receives (n + 2) * 3
+ * ints, the (t, h, w) of the start token, each row and the end token.
+ *
+ * Qwen3.5 uses the grid as M-RoPE. Start and end are text positions (p, p, p). Merged cell
+ * (i, j) is (t = p, h = p + i, w = p + j), where p is the text position after the start token;
+ * the text position then advances by max(grid_h, grid_w). The cache index still advances once
+ * per position. Each row replaces that position's token embedding. Snapshots store the text
+ * position and lm_reset zeroes it.
+ *
+ * Gemma 4 checks the same grid and then ignores it for positions. Token k of the block is
+ * (p + k, p + k, p + k) at cache index p + k, and p advances by one each time. Attention stays
+ * causal. A vision row replaces that position's token embedding and is not multiplied by the
+ * text embedding scale. The per-layer table lookup there is pad_token_id; the projection is of
+ * the vision row (Gemma4Model.forward scatters the vision features before project_per_layer_inputs).
+ *
+ * Nothing is fed on LM_ERR_TOKEN (bad rows, n, width or grid, or a start, end or pad id outside
+ * the vocabulary) or LM_ERR_CTX (the block does not fit). LM_ERR_STATE when this model's config
+ * has no pad, start or end id. LM_ERR_IO: Qwen could not allocate the block scratch (nothing
+ * fed); Gemma could not read a per-layer row (that token is not applied, earlier tokens of this
+ * call stay fed, and pos_thw is left untouched). */
+int lm_prefill_image(LmModel *m, const float *rows, int n, int width, int grid_h, int grid_w,
+                     float *logits, int *pos_thw);
+
 /* ---- speculative decoding with the MTP head (LmOpts.mtp) ----
  * The head drafts the token after next; one batched forward checks the draft, and a rejected
  * draft is rolled back without feeding again. Greedy decoding with them gives exactly the ids

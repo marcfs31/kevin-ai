@@ -25,5 +25,15 @@ done
 "$RUN" --model "$FIX" --image "$FIX/img_64x96.ppm" > /dev/null 2>&1; rc=$?
 check '[ $rc -eq 2 ]' "--image without --vision-rows-out exited $rc"
 
+# --image-block feeds the rows. 64x96 is 6 merged tokens plus the start and end: 8 triples.
+"$RUN" --model "$FIX" --image-block "$FIX/img_64x96.ppm" --logits-out "$tmp/logits" \
+    --positions-out "$tmp/pos" > "$tmp/out" 2> "$tmp/err"; rc=$?
+check '[ $rc -eq 0 ]' "lm-run --image-block exited $rc: $(cat "$tmp/err")"
+check '[ ! -s "$tmp/out" ]' "--image-block wrote to stdout"
+check '[ "$(wc -c < "$tmp/logits")" -eq $((384 * 4)) ]' "logits are not one row of 384"
+check '[ "$(wc -c < "$tmp/pos")" -eq $((8 * 3 * 4)) ]' "positions are not 8 triples"
+"$RUN" --model "$FIX" --image-block "$FIX/img_64x96.ppm" --logits-out "$tmp/logits" > /dev/null 2>&1; rc=$?
+check '[ $rc -eq 2 ]' "--image-block without --positions-out exited $rc"
+
 if [ "$fails" -ne 0 ]; then echo "test_lm_run_image: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_lm_run_image: $checks checks passed"

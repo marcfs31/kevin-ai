@@ -281,7 +281,7 @@ static void test_full_attention(int as_bf16)
     float *kc = (float *)calloc((size_t)T * nkv * hd, 4), *vc = (float *)calloc((size_t)T * nkv * hd, 4);
     float *sc = (float *)malloc(lm_attn_scratch(&d, T) * 4);
     for (int t = 0; t < T; t++) {
-        lm_attn_mixer(o, x + t * H, &aw, &d, kc, vc, t, T, sc);
+        lm_attn_mixer(o, x + t * H, &aw, &d, kc, vc, t, t, t, t, T, sc);
         cmp(as_bf16 ? "full attention (bf16 weights)" : "full attention", o, y + t * H, H);
     }
     free(x); free(y); free(o); free(kc); free(vc); free(sc);

@@ -112,7 +112,8 @@ size_t lm_attn_scratch(const LmAttnDims *d, int ctx)
 }
 
 void lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnDims *d,
-                   float *k_cache, float *v_cache, int pos, int ctx, float *scratch)
+                   float *k_cache, float *v_cache, int pos, int rt, int rh, int rw,
+                   int ctx, float *scratch)
 {
     (void)ctx;
     const int hd = d->head_dim, qd = d->heads * hd, kvd = d->kv_heads * hd;
@@ -131,8 +132,8 @@ void lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnDim
         memcpy(gate + h * hd, qg + (size_t)h * 2 * hd + hd, (size_t)hd * sizeof(float));
     }
     for (int h = 0; h < d->kv_heads; h++) lm_rmsnorm(k + h * hd, k + h * hd, w->k_norm, hd, d->eps);
-    (void)lm_rope(q, d->heads, hd, d->rot, pos, d->theta);
-    (void)lm_rope(k, d->kv_heads, hd, d->rot, pos, d->theta);
+    (void)lm_mrope(q, d->heads, hd, d->rot, rt, rh, rw, d->theta, d->mrope_h, d->mrope_w);
+    (void)lm_mrope(k, d->kv_heads, hd, d->rot, rt, rh, rw, d->theta, d->mrope_h, d->mrope_w);
 
     memcpy(k_cache + (size_t)pos * kvd, k, (size_t)kvd * sizeof(float));
     memcpy(v_cache + (size_t)pos * kvd, v, (size_t)kvd * sizeof(float));
@@ -224,7 +225,8 @@ size_t lm_attn_batch_scratch(const LmAttnDims *d, int ctx, int T)
 }
 
 void lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmAttnDims *d,
-                         float *k_cache, float *v_cache, int pos0, int ctx, float *scratch, int T)
+                         float *k_cache, float *v_cache, int pos0, const int *thw, int rope0,
+                         int ctx, float *scratch, int T)
 {
     (void)ctx;
     const int hd = d->head_dim, qd = d->heads * hd, kvd = d->kv_heads * hd;
@@ -239,6 +241,9 @@ void lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmA
 
     for (int t = 0; t < T; t++) {   /* norm, RoPE, cache write and attention, in position order */
         const int pos = pos0 + t;
+        const int rt = thw ? thw[3 * t] : rope0 + t;
+        const int rh = thw ? thw[3 * t + 1] : rope0 + t;
+        const int rw = thw ? thw[3 * t + 2] : rope0 + t;
         float *qg = qgb + (size_t)t * 2 * qd, *k = kb + (size_t)t * kvd, *v = vb + (size_t)t * kvd;
         float *attn = attnb + (size_t)t * qd;
         for (int h = 0; h < d->heads; h++) {
@@ -246,8 +251,8 @@ void lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmA
             memcpy(gate + h * hd, qg + (size_t)h * 2 * hd + hd, (size_t)hd * sizeof(float));
         }
         for (int h = 0; h < d->kv_heads; h++) lm_rmsnorm(k + h * hd, k + h * hd, w->k_norm, hd, d->eps);
-        (void)lm_rope(q, d->heads, hd, d->rot, pos, d->theta);
-        (void)lm_rope(k, d->kv_heads, hd, d->rot, pos, d->theta);
+        (void)lm_mrope(q, d->heads, hd, d->rot, rt, rh, rw, d->theta, d->mrope_h, d->mrope_w);
+        (void)lm_mrope(k, d->kv_heads, hd, d->rot, rt, rh, rw, d->theta, d->mrope_h, d->mrope_w);
         memcpy(k_cache + (size_t)pos * kvd, k, (size_t)kvd * sizeof(float));
         memcpy(v_cache + (size_t)pos * kvd, v, (size_t)kvd * sizeof(float));
         (void)lm_attn_step(attn, q, k_cache, v_cache, pos + 1, d->heads, d->kv_heads, hd, scores);

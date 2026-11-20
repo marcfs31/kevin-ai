@@ -60,6 +60,14 @@ void lm_l2norm(float *y, const float *x, int n);
  * rot_dim pass through. Returns -1 on a bad shape (rot_dim odd or out of range). */
 int lm_rope(float *x, int n_heads, int head_dim, int rot_dim, int pos, float theta);
 
+/* Interleaved M-RoPE (Qwen3.5). Same pairing as lm_rope. Frequency i (0 .. rot_dim/2) uses
+ * position h when i % 3 == 1 and i < h_lim, w when i % 3 == 2 and i < w_lim, otherwise t.
+ * h_lim and w_lim are mrope_section[1] * 3 and mrope_section[2] * 3. When t == h == w the
+ * result is bit-identical to lm_rope at that position. Returns -1 on a bad shape or a
+ * negative position. */
+int lm_mrope(float *x, int n_heads, int head_dim, int rot_dim,
+             int t, int h, int w, float theta, int h_lim, int w_lim);
+
 /* ---- linear attention (Gated DeltaNet) ---- */
 
 /* One causal depthwise conv1d step + SiLU. w is [channels][k] (the checkpoint's

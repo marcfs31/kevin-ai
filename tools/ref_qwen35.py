@@ -108,6 +108,26 @@ def rope_apply(x, pos, rot_dim, theta):
     return out
 
 
+def mrope_apply(x, thw, rot_dim, theta, section):
+    """Interleaved M-RoPE. Frequency i uses h when i % 3 == 1 and i < section[1]*3,
+    w when i % 3 == 2 and i < section[2]*3, otherwise t. Equal positions match rope_apply."""
+    t, h, w = thw
+    half = rot_dim // 2
+    h_lim, w_lim = section[1] * 3, section[2] * 3
+    out = list(x)
+    for i, f in enumerate(rope_inv_freq(rot_dim, theta)):
+        pos = t
+        if i % 3 == 1 and i < h_lim:
+            pos = h
+        elif i % 3 == 2 and i < w_lim:
+            pos = w
+        c, s = math.cos(pos * f), math.sin(pos * f)
+        a, b = x[i], x[i + half]
+        out[i] = a * c - b * s
+        out[i + half] = b * c + a * s
+    return out
+
+
 def conv1d_silu_step(state, x, weight):
     """Causal depthwise conv + SiLU for one position.
 
@@ -187,6 +207,7 @@ class Config:
             self.theta = float(rp["rope_theta"])
             self.partial = float(rp.get("partial_rotary_factor", 1.0))
             rope_type = rp.get("rope_type", "default")
+            self.mrope_section = [int(x) for x in rp["mrope_section"]] if "mrope_section" in rp else None
             self.lk_heads = t["linear_num_key_heads"]
             self.lv_heads = t["linear_num_value_heads"]
             self.lk_dim = t["linear_key_head_dim"]
@@ -339,6 +360,11 @@ class Model:
                 st_.append({"k": [], "v": []})
         return {"layers": st_, "pos": 0}
 
+    def _rope(self, vec, pos):
+        if isinstance(pos, tuple):
+            return mrope_apply(vec, pos, self.cfg.rot, self.cfg.theta, self.cfg.mrope_section)
+        return rope_apply(vec, pos, self.cfg.rot, self.cfg.theta)
+
     def _mlp(self, p, x):
         g = matvec(self.w.get(p + "gate_proj.weight"), x)
         u = matvec(self.w.get(p + "up_proj.weight"), x)
@@ -354,10 +380,10 @@ class Model:
         queries, gate = [], []
         for h in range(c.heads):
             seg = qg[h * 2 * hd:(h + 1) * 2 * hd]
-            queries.append(rope_apply(rmsnorm_zero_centred(seg[:hd], qn, c.eps), pos, c.rot, c.theta))
+            queries.append(self._rope(rmsnorm_zero_centred(seg[:hd], qn, c.eps), pos))
             gate.extend(seg[hd:])
-        ls["k"].append([rope_apply(rmsnorm_zero_centred(k[h * hd:(h + 1) * hd], kn, c.eps),
-                                   pos, c.rot, c.theta) for h in range(c.kv_heads)])
+        ls["k"].append([self._rope(rmsnorm_zero_centred(k[h * hd:(h + 1) * hd], kn, c.eps), pos)
+                        for h in range(c.kv_heads)])
         ls["v"].append([v[h * hd:(h + 1) * hd] for h in range(c.kv_heads)])
         group = c.heads // c.kv_heads
         scale = hd ** -0.5
@@ -392,6 +418,28 @@ class Model:
     def step(self, state, token):
         """Feed one token; returns the vocab logits row. Mutates `state`."""
         return self.step_h(state, token)[0]
+
+    def step_vec(self, state, vec, thw):
+        """One position whose input is `vec` at M-RoPE `thw` = (t, h, w). Returns the logits.
+        The cache index advances by one; `thw` is the position, not that index."""
+        c, w = self.cfg, self.w
+        if not c.mrope_section:
+            raise ValueError("config.json is missing mrope_section")
+        h = list(vec)
+        for i, lt in enumerate(c.layer_types):
+            p = "%slayers.%d." % (PREFIX, i)
+            n1 = rmsnorm_zero_centred(h, w.get(p + "input_layernorm.weight"), c.eps)
+            if lt == "linear_attention":
+                m = self._linear_attn(p + "linear_attn.", n1, state["layers"][i])
+            else:
+                m = self._full_attn(p + "self_attn.", n1, state["layers"][i], thw)
+            h = [a + b for a, b in zip(h, m)]
+            n2 = rmsnorm_zero_centred(h, w.get(p + "post_attention_layernorm.weight"), c.eps)
+            h = [a + b for a, b in zip(h, self._mlp(p + "mlp.", n2))]
+        state["pos"] = state["pos"] + 1
+        h = rmsnorm_zero_centred(h, w.get(PREFIX + "norm.weight"), c.eps)
+        head = w.get(PREFIX + "embed_tokens.weight") if c.tied else w.get("lm_head.weight")
+        return matvec(head, h)
 
     def step_h(self, state, token):
         """step, also returning the final normed hidden state (the MTP head's input)."""
