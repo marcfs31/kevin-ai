@@ -112,6 +112,22 @@ export function parsePageRange(input: string, count: number): number[] | null {
   return [...pages].sort((x, y) => x - y);
 }
 
+export interface TextItemLike {
+  str?: string;
+  hasEOL?: boolean;
+}
+
+/** A PDF page's text from pdf.js text items, one line per end-of-line mark. */
+export function joinTextItems(items: TextItemLike[]): string {
+  let out = '';
+  for (const item of items) {
+    if (typeof item.str !== 'string') continue;
+    out += item.str;
+    if (item.hasEOL) out += '\n';
+  }
+  return out.replace(/[ \t]+\n/g, '\n').trim();
+}
+
 export interface PdfSelection {
   text: string;
   images: ImageData[];

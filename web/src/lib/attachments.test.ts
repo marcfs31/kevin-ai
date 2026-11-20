@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerInfo } from './api';
 import {
-  AttachError, buildUserContent, checkText, classifyFile, estimateAttachment, fence, fitSize, parsePageRange, selectPdf,
-  type Attachment,
+  AttachError, buildUserContent, checkText, classifyFile, estimateAttachment, fence, fitSize, joinTextItems, parsePageRange,
+  selectPdf, type Attachment,
 } from './attachments';
 import { checkContext, estimateImageTokens, estimateTextTokens, estimateWaitSeconds } from './estimate';
-import { assess, toWire } from './request';
+import { requestBody } from './api';
+import { assess, requestBytes, toWire } from './request';
 import { DEFAULT_SETTINGS, type Message } from './storage';
 
 const info = (over: Partial<ServerInfo> = {}): ServerInfo => ({
@@ -112,6 +113,32 @@ describe('estimates', () => {
   });
 });
 
+describe('requestBytes', () => {
+  it('matches the UTF-8 size of the real request body', () => {
+    const img = { type: 'image_url' as const, image_url: { url: `data:image/png;base64,${'A/+='.repeat(1000)}` } };
+    const messages = [
+      { role: 'system' as const, content: 'Sé breve "y" \\ claro\n' },
+      { role: 'user' as const, content: [img, img, { type: 'text' as const, text: 'qué es <esto> 😀' }] },
+      { role: 'assistant' as const, content: 'Un gato.' },
+    ];
+    for (const maxTokens of [null, 128]) {
+      const real = new TextEncoder().encode(requestBody({ messages, temperature: 0.7, maxTokens })).length;
+      expect(requestBytes(messages, { temperature: 0.7, maxTokens })).toBe(real);
+    }
+    expect(requestBytes([], { temperature: 0, maxTokens: null })).toBe(new TextEncoder().encode(requestBody({ messages: [], temperature: 0, maxTokens: null })).length);
+  });
+});
+
+describe('joinTextItems', () => {
+  it('breaks lines at end-of-line marks and trims trailing spaces', () => {
+    expect(joinTextItems([{ str: 'Hello ' }, { str: 'world  ', hasEOL: true }, { str: 'next' }, {}])).toBe('Hello world\nnext');
+  });
+  it('is empty for a page with no text layer', () => {
+    expect(joinTextItems([])).toBe('');
+    expect(joinTextItems([{ str: '  ', hasEOL: true }])).toBe('');
+  });
+});
+
 describe('fitSize', () => {
   it('fits the longer side to the preset and never upscales', () => {
     expect(fitSize(2048, 1024, 512, null)).toEqual({ width: 512, height: 256 });
@@ -143,14 +170,21 @@ describe('toWire and assess', () => {
     { id: '2', role: 'assistant', content: 'Hello **there**', reasoning: 'r', status: 'done', error: null, stats: null, createdAt: 0 },
     { id: '3', role: 'user', content: 'again', typed: 'again', attachmentNames: [], createdAt: 0 },
     { id: '4', role: 'assistant', content: '', reasoning: '', status: 'error', error: { code: null, message: 'x', status: 500 }, stats: null, createdAt: 0 },
+    { id: '5', role: 'user', content: 'three', typed: 'three', attachmentNames: [], createdAt: 0 },
+    { id: '6', role: 'assistant', content: 'cut sho', reasoning: '', status: 'error', error: { code: 'stream_cut', message: '', status: 200 }, stats: null, createdAt: 0 },
+    { id: '7', role: 'user', content: 'four', typed: 'four', attachmentNames: [], createdAt: 0 },
+    { id: '8', role: 'assistant', content: 'half', reasoning: '', status: 'stopped', error: null, stats: null, createdAt: 0 },
   ];
 
-  it('re-sends answers exactly as received, without reasoning or failed replies', () => {
+  it('re-sends answers exactly as received, without reasoning or failed replies, even partial ones', () => {
     expect(toWire('be brief', history)).toEqual([
       { role: 'system', content: 'be brief' },
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'Hello **there**' },
       { role: 'user', content: 'again' },
+      { role: 'user', content: 'three' },
+      { role: 'user', content: 'four' },
+      { role: 'assistant', content: 'half' },
     ]);
     expect(toWire('  ', [])).toEqual([]);
   });

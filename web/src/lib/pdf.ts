@@ -2,28 +2,18 @@
 // The worker is bundled by Vite from node_modules: no CDN, no remote code.
 import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { AttachError, fitSize, type PdfPage } from './attachments';
+import { AttachError, fitSize, joinTextItems, type PdfPage, type TextItemLike } from './attachments';
 import { canvasToPng } from './image';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
-interface TextItemLike {
-  str?: string;
-  hasEOL?: boolean;
-}
-
-export function joinTextItems(items: TextItemLike[]): string {
-  let out = '';
-  for (const item of items) {
-    if (typeof item.str !== 'string') continue;
-    out += item.str;
-    if (item.hasEOL) out += '\n';
-  }
-  return out.replace(/[ \t]+\n/g, '\n').trim();
-}
+// pdf.js loads its JPEG 2000 and JBIG2 decoders (used by scanned pages) from wasmUrl. The JS
+// builds of those decoders are copied there by vite.config.ts; WebAssembly stays off, so the
+// CSP needs no 'wasm-unsafe-eval'.
+const DECODERS_URL = `${import.meta.env.BASE_URL}pdfjs/`;
 
 export async function readPdf(data: ArrayBuffer, name: string, renderImages: boolean, preset: number, maxPixels: number | null): Promise<PdfPage[]> {
-  const task = getDocument({ data: new Uint8Array(data), enableXfa: false });
+  const task = getDocument({ data: new Uint8Array(data), enableXfa: false, useWasm: false, wasmUrl: DECODERS_URL });
   let doc;
   try {
     doc = await task.promise;

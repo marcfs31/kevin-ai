@@ -47,6 +47,8 @@ describe('i18n helpers', () => {
     const es = makeI18n('es');
     expect(es.tp('sidebar.confirmDeleteAll', 1)).toContain('1 conversación');
     expect(es.tp('sidebar.confirmDeleteAll', 3)).toContain('las 3 conversaciones');
+    expect(makeI18n('en').tp('composer.pdfPagesHint', 1)).toBe('For example 1-3, 5 (1 page)');
+    expect(es.tp('composer.pdfPagesHint', 2)).toBe('Por ejemplo 1-3, 5 (2 páginas)');
     expect(makeI18n('en').t('server.context', { n: 262144 })).toBe('Context: 262,144 tokens');
     expect(es.t('server.context', { n: 262144 })).toBe('Contexto: 262.144 tokens');
   });

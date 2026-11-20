@@ -84,10 +84,11 @@ function Chat({ state, setState, storage, notice }: {
     fetchInfo();
   };
 
-  // Saved only between replies: never once per streamed token.
+  // Streamed tokens go to `live`, not `state`, so this saves the user's message as soon as it
+  // is sent and the reply once it ends, never once per token.
   useEffect(() => {
-    if (!busy && notice !== 'locked') saver.save(state);
-  }, [state, busy, saver, notice]);
+    if (notice !== 'locked') saver.save(state);
+  }, [state, saver, notice]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end' });

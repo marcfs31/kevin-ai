@@ -4,15 +4,40 @@ import { MAX_BODY_BYTES, MAX_IMAGES, contentText, countImages, type Attachment, 
 import { checkContext, estimateTextTokens, estimateWaitSeconds } from './estimate';
 import type { Message, Settings } from './storage';
 
-/** The messages to send: each earlier answer exactly as received, failed replies left out. */
+/** The messages to send: each earlier answer exactly as received; failed replies are left out,
+ * even when they streamed some text, so the model never sees a truncated answer as its own. */
 export function toWire(systemPrompt: string, history: Message[]): WireMessage[] {
   const out: WireMessage[] = [];
   if (systemPrompt.trim()) out.push({ role: 'system', content: systemPrompt });
   for (const m of history) {
     if (m.role === 'user') out.push({ role: 'user', content: m.content });
-    else if (m.content) out.push({ role: 'assistant', content: m.content });
+    else if (m.content && m.status !== 'error') out.push({ role: 'assistant', content: m.content });
   }
   return out;
+}
+
+const encoder = new TextEncoder();
+const jsonBytes = (v: unknown): number => encoder.encode(JSON.stringify(v)).length;
+const IMAGE_PART_BYTES = jsonBytes({ type: 'image_url', image_url: { url: '' } });
+// Image parts hold megabytes of base64: measure each content array once, not per keystroke.
+const partsCache = new WeakMap<ContentPart[], number>();
+
+function contentBytes(content: string | ContentPart[]): number {
+  if (typeof content === 'string') return jsonBytes(content);
+  const cached = partsCache.get(content);
+  if (cached !== undefined) return cached;
+  let n = 2 + Math.max(0, content.length - 1);
+  for (const p of content) n += p.type === 'text' ? jsonBytes(p) : IMAGE_PART_BYTES + p.image_url.url.length;
+  partsCache.set(content, n);
+  return n;
+}
+
+/** The exact UTF-8 size of requestBody() for these messages, without serialising the images. */
+export function requestBytes(messages: WireMessage[], settings: Pick<Settings, 'temperature' | 'maxTokens'>): number {
+  let n = encoder.encode(requestBody({ messages: [], temperature: settings.temperature, maxTokens: settings.maxTokens })).length;
+  n += Math.max(0, messages.length - 1);
+  for (const m of messages) n += jsonBytes({ role: m.role, content: '' }) - 2 + contentBytes(m.content);
+  return n;
 }
 
 export type Problem =
@@ -57,7 +82,7 @@ export function assess(
   const problems: Problem[] = [];
   const images = wire.reduce((n, m) => n + countImages(m.content), 0);
   if (images > MAX_IMAGES) problems.push({ kind: 'too_many_images', count: images, max: MAX_IMAGES });
-  const bytes = new TextEncoder().encode(requestBody({ messages: wire, temperature: settings.temperature, maxTokens: settings.maxTokens })).length;
+  const bytes = requestBytes(wire, settings);
   if (bytes > MAX_BODY_BYTES) problems.push({ kind: 'too_large', bytes });
   const ctx = checkContext(promptTokens, info);
   if (ctx.kind === 'overflow') problems.push({ kind: 'overflow', tokens: ctx.tokens, limit: ctx.limit });

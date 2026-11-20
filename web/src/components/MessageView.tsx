@@ -6,7 +6,7 @@ import { CopyButton, Markdown } from './Markdown';
 
 const KNOWN_CODES = new Set([
   'image_unsupported', 'image_invalid', 'image_too_large', 'too_many_images', 'context_overflow',
-  'stream_cut', 'bad_stream', 'bad_models',
+  'stream_cut', 'bad_stream', 'bad_models', 'upstream_unreachable', 'upstream_failed',
 ]);
 
 /** A reply error in the user's language, by code where known. */
@@ -15,6 +15,8 @@ export function errorText(t: I18n['t'], e: Pick<ApiError, 'status' | 'code' | 's
   if (e.status === 0) return t('error.network');
   if (e.status === 401 || e.status === 403) return t('error.unauthorized');
   if (e.status === 413) return t('error.tooLarge');
+  // An error event inside a stream that had started with 200.
+  if (e.status >= 200 && e.status < 300) return t('error.stream', { message: e.serverMessage || '—' });
   return t('error.http', { status: String(e.status), message: e.serverMessage || '—' });
 }
 
