@@ -35,6 +35,7 @@ import urllib.parse
 
 MAX_BODY = 24 * 1024 * 1024
 CLIENT_TIMEOUT_S = 60
+CONNECT_TIMEOUT_S = 10
 
 CSP = "; ".join([
     "default-src 'none'",
@@ -227,9 +228,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.server.api_key:
             headers["Authorization"] = "Bearer " + self.server.api_key
         conn_cls = http.client.HTTPSConnection if up.scheme == "https" else http.client.HTTPConnection
-        conn = conn_cls(up.hostname, up.port, timeout=self.server.upstream_timeout)
+        # A short connect timeout, so an upstream host that is off fails fast; then the long
+        # one, since lm-serve may read a prompt for minutes before it answers.
+        conn = conn_cls(up.hostname, up.port, timeout=CONNECT_TIMEOUT_S)
         try:
             try:
+                conn.connect()
+                conn.sock.settimeout(self.server.upstream_timeout)
                 conn.request(self.command, self.path, body=body, headers=headers)
             except OSError:
                 self.send_json_error(502, "upstream_unreachable", "lm-serve is not reachable")

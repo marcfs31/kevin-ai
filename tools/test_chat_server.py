@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
@@ -244,6 +245,27 @@ class ApiTest(ProxyTest):
         self.assertEqual(resp.status, 502)
         self.assertEqual(json.loads(data)["error"]["code"], "upstream_unreachable")
         self.upstream = start(FakeUpstream())  # for tearDown
+
+    def test_connect_is_bounded_then_waits_long(self):
+        upstream_port = self.upstream.server_address[1]
+        seen = {}
+        real = http.client.HTTPConnection
+
+        class Recording(real):
+            def connect(self):
+                if self.port == upstream_port:
+                    seen["connect"] = self.timeout
+                super().connect()
+
+            def request(self, *args, **kwargs):
+                if self.port == upstream_port:
+                    seen["request"] = self.sock.gettimeout()
+                super().request(*args, **kwargs)
+
+        with mock.patch.object(chat_server.http.client, "HTTPConnection", Recording):
+            resp, _ = self.request("GET", "/health")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(seen, {"connect": chat_server.CONNECT_TIMEOUT_S, "request": self.proxy.upstream_timeout})
 
 
 class KeyTest(ProxyTest):
