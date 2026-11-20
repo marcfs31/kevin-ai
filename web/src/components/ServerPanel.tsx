@@ -121,7 +121,9 @@ export function ServerPanel({ busy, onStarted }: Props) {
       <details className="serve-advanced">
         <summary>{t('serve.advanced')}</summary>
         <p className="hint">{t('serve.advancedHint')}</p>
-        <label htmlFor={`${id}-max`}>{t('serve.maxTokens')}</label>
+        <div className="fields">
+          <div className="field">
+            <label htmlFor={`${id}-max`}>{t('serve.maxTokens')}</label>
         <input
           id={`${id}-max`}
           type="number"
@@ -131,8 +133,10 @@ export function ServerPanel({ busy, onStarted }: Props) {
           placeholder={String(SERVE_DEFAULTS.maxTokens)}
           value={draft.maxTokens}
           onChange={(e) => set('maxTokens', e.target.value)}
-        />
-        <label htmlFor={`${id}-seed`}>{t('serve.seed')}</label>
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-seed`}>{t('serve.seed')}</label>
         <input
           id={`${id}-seed`}
           type="number"
@@ -142,8 +146,10 @@ export function ServerPanel({ busy, onStarted }: Props) {
           placeholder={String(SERVE_DEFAULTS.seed)}
           value={draft.seed}
           onChange={(e) => set('seed', e.target.value)}
-        />
-        <label htmlFor={`${id}-ctx`}>{t('serve.ctx')}</label>
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-ctx`}>{t('serve.ctx')}</label>
         <input
           id={`${id}-ctx`}
           type="number"
@@ -153,8 +159,10 @@ export function ServerPanel({ busy, onStarted }: Props) {
           placeholder={t('serve.auto')}
           value={draft.ctx}
           onChange={(e) => set('ctx', e.target.value)}
-        />
-        <label htmlFor={`${id}-threads`}>{t('serve.threads')}</label>
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-threads`}>{t('serve.threads')}</label>
         <input
           id={`${id}-threads`}
           type="number"
@@ -164,8 +172,10 @@ export function ServerPanel({ busy, onStarted }: Props) {
           placeholder={t('serve.auto')}
           value={draft.threads}
           onChange={(e) => set('threads', e.target.value)}
-        />
-        <label htmlFor={`${id}-timeout`}>{t('serve.timeout')}</label>
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-timeout`}>{t('serve.timeout')}</label>
         <input
           id={`${id}-timeout`}
           type="number"
@@ -175,8 +185,10 @@ export function ServerPanel({ busy, onStarted }: Props) {
           placeholder={String(SERVE_DEFAULTS.timeout)}
           value={draft.timeout}
           onChange={(e) => set('timeout', e.target.value)}
-        />
-        <label htmlFor={`${id}-cache`}>{t('serve.cacheMb')}</label>
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-cache`}>{t('serve.cacheMb')}</label>
         <input
           id={`${id}-cache`}
           type="number"
@@ -186,17 +198,23 @@ export function ServerPanel({ busy, onStarted }: Props) {
           placeholder={String(SERVE_DEFAULTS.cacheMb)}
           value={draft.cacheMb}
           onChange={(e) => set('cacheMb', e.target.value)}
-        />
-        <label htmlFor={`${id}-name`}>{t('serve.name')}</label>
-        <input id={`${id}-name`} type="text" maxLength={200} placeholder={t('serve.nameDefault')} value={draft.name} onChange={(e) => set('name', e.target.value)} />
-        <label className="serve-check">
-          <input type="checkbox" checked={draft.think} onChange={(e) => set('think', e.target.checked)} />
-          {t('serve.think')}
-        </label>
-        <label className="serve-check">
-          <input type="checkbox" checked={draft.fast} onChange={(e) => set('fast', e.target.checked)} />
-          {t('serve.fast')}
-        </label>
+            />
+          </div>
+          <div className="field field-wide">
+            <label htmlFor={`${id}-name`}>{t('serve.name')}</label>
+            <input id={`${id}-name`} type="text" maxLength={200} placeholder={t('serve.nameDefault')} value={draft.name} onChange={(e) => set('name', e.target.value)} />
+          </div>
+          <div className="field field-wide checks">
+            <label className="serve-check">
+              <input type="checkbox" checked={draft.think} onChange={(e) => set('think', e.target.checked)} />
+              {t('serve.think')}
+            </label>
+            <label className="serve-check">
+              <input type="checkbox" checked={draft.fast} onChange={(e) => set('fast', e.target.checked)} />
+              {t('serve.fast')}
+            </label>
+          </div>
+        </div>
       </details>
     </section>
   );

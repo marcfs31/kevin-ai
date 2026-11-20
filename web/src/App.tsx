@@ -202,20 +202,22 @@ function Chat({ state, setState, storage, notice }: {
         {t('app.skip')}
       </a>
       <header className="top">
-        <button type="button" className="sidebar-toggle" aria-expanded={sidebarOpen} aria-controls="sidebar" onClick={() => setSidebarOpen((o) => !o)}>
-          {sidebarOpen ? t('sidebar.hide') : t('sidebar.show')}
-        </button>
-        <h1>{t('app.title')}</h1>
-        <div className="server" role="status">
+        <div className="brand">
+          <button type="button" className="sidebar-toggle" aria-expanded={sidebarOpen} aria-controls="sidebar" onClick={() => setSidebarOpen((o) => !o)}>
+            {sidebarOpen ? t('sidebar.hide') : t('sidebar.show')}
+          </button>
+          <h1>{t('app.title')}</h1>
+        </div>
+        <div className={`server server-${server.kind}`} role="status">
           <span>{serverLine}</span>
-          {info?.contextLength && <span> · {t('server.context', { n: info.contextLength })}</span>}
+          {info?.contextLength && <span>{t('server.context', { n: info.contextLength })}</span>}
           {server.kind === 'error' && (
             <button type="button" onClick={retryServer}>
               {t('server.retry')}
             </button>
           )}
         </div>
-        <button type="button" aria-expanded={settingsOpen} aria-controls="settings" onClick={() => setSettingsOpen((o) => !o)}>
+        <button type="button" className="header-action" aria-expanded={settingsOpen} aria-controls="settings" onClick={() => setSettingsOpen((o) => !o)}>
           {t('settings.open')}
         </button>
       </header>
@@ -239,7 +241,7 @@ function Chat({ state, setState, storage, notice }: {
       </aside>
       <main className="main">
         {settingsOpen && (
-          <div id="settings">
+          <div id="settings" className="panels">
             <ServerPanel
               busy={busy}
               onStarted={() => {
