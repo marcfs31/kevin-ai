@@ -257,11 +257,13 @@ function Chat({ state, setState, storage, notice }: {
             {storageError}
           </p>
         )}
-        <div className="log" role="log" aria-busy={busy}>
-          {messages.length === 0 && !live && <p className="empty">{t('app.empty')}</p>}
-          {messages.map((m) => (
-            <MessageView key={m.id} m={m} />
-          ))}
+        <div className="log" tabIndex={0} role="region" aria-label={t('app.transcript')}>
+          <div className="log-entries" role="log" aria-busy={busy}>
+            {messages.length === 0 && !live && <p className="empty">{t('app.empty')}</p>}
+            {messages.map((m) => (
+              <MessageView key={m.id} m={m} />
+            ))}
+          </div>
           {live && live.convId === active?.id && <MessageView m={live.message} live={live.info} />}
           <div ref={endRef} />
         </div>
