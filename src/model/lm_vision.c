@@ -86,7 +86,7 @@ static int qwen_config(LmVision *v, jval *root, char *err, size_t n)
     jval *ds = json_get(vc, "deepstack_visual_indexes");
     if (ds && (ds->t != J_ARR || ds->len != 0))
         return lm_fail(err, n, "vision_config.deepstack_visual_indexes is not supported");
-    v->theta = 10000.0;
+    v->theta = 10000.0; /* Qwen3_5VisionRotaryEmbedding's own default, not a guess */
     jval *rp = json_get(vc, "rope_parameters");
     jval *th = rp && rp->t == J_OBJ ? json_get(rp, "rope_theta") : NULL;
     if (th) {
