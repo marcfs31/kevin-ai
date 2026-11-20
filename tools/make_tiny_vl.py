@@ -10,7 +10,8 @@ make_tiny_gemma4 with their seeds, their fake vision stubs left out; Qwen's MTP 
 vision encoder is real and small and drawn from its own stream. One single-file checkpoint,
 its q8 file, three PPM test images at their grid sizes, and the encoder output of the float64
 oracle (tools/ref_vision_qwen35.py or tools/ref_vision_gemma4.py) for each image from the
-bf16 weights and from the q8 file.
+bf16 weights and from the q8 file. Gemma also gets the text logits after an image block
+(tools/ref_gemma4.py), bf16 and q8.
 
 Margins asserted: every golden row differs from every other row of its image (no degenerate
 encoder); the q8 rows differ from the bf16 rows by more than 3x the gate tolerance, so a q8
@@ -30,6 +31,7 @@ import fixture_cmp
 import make_tiny
 import make_tiny_gemma4
 import quant_ref
+import ref_gemma4
 import ref_vision_gemma4 as rg
 import ref_vision_qwen35 as rv
 import safetensors as st
@@ -45,6 +47,13 @@ V = rv.V
 # position table per axis (the widest image is 9 patches)
 G_LAYERS, G_HIDDEN, G_HEADS, G_KV, G_HD, G_INTER, G_POS, G_POOL = 2, 32, 2, 1, 16, 64, 16, 3
 G_IMAGES = (("img_48x48.ppm", 48, 48), ("img_96x144.ppm", 96, 144), ("img_144x96.ppm", 144, 96))
+# The tiny vocab is 384. The real ids (boi 255999, image 258880, eoi 258882) do not fit in it,
+# so this fixture uses in-range stand-ins. The engine reads the ids from config.json; a real
+# checkpoint keeps the real ones. Pad stays 0, which is text_config.pad_token_id.
+G_BOI, G_IMAGE, G_EOI, G_PAD = 11, 12, 13, 0
+# Prefix text, then the image block. The wide image is 6 tokens (sliding window is 8); the
+# square one is a single token.
+IMAGE_BLOCKS = (("img_96x144.ppm", (3, 15, 17, 2)), ("img_48x48.ppm", (5,)))
 
 
 def config():
@@ -103,6 +112,9 @@ def gemma_config():
                "num_attention_heads": G_HEADS, "num_hidden_layers": G_LAYERS, "num_key_value_heads": G_KV,
                "pooling_kernel_size": G_POOL, "position_embedding_size": G_POS})
     c["vision_config"] = vc
+    c["boi_token_id"] = G_BOI
+    c["image_token_id"] = G_IMAGE
+    c["eoi_token_id"] = G_EOI
     return c
 
 
@@ -154,6 +166,69 @@ class MarginError(Exception):
 
 def rnd(rows):
     return [[float("%.9g" % v) for v in r] for r in rows]
+
+
+def gemma_image_logits(text, rows, prefix):
+    state = text.new_state()
+    for t in prefix:
+        text.step(state, t)
+    logits = text.image_block(state, rows, G_BOI, G_EOI, G_PAD)
+    if state["pos"] != len(prefix) + len(rows) + 2:
+        raise MarginError("image block did not advance one position per token")
+    return logits
+
+
+def gemma_text_goldens(model_dir, vis_bf, vis_q8):
+    """Logits after each image block. The pad-token per-layer lookup and the vision-row residual
+    must both move the logits by more than 3x the gate tolerance, and so must q8 versus bf16."""
+    text = {"bf16": ref_gemma4.Model.load(model_dir),
+            "q8": ref_gemma4.Model.load(model_dir, os.path.join(model_dir, "model.q8.safetensors"))}
+    vis = {"bf16": vis_bf, "q8": vis_q8}
+    raw = {}
+    files = {}
+    for label in ("bf16", "q8"):
+        blocks = []
+        for name, prefix in IMAGE_BLOCKS:
+            rgb, pw, ph = rv.read_ppm(os.path.join(model_dir, name))
+            rows = vis[label].encode(rgb, ph, pw)
+            logits = gemma_image_logits(text[label], rows, prefix)
+            gap = sorted(logits)[-1] - sorted(logits)[-2]
+            if gap <= 3 * GATE_REL_TOL * max(abs(v) for v in logits):
+                raise MarginError("%s %s: argmax gap %.3g is within 3x the tolerance" % (label, name, gap))
+            raw[(label, name)] = logits
+            blocks.append({"image": name, "prefix": list(prefix),
+                           "logits": [float("%.9g" % v) for v in logits]})
+        files["golden_image_%s.json" % label] = make_tiny.jdump({"blocks": blocks}, separators=(",", ":"))
+    name, prefix = IMAGE_BLOCKS[0]
+    rgb, pw, ph = rv.read_ppm(os.path.join(model_dir, name))
+    rows = vis_bf.encode(rgb, ph, pw)
+    right = raw[("bf16", name)]
+    top = max(abs(v) for v in right)
+    tol = GATE_REL_TOL * top
+    # The image-token id in the per-layer table, instead of the pad.
+    state = text["bf16"].new_state()
+    for t in prefix:
+        text["bf16"].step(state, t)
+    wrong_ple = text["bf16"].image_block(state, rows, G_BOI, G_EOI, G_IMAGE)
+    ple_diff = max(abs(a - b) for a, b in zip(right, wrong_ple))
+    if ple_diff <= 3 * tol:
+        raise MarginError("%s: pad per-layer input changes logits by only %.3g x tolerance" % (name, ple_diff / tol))
+    embed = text["bf16"].w.get(ref_gemma4.PREFIX + "embed_tokens.weight")
+    pad_row = [v * text["bf16"].cfg.embed_scale for v in embed[G_PAD]]
+    state = text["bf16"].new_state()
+    for t in prefix:
+        text["bf16"].step(state, t)
+    wrong_h = text["bf16"].image_block(state, [pad_row for _ in rows], G_BOI, G_EOI, G_PAD)
+    h_diff = max(abs(a - b) for a, b in zip(right, wrong_h))
+    if h_diff <= 3 * tol:
+        raise MarginError("%s: the vision rows change logits by only %.3g x tolerance" % (name, h_diff / tol))
+    for image, _prefix in IMAGE_BLOCKS:
+        bf_row, q8_row = raw[("bf16", image)], raw[("q8", image)]
+        scale = GATE_REL_TOL * max(abs(v) for v in bf_row)
+        diff = max(abs(a - b) for a, b in zip(bf_row, q8_row))
+        if diff <= 3 * scale:
+            raise MarginError("%s: q8 logits are too close to bf16 (%.3g x tolerance)" % (image, diff / scale))
+    return files
 
 
 def build(seed, family="qwen35"):
@@ -214,6 +289,8 @@ def build(seed, family="qwen35"):
                 raise MarginError("%s: q8 rows are too close to bf16 (%.3g x tolerance)" % (name, ratio))
             worst = ratio if worst is None else min(worst, ratio)
             info[name] = {"rows": len(rb), "max_abs": top, "q8_vs_bf16_x_tol": ratio}
+        if family == "gemma4":
+            files.update(gemma_text_goldens(d, bf, q8))
     for label in ("bf16", "q8"):
         files["golden_vision_%s.json" % label] = make_tiny.jdump(
             {"images": golden[label]}, separators=(",", ":"))

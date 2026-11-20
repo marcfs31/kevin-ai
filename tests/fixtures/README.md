@@ -128,6 +128,25 @@ Vision dimensions: 2 layers, hidden 32, 2 query heads over 1 KV head (`head_dim`
 Margins asserted: no two rows of an image equal; q8 and bf16 rows differ by at least 154x the gate
 tolerance; turning the clamps off changes the rows by more than 3x the tolerance.
 
+The tiny vocab is 384, so `boi_token_id` / `image_token_id` / `eoi_token_id` in this fixture are
+11 / 12 / 13 (in-range stand-ins). Pad stays 0. The engine reads those ids from the config; a real
+checkpoint keeps 255999 / 258880 / 258882. `golden_image_bf16.json` and `golden_image_q8.json` are
+the text logits after an image block:
+
+```
+{"blocks":[{"image","prefix":[ints],"logits":[384 floats]}]}
+```
+
+`logits` is the next-token row after the prefix and then `<boi>`, one position per encoder row,
+`<eoi>`. Positions increase by one and attention stays causal. At the encoder rows the residual is
+the vision row (not scaled by the text embedding scale) and the per-layer table lookup is the pad
+id; the projection is of the vision row. Two blocks: `img_96x144.ppm` with prefix `[3,15,17,2]`
+(6 image tokens) and `img_48x48.ppm` with prefix `[5]` (1 image token). Margins: argmax gap above
+3x the gate tolerance; q8 logits differ from bf16 by more than 3x; swapping the pad id for the
+image-token id in the per-layer table, or replacing the vision rows with the scaled pad embedding,
+moves the bf16 logits by more than 3x. `lm-run [--tokens PREFIX] --image IMG --logits-out F` must
+produce that one row. `check_golden.py` does this (check 6) on top of the encoder rows (check 5).
+
 ## `ops/*.json`
 
 Compact JSON, one file per op. All activations are f32-exact, all weights bf16-exact; expected

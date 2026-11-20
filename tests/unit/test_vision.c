@@ -83,7 +83,9 @@ static void check_variant(const char *fix, const char *weights, const char *gold
         CHECK(in->image_token == 248056 && in->start_token == 248053 && in->end_token == 248054);
     } else {
         CHECK(in->family == LM_VISION_GEMMA && in->unit == 48 && in->out_dim == 64);
-        CHECK(in->image_token == 258880 && in->start_token == 255999 && in->end_token == 258882);
+        /* In-range stand-ins: the tiny vocab is 384, so the real ids do not fit the text model.
+         * The parser is what this checks; a real checkpoint still carries 258880 / 255999 / 258882. */
+        CHECK(in->image_token == 12 && in->start_token == 11 && in->end_token == 13);
     }
     jval *imgs = json_get(g, "images");
     CHECK(imgs && imgs->t == J_ARR && imgs->len == 3);

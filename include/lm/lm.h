@@ -75,6 +75,21 @@ int  lm_feed(LmModel *m, int token, float *logits);
  * return LM_ERR_IO if a per-layer embedding row cannot be read. */
 int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
 
+/* Feed one image block at the next positions: the configured start token, then n vision rows
+ * (each `width` floats, the text hidden size, in encoder order), then the configured end token.
+ * logits (may be NULL) receives the next-token distribution after the end token.
+ *
+ * Gemma 4: positions continue one-by-one and attention stays causal. A vision row replaces that
+ * position's token embedding and is not multiplied by the text embedding scale. The per-layer
+ * table lookup there is pad_token_id; the projection part is of the vision row (the scatter in
+ * Gemma4Model.forward happens before project_per_layer_inputs). Qwen3.5 returns LM_ERR_STATE
+ * and feeds nothing.
+ * Nothing is fed on LM_ERR_TOKEN (n < 1, rows NULL, width not the hidden size, or a start, end
+ * or pad id outside the vocabulary) or LM_ERR_CTX (the block does not fit). LM_ERR_STATE also
+ * when the Gemma config has no pad, start or end id. LM_ERR_IO: a per-layer row could not be
+ * read; that token is not applied, but earlier tokens of this call stay fed. */
+int  lm_prefill_image(LmModel *m, const float *rows, int n, int width, float *logits);
+
 /* ---- speculative decoding with the MTP head (LmOpts.mtp) ----
  * The head drafts the token after next; one batched forward checks the draft, and a rejected
  * draft is rolled back without feeding again. Greedy decoding with them gives exactly the ids

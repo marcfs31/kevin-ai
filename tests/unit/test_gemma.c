@@ -6,14 +6,19 @@
  * memory of the REAL E4B shape at ctx 4096. Written to a temp dir, never to the fixtures. */
 #include "lm_test.h"
 
+#include <math.h>
+
 #include "lm/lm.h"
+#include "io/lm_image.h"
 #include "io/lm_sysmem.h"
 #include "json.h"
 #include "model/lm_gemma.h"
 #include "model/lm_gemma_config.h"
 #include "model/lm_layers.h"
+#include "model/lm_vision.h"
 
 #define FIX "tests/fixtures/gemma4-tiny"
+#define GFIX "tests/fixtures/gemma4-vl-tiny"
 #define Q8 FIX "/model.q8.safetensors"
 #define PATH_MAX_ 4096
 
@@ -431,6 +436,8 @@ static void test_config_rejections(void)
     expect_cfg_fail("num_kv_shared_layers", "all layers shared");
     mutate_t("\"sliding_window\": 8", "\"sliding_window\": 0");
     expect_cfg_fail("sliding_window", "zero window");
+    mutate_t("\"pad_token_id\": 0,", "\"pad_token_id\": false,");
+    expect_cfg_fail("pad_token_id", "pad token must be an integer");
     mutate_t("\"hidden_size\": 64", "\"hidden_size\": 6.5");
     expect_cfg_fail("hidden_size", "fractional dimension");
     mutate_t("\"rms_norm_eps\": 1e-06", "\"rms_norm_eps\": 0");
@@ -560,6 +567,101 @@ static void test_e4b_memory(void)
     lm_gemma_config_free(&c);
 }
 
+/* Logits after an image block against the float64 oracle, plus the refusals: a bad call feeds
+ * nothing, the text fixture's real ids are outside its vocab, and Qwen is not this function. */
+static void test_image_block(const char *weights, const char *file, const char *label)
+{
+    char err[512];
+    LmOpts o = { weights, 0, 0, 0, 0 };
+    LmModel *m = lm_open(GFIX, &o, err, sizeof err);
+    CHECK_MSG(m != NULL, "vl lm_open: %s", err);
+    LmVision *v = lm_vision_open(GFIX, weights, err, sizeof err);
+    CHECK_MSG(v != NULL, "vl vision: %s", err);
+    if (!m || !v) { lm_close(m); lm_vision_close(v); return; }
+    const int V = lm_n_vocab(m), H = lm_vision_info(v)->out_dim;
+    CHECK(V == 384 && H == 64);
+
+    char path[256];
+    snprintf(path, sizeof path, GFIX "/%s", file);
+    char *txt = read_all(path, NULL);
+    jval *root = txt ? json_parse(txt, NULL) : NULL;
+    free(txt);
+    jval *blocks = root ? json_get(root, "blocks") : NULL;
+    CHECK(blocks && blocks->t == J_ARR && blocks->len == 2);
+    float *got = (float *)malloc((size_t)V * sizeof(float));
+    double worst = 0;
+    for (int b = 0; blocks && b < blocks->len; b++) {
+        jval *blk = blocks->kids[b], *pref = json_get(blk, "prefix"), *want = json_get(blk, "logits");
+        char img[512];
+        snprintf(img, sizeof img, GFIX "/%s", json_get(blk, "image")->str);
+        uint8_t *rgb = NULL;
+        int w, h;
+        CHECK_MSG(lm_ppm_read(img, &rgb, &w, &h, err, sizeof err) == 0, "%s", err);
+        const int nt = lm_vision_tokens(v, h, w);
+        float *rows = (float *)malloc((size_t)nt * H * sizeof(float));
+        float *again = (float *)malloc((size_t)V * sizeof(float));
+        CHECK_MSG(rows && lm_vision_encode(v, rgb, h, w, rows, err, sizeof err) == 0, "%s", err);
+        lm_reset(m);
+        for (int t = 0; t < pref->len; t++) CHECK(lm_feed(m, (int)pref->kids[t]->num, NULL) == LM_OK);
+        const int pos0 = lm_pos(m);
+        CHECK(lm_prefill_image(m, rows, nt, H, got) == LM_OK);
+        CHECK_MSG(lm_pos(m) == pos0 + nt + 2, "%s: position %d after a block of %d, expected %d",
+                  label, lm_pos(m), nt, pos0 + nt + 2);
+        double mx = 0;
+        for (int i = 0; i < V; i++) mx = fmax(mx, fabs(want->kids[i]->num));
+        int bad = 0, best = 0;
+        for (int i = 0; i < V; i++) {
+            if (want->kids[i]->num > want->kids[best]->num) best = i;
+            const double e = fabs((double)got[i] - want->kids[i]->num);
+            if (mx > 0 && e / (2e-4 * mx) > worst) worst = e / (2e-4 * mx);
+            if (!isfinite(got[i]) || !(e <= 2e-4 * mx)) bad++;
+        }
+        CHECK_MSG(bad == 0, "%s block %d: %d logits beyond 2e-4*max|logit|", label, b, bad);
+        CHECK_MSG(argmax(got, V) == best, "%s block %d argmax %d, golden %d", label, b, argmax(got, V), best);
+        lm_reset(m);
+        for (int t = 0; t < pref->len; t++) CHECK(lm_feed(m, (int)pref->kids[t]->num, NULL) == LM_OK);
+        CHECK(lm_prefill_image(m, rows, nt, H, again) == LM_OK && same(got, again, V));
+        free(again);
+        free(rows);
+        free(rgb);
+    }
+    printf("  %s image block: worst logit error = %.1f%% of the tolerance\n", label, worst * 100.0);
+
+    lm_reset(m);
+    CHECK(lm_feed(m, 3, NULL) == LM_OK && lm_pos(m) == 1);
+    float dummy[64];
+    memset(dummy, 0, sizeof dummy);
+    CHECK(lm_prefill_image(m, NULL, 1, H, got) == LM_ERR_TOKEN && lm_pos(m) == 1);
+    CHECK(lm_prefill_image(m, dummy, 0, H, got) == LM_ERR_TOKEN && lm_pos(m) == 1);
+    CHECK(lm_prefill_image(m, dummy, 1, H - 1, got) == LM_ERR_TOKEN && lm_pos(m) == 1);
+    lm_close(m);
+    lm_vision_close(v);
+
+    LmOpts small = { weights, 2, 0, 0, 0 };
+    LmModel *s = lm_open(GFIX, &small, err, sizeof err);
+    CHECK_MSG(s != NULL && lm_prefill_image(s, dummy, 1, 64, NULL) == LM_ERR_CTX && lm_pos(s) == 0,
+              "a block that does not fit must feed nothing");
+    lm_close(s);
+    json_free_tree(root);
+    free(got);
+}
+
+static void test_image_block_refusals(void)
+{
+    char err[512];
+    float z[64];
+    memset(z, 0, sizeof z);
+    LmModel *t = open_model(NULL, 0);
+    /* The text fixture keeps the real ids, which are outside vocab 384: read, then refused. */
+    CHECK(t && lm_prefill_image(t, z, 1, 64, NULL) == LM_ERR_TOKEN && lm_pos(t) == 0);
+    lm_close(t);
+    LmOpts o = { NULL, 0, 0, 0, 0 };
+    LmModel *q = lm_open("tests/fixtures/qwen35-tiny", &o, err, sizeof err);
+    CHECK_MSG(q != NULL && lm_prefill_image(q, z, 1, 64, NULL) == LM_ERR_STATE && lm_pos(q) == 0,
+              "qwen image prefill: %s", q ? "" : err);
+    lm_close(q);
+}
+
 int main(void)
 {
     char probe[256];
@@ -576,6 +678,9 @@ int main(void)
     test_config_rejections();
     test_binding_rejections();
     test_e4b_memory();
+    test_image_block(NULL, "golden_image_bf16.json", "bf16");
+    test_image_block(GFIX "/model.q8.safetensors", "golden_image_q8.json", "q8");
+    test_image_block_refusals();
     lt_rmtree(g_dir);
     return lt_finish("test_gemma");
 }

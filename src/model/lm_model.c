@@ -637,3 +637,12 @@ int lm_prefill(LmModel *m, const int *tokens, int n, float *logits)
     LM_TIMES_ADD(total, t0);
     return r;
 }
+
+int lm_prefill_image(LmModel *m, const float *rows, int n, int width, float *logits)
+{
+    LM_TIMES_T0(t0);
+    /* Qwen's image block (M-RoPE positions) is a separate change. Nothing is fed. */
+    const int r = m->gemma ? lm_gemma_prefill_image(m->gemma, rows, n, width, logits) : LM_ERR_STATE;
+    LM_TIMES_ADD(total, t0);
+    return r;
+}

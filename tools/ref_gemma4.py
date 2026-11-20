@@ -352,18 +352,21 @@ class Model:
         ctx = attention_context(queries, kv["k"], kv["v"], pos, c.window if lt == SLIDING else None)
         return matvec(w.get(p + "o_proj.weight"), ctx)
 
-    def step(self, state, token, stats=None):
-        """Feed one token; returns the vocab logits row (after the softcap). Mutates `state`.
+    def step_hidden(self, state, h, ple_token, stats=None):
+        """One position whose residual is `h` and whose per-layer table row is `ple_token`.
 
-        `stats`, if a dict, receives "max_precap" = max(|logit| before the softcap) over all calls.
+        For a text token, `h` is the scaled embedding and `ple_token` is the token. For a vision
+        row, `h` is the row itself (not multiplied by the text embedding scale) and `ple_token`
+        is the pad id: Gemma4Model.forward looks the pad id up in the per-layer table and
+        projects the embeddings after the vision rows have been scattered in. Returns the vocab
+        logits (after the softcap). Mutates `state`. `stats`, if a dict, receives "max_precap".
         """
         c, w = self.cfg, self.w
-        embed = w.get(PREFIX + "embed_tokens.weight")
-        if not 0 <= token < c.vocab:
-            raise ValueError("token id %d out of range" % token)
+        if not 0 <= ple_token < c.vocab_ple:
+            raise ValueError("token id %d out of range for the per-layer table" % ple_token)
         pos = state["pos"]
-        h = [v * c.embed_scale for v in embed[token]]
-        ple = self.per_layer_inputs(token, h)
+        ple = self.per_layer_inputs(ple_token, h)
+        embed = w.get(PREFIX + "embed_tokens.weight")
         for i in range(c.layers):
             p = "%slayers.%d." % (PREFIX, i)
             n1 = rmsnorm(h, w.get(p + "input_layernorm.weight"), c.eps)
@@ -383,6 +386,26 @@ class Model:
         if stats is not None:
             stats["max_precap"] = max(stats.get("max_precap", 0.0), max(abs(v) for v in raw))
         return softcap(raw, c.cap)
+
+    def step(self, state, token, stats=None):
+        """Feed one text token; returns the vocab logits row (after the softcap). Mutates `state`."""
+        c, w = self.cfg, self.w
+        embed = w.get(PREFIX + "embed_tokens.weight")
+        if not 0 <= token < c.vocab:
+            raise ValueError("token id %d out of range" % token)
+        h = [v * c.embed_scale for v in embed[token]]
+        return self.step_hidden(state, h, token, stats)
+
+    def image_block(self, state, rows, start, end, pad, stats=None):
+        """Start token, one position per vision row, end token. Returns the logits after the end.
+
+        Positions increase by one and attention stays the text model's causal mask. `rows` are
+        the vision encoder's output, in order, unscaled.
+        """
+        self.step(state, start, stats)
+        for row in rows:
+            self.step_hidden(state, row, pad, stats)
+        return self.step(state, end, stats)
 
     def forward(self, tokens, stats=None):
         state = self.new_state()

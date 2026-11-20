@@ -9,7 +9,10 @@
  * final_logit_softcapping missing or <= 0; hidden_size_per_layer_input 0; vocab_size
  * different from vocab_size_per_layer_input; a rope type other than default / proportional;
  * layer types other than sliding_attention / full_attention; a last layer that is not
- * full_attention; a layer type that KV-shared layers need but no earlier layer produces. */
+ * full_attention; a layer type that KV-shared layers need but no earlier layer produces.
+ * pad_token_id, boi_token_id and eoi_token_id may be absent (stored as -1; image prefill then
+ * returns LM_ERR_STATE). A present value that is not an integer is an error. They are not
+ * required to lie inside vocab_size: the tiny text fixture keeps the real ids, which do not. */
 #ifndef LM_GEMMA_CONFIG_H
 #define LM_GEMMA_CONFIG_H
 
@@ -22,6 +25,7 @@ typedef struct {
     int    window;                      /* sliding_window */
     int    max_pos;                     /* max_position_embeddings */
     int    ple_dim;                     /* hidden_size_per_layer_input (P) */
+    int    pad_id, boi, eoi;            /* text pad and the image-block ends; -1 when config omits the id */
     int    kv_shared, first_shared;     /* num_kv_shared_layers; first reuse layer = layers - kv_shared */
     float  eps, cap;                    /* rms_norm_eps, final_logit_softcapping */
     float  embed_scale, ple_scale;      /* bf16(sqrt(hidden)), bf16(sqrt(P)) */

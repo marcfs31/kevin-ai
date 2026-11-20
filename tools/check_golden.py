@@ -20,10 +20,14 @@ but the last), also:
      each within the same tolerance of the golden head row with the same argmax;
   4. `lm-run ... --tokens <greedy prompt> --greedy N --mtp`: speculative greedy prints exactly the
      golden ids (the head only proposes; the main model decides every id).
-When the fixture holds golden_vision_{bf16,q8}.json (the image encoder, qwen35-vl-tiny), also,
-for each variant and each image listed:
+When the fixture holds golden_vision_{bf16,q8}.json (the image encoder), also, for each variant
+and each image listed:
   5. `lm-run ... --image IMG --vision-rows-out TMP`: TMP is exactly the golden number of rows of
      the golden width, all finite, every value within 2e-4 * max|golden rows of that image|.
+When it holds golden_image_{bf16,q8}.json (logits after an image block), also, for each variant
+and each block:
+  6. `lm-run ... [--tokens PREFIX] --image IMG --logits-out TMP`: TMP is one vocab row, all finite,
+     within 2e-4 * max|golden row| of the golden logits, same argmax.
 The text checks 1-4 are required unless the fixture holds vision goldens.
 Then `lm-quant --model DIR --out TMP`: its file must be byte-identical to model.q8.safetensors.
 
@@ -224,6 +228,31 @@ def check_vision(label, run_bin, model_dir, weights, golden_path, timeout, tmp):
     return "%s vision %d images, %d rows (worst error %.0f%% of tolerance)" % (label, len(images), nrows, 100 * worst)
 
 
+def check_image_logits(label, run_bin, model_dir, weights, golden_path, vocab, timeout, tmp):
+    need_file(golden_path, "golden file")
+    with open(golden_path) as f:
+        blocks = json.load(f)["blocks"]
+    if not blocks:
+        raise Failure("%s lists no image blocks" % golden_path)
+    worst = 0.0
+    for b in blocks:
+        img = os.path.join(model_dir, b["image"])
+        need_file(img, "test image")
+        row = b["logits"]
+        prefix = b.get("prefix") or []
+        if len(row) != vocab or any(not isinstance(t, int) for t in prefix):
+            raise Failure("%s %s: logits are not one row of %d, or the prefix is not ints" % (label, b["image"], vocab))
+        out = os.path.join(tmp, "%s.%s.image.f32" % (label, b["image"]))
+        cmd = [run_bin, "--model", model_dir] + (["--weights", weights] if weights else [])
+        if prefix:
+            cmd += ["--tokens", ",".join(str(t) for t in prefix)]
+        stdout = run(cmd + ["--image", img, "--logits-out", out], timeout, "%s image-block run on %s" % (label, b["image"]))
+        if stdout.strip():
+            raise Failure("%s image-block run printed to stdout: %r" % (label, stdout[:80]))
+        worst = max(worst, compare_rows("%s image block %s" % (label, b["image"]), out, [row], [prefix[-1] if prefix else 0], vocab))
+    return "%s image-block logits %d blocks (worst error %.0f%% of tolerance)" % (label, len(blocks), 100 * worst)
+
+
 def check_quantiser(quant_bin, model_dir, golden_q8, timeout, tmp):
     need_file(golden_q8, "q8 fixture")
     out = os.path.join(tmp, "quant.q8.safetensors")
@@ -280,6 +309,11 @@ def check(run_bin, quant_bin, fixtures, timeout):
                                       os.path.join(fixtures, "golden_vision_bf16.json"), timeout, tmp))
             parts.append(check_vision("q8", run_bin, fixtures, q8,
                                       os.path.join(fixtures, "golden_vision_q8.json"), timeout, tmp))
+        image_logits = os.path.join(fixtures, "golden_image_bf16.json")
+        if os.path.isfile(image_logits):
+            parts.append(check_image_logits("bf16", run_bin, fixtures, None, image_logits, vocab, timeout, tmp))
+            parts.append(check_image_logits("q8", run_bin, fixtures, q8,
+                                            os.path.join(fixtures, "golden_image_q8.json"), vocab, timeout, tmp))
         size = check_quantiser(quant_bin, fixtures, q8, timeout, tmp)
     parts.append("quantiser byte-identical (%d bytes)" % size)
     tag = " [gemma4]" if family == "gemma4" else ""

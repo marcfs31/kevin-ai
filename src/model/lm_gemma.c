@@ -368,18 +368,15 @@ static void attention(LmGemma *g, int l, const float *x, float *out)
     LM_TIMES_ADD_OWN(attention, t0, mm0);
 }
 
-int lm_gemma_feed(LmGemma *g, int token, float *logits)
+/* g->h is already the residual input. ple_token is the per-layer table id (the token itself
+ * for text; the pad id for a vision row). Does not check the context or the id. */
+static int forward_loaded(LmGemma *g, int ple_token, float *logits)
 {
     const LmGemmaCfg *c = &g->cfg;
     const int H = c->hidden, P = c->ple_dim;
-    if (token < 0 || token >= c->vocab) return LM_ERR_TOKEN;
-    if (g->pos >= g->ctx) return LM_ERR_CTX;
-
-    lm_mat_row(&g->embed, token, g->h);
-    for (int j = 0; j < H; j++) g->h[j] *= c->embed_scale;
     {
         char err[256];
-        if (per_layer_inputs(g, token, err, sizeof err) != 0) return LM_ERR_IO;
+        if (per_layer_inputs(g, ple_token, err, sizeof err) != 0) return LM_ERR_IO;
     }
     for (int i = 0; i < c->layers; i++) {
         const GLayer *L = &g->layers[i];
@@ -410,6 +407,45 @@ int lm_gemma_feed(LmGemma *g, int token, float *logits)
         lm_logit_softcap(logits, c->vocab, c->cap);
     }
     return LM_OK;
+}
+
+int lm_gemma_feed(LmGemma *g, int token, float *logits)
+{
+    const LmGemmaCfg *c = &g->cfg;
+    const int H = c->hidden;
+    if (token < 0 || token >= c->vocab) return LM_ERR_TOKEN;
+    if (g->pos >= g->ctx) return LM_ERR_CTX;
+
+    lm_mat_row(&g->embed, token, g->h);
+    for (int j = 0; j < H; j++) g->h[j] *= c->embed_scale;
+    return forward_loaded(g, token, logits);
+}
+
+/* A vision row: the residual is the row itself (no text embedding scale). The per-layer table
+ * row is ple_token, which for Gemma is the pad id; the projection inside forward_loaded is of
+ * g->h, so it is of the vision row. */
+static int feed_row(LmGemma *g, const float *row, int ple_token, float *logits)
+{
+    if (g->pos >= g->ctx) return LM_ERR_CTX;
+    memcpy(g->h, row, (size_t)g->cfg.hidden * sizeof(float));
+    return forward_loaded(g, ple_token, logits);
+}
+
+int lm_gemma_prefill_image(LmGemma *g, const float *rows, int n, int width, float *logits)
+{
+    const LmGemmaCfg *c = &g->cfg;
+    if (n < 1 || !rows || width != c->hidden) return LM_ERR_TOKEN;
+    if (c->pad_id < 0 || c->boi < 0 || c->eoi < 0) return LM_ERR_STATE;
+    if (c->pad_id >= c->vocab || c->boi >= c->vocab || c->eoi >= c->vocab) return LM_ERR_TOKEN;
+    /* start + n rows + end. Checked before anything is fed. */
+    if (n > g->ctx - g->pos - 2) return LM_ERR_CTX;
+    int r = lm_gemma_feed(g, c->boi, NULL);
+    if (r != LM_OK) return r;
+    for (int i = 0; i < n; i++) {
+        r = feed_row(g, rows + (size_t)i * width, c->pad_id, NULL);
+        if (r != LM_OK) return r;
+    }
+    return lm_gemma_feed(g, c->eoi, logits);
 }
 
 /* ------------------------------------------------------------------ prefill */

@@ -24,6 +24,13 @@ static int req_int(jval *o, const char *key, int lo, int *out, char *err, size_t
     return 0;
 }
 
+/* Absent is -1 (image prefill then refuses). Present but not an integer is an error. */
+static int opt_int(jval *o, const char *key, int *out, char *err, size_t n)
+{
+    if (!json_get(o, key)) { *out = -1; return 0; }
+    return req_int(o, key, 0, out, err, n);
+}
+
 static int req_num(jval *o, const char *key, double *out, char *err, size_t n)
 {
     jval *v = json_get(o, key);
@@ -201,6 +208,11 @@ int lm_gemma_config_load(const char *path, LmGemmaCfg *c, char *err, size_t errl
 
     c->embed_scale = bf16_round(sqrt((double)c->hidden));
     c->ple_scale = bf16_round(sqrt((double)c->ple_dim));
+    /* Image-block ids. A text-only open does not need them; lm_prefill_image refuses -1.
+     * They may sit outside vocab_size (the tiny text fixture keeps the real ids). */
+    if (opt_int(t, "pad_token_id", &c->pad_id, err, errlen) ||
+        opt_int(root, "boi_token_id", &c->boi, err, errlen) ||
+        opt_int(root, "eoi_token_id", &c->eoi, err, errlen)) goto out;
     rc = 0;
 out:
     json_free_tree(root);
