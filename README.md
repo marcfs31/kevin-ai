@@ -551,6 +551,7 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
             [--max-tokens N] [--ctx N] [--threads N] [--stats] [--fast]
 ```
 
+- `--prompt` and `--system` are wiped from the process list after startup.
 - Thinking is off by default (`--no-think`). A thinking block costs many tokens at this speed.
 - `--stats` prints tokens/s to stderr, and the context window chosen.
 - `--ctx N` sets the context window. Without it the window is the largest that keeps the
@@ -603,8 +604,10 @@ bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
   token (about 82 MiB for a 500-token system prompt). One snapshot per system prompt is kept,
   most recently used first, in `--cache-mb` MiB (512 by default: about ten short system
   prompts), so clients that alternate between system prompts each restore their own. With
-  `--cache-mb 0` one snapshot is kept. `lm-chat` uses the same cache after `/reset`.
+  `--cache-mb 0` one snapshot is kept. `POST /v1/chat/reset`, and `lm-chat`'s `/reset`, drop
+  the conversation and every snapshot. A log file is cut back to 1 MiB (`LM_SERVE_LOG_MAX`).
 - `scripts/lm-serve.service` runs it as a systemd user service; its comments say how to install it.
+  Its log is `~/logs/lm-serve.log`, mode 600.
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' \

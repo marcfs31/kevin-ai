@@ -106,6 +106,12 @@ export async function startRemoteServe(opts: ServeOptions, signal?: AbortSignal)
   return json;
 }
 
+/** Drops lm-serve's conversation, system text and prefix cache. */
+export async function resetServer(signal?: AbortSignal): Promise<void> {
+  const res = await send('/v1/chat/reset', { method: 'POST', signal, headers: { Accept: 'application/json' } });
+  if (!res.ok) throw await errorFrom(res);
+}
+
 export function requestBody(req: ChatRequest): string {
   const body: Record<string, unknown> = {
     messages: req.messages,

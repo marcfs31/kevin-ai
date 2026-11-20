@@ -33,6 +33,7 @@ describe('privacy', () => {
         expect(f.text.match(/send\('([^']+)'/g)).toEqual([
           "send('/v1/models'",
           "send('/control/serve'",
+          "send('/v1/chat/reset'",
           "send('/v1/chat/completions'",
         ]);
       } else expect(calls, f.path).toEqual([]);

@@ -147,6 +147,23 @@ static int run_turn(Session *s, const char *text)
     return 0;
 }
 
+/* The value is copied, then wiped in argv so the process list does not keep chat text. */
+static void scrub(char *s)
+{
+    volatile char *p = (volatile char *)s;
+    while (*p) *p++ = '\0';
+}
+
+static char *take_arg(char *s)
+{
+    size_t n = strlen(s);
+    char *copy = (char *)malloc(n + 1);
+    if (!copy) return NULL;
+    memcpy(copy, s, n + 1);
+    scrub(s);
+    return copy;
+}
+
 static const char *need_value(int argc, char **argv, int *i)
 {
     if (*i + 1 >= argc) {
@@ -170,8 +187,8 @@ int main(int argc, char **argv)
 #define BAD do { fprintf(stderr, "lm-chat: invalid value for %s\n", a); return 2; } while (0)
         if (!strcmp(a, "--model")) model = VAL;
         else if (!strcmp(a, "--weights")) weights = VAL;
-        else if (!strcmp(a, "--prompt")) prompt = VAL;
-        else if (!strcmp(a, "--system")) system = VAL;
+        else if (!strcmp(a, "--prompt")) { if (!(prompt = take_arg((char *)VAL))) return 1; }
+        else if (!strcmp(a, "--system")) { if (!(system = take_arg((char *)VAL))) return 1; }
         else if (!strcmp(a, "--think")) think = 1;
         else if (!strcmp(a, "--no-think")) think = 0;
         else if (!strcmp(a, "--show-thinking")) show_thinking = 1;
@@ -248,7 +265,12 @@ int main(int argc, char **argv)
             if (n < 0) break;
             while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
             if (!strcmp(line, "/exit") || !strcmp(line, "/quit")) break;
-            if (!strcmp(line, "/reset")) { lm_chat_reset(chat); fputs("[conversation reset]\n", stderr); continue; }
+            if (!strcmp(line, "/reset")) {
+                lm_chat_purge(chat);
+                if (system && lm_chat_set_system(chat, system)) { status = 1; break; }
+                fputs("[conversation reset]\n", stderr);
+                continue;
+            }
             if (!n) continue;
             if (run_turn(&s, line)) { status = 1; break; }
         }

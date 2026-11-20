@@ -87,6 +87,8 @@ void    lm_chat_free(LmChat *c);
 /* Forget the conversation (the system message stays) and reset the backend. The prefix
  * cache stays, and what was fed is remembered for its next snapshot. */
 void lm_chat_reset(LmChat *c);
+void lm_chat_purge(LmChat *c);
+int lm_chat_set_system(LmChat *c, const char *text);
 
 /* How many turns had to reset the backend and re-feed a non-empty state from scratch (a turn
  * restored from the prefix cache is not counted). */

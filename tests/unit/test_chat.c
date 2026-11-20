@@ -860,6 +860,29 @@ static void test_prefix_cache_failures(void)
     g_use_cache = 0;
 }
 
+/* Purge drops the transcript, the system prompt and every prefix snapshot. */
+static void test_purge(void)
+{
+    g_use_cache = 1;
+    Fake f;
+    LmTurn t;
+    fake_init(&f, 4096);
+    LmChat *c = mk(&f, 0, 0, "You are terse. Answer in one short line.");
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK);
+    lm_chat_reset(c);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK && lm_chat_cached(c) > 0);
+    lm_chat_purge(c);
+    CHECK(lm_chat_cached(c) == 0 && lm_chat_cache_slots(c) == 0 && lm_chat_fed(c) == 0);
+    CHECK(lm_chat_set_system(c, "You are terse. Answer in one short line.") == 0);
+    script(&f, "Hello", "<|im_end|>", NULL);
+    CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && t.n_cached == 0);
+    lm_chat_free(c);
+    CHECK(f.live == 0);
+    g_use_cache = 0;
+}
+
 int main(void)
 {
     char err[256];
@@ -885,6 +908,7 @@ int main(void)
     test_prefix_cache_sync();
     test_prefix_cache_failures();
     test_prefix_cache_slots();
+    test_purge();
 
     lm_template_free(g_tpl);
     lm_tok_close(g_tok);

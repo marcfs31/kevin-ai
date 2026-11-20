@@ -199,6 +199,20 @@ export function loadState(storage: Storage): LoadResult {
 
 export type SaveResult = 'ok' | 'full';
 
+/** Keys of unreadable documents moved aside (`lm-chat.unreadable.<time>`). */
+export function backupKeys(storage: Storage): string[] {
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key && key.startsWith(`${BACKUP_KEY}.`)) keys.push(key);
+  }
+  return keys;
+}
+
+export function deleteBackups(storage: Storage): void {
+  for (const key of backupKeys(storage)) storage.removeItem(key);
+}
+
 export function saveState(storage: Storage, state: State): SaveResult {
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(state));

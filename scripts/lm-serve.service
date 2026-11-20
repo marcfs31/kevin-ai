@@ -3,7 +3,9 @@
 #   systemctl --user daemon-reload && systemctl --user enable --now lm-serve
 #   sudo loginctl enable-linger "$USER"      # start at boot, without a login
 # Optional API key: put LM_SERVE_API_KEY=... in ~/.config/lm-serve.env (chmod 600).
-# Health: curl -s http://127.0.0.1:8080/health   Logs: journalctl --user -u lm-serve
+# Health: curl -s http://127.0.0.1:8080/health
+# Logs: ~/logs/lm-serve.log (mode 600). lm-serve truncates that file at 1 MiB
+# (LM_SERVE_LOG_MAX). The journal is not used, so the cap can apply.
 # Paths assume the checkout in ~/small-llm-in-c and the model in ~/models/qwen3.5-4b; edit
 # ExecStart for anything else. A missing model makes lm-serve exit 1, and after three failed
 # starts in two minutes systemd stops retrying and shows the unit as failed.
@@ -17,6 +19,9 @@ StartLimitBurst=3
 Type=simple
 WorkingDirectory=%h/small-llm-in-c
 EnvironmentFile=-%h/.config/lm-serve.env
+ExecStartPre=/bin/sh -c 'umask 077; mkdir -p %h/logs; touch %h/logs/lm-serve.log; chmod 600 %h/logs/lm-serve.log'
+StandardOutput=append:%h/logs/lm-serve.log
+StandardError=append:%h/logs/lm-serve.log
 ExecStart=%h/small-llm-in-c/bin/lm-serve --model %h/models/qwen3.5-4b --weights %h/models/qwen3.5-4b/model.q8.safetensors --host 127.0.0.1 --port 8080
 Restart=on-failure
 RestartSec=5

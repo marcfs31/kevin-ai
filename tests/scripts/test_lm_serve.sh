@@ -114,6 +114,13 @@ check '[ "$(chat "$req2")" = 200 ]' "follow-up status: $(cat "$tmp/body")"
 check 'tail -1 "$tmp/serve.err" | grep -q "prompt [0-9]*, 0 from cache, fed [0-9]* at" && ! tail -1 "$tmp/serve.err" | grep -q "re-fed"' \
       "the follow-up re-fed the conversation: $(tail -1 "$tmp/serve.err")"
 check '[ "$(j "d[\"usage\"][\"prompt_tokens\"]")" -gt "$p1" ]' "the follow-up prompt is not longer than the first"
+# reset drops the conversation and the prefix cache, so the same follow-up is fed again
+check '[ "$(code "$url/v1/chat/reset")" = 405 ]' "GET /v1/chat/reset was accepted"
+check '[ "$(post -d "{}" "$url/v1/chat/reset")" = 200 ] && grep -q "\"status\":\"ok\"" "$tmp/body"' "POST /v1/chat/reset: $(cat "$tmp/body")"
+check '[ "$(chat "$req2")" = 200 ]' "chat after reset: $(cat "$tmp/body")"
+# nothing was left to extend: the whole prompt is fed, and none of it comes from the cache
+check 'tail -1 "$tmp/serve.err" | grep -Eq "prompt ([0-9]+), 0 from cache, fed \\1 at"' \
+      "reset left the conversation in memory: $(tail -1 "$tmp/serve.err")"
 # NEGATIVE: an edited answer cannot reuse the state
 chat '{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"edited"},{"role":"user","content":"more"}],"max_tokens":3}' > /dev/null
 check 'tail -1 "$tmp/serve.err" | grep -q "(re-fed)"' "an edited history was not re-fed: $(tail -1 "$tmp/serve.err")"
@@ -173,6 +180,7 @@ stop
 # the API key: /v1 needs it, /health does not, a wrong key is refused, the log never shows it
 LM_SERVE_API_KEY=secret-test-key start
 check '[ "$(code "$url/v1/models")" = 401 ]' "no key accepted"
+check '[ "$(post -d "{}" "$url/v1/chat/reset")" = 401 ]' "reset without a key accepted"
 check '[ "$(code -H "Authorization: Bearer secret-test-kez" "$url/v1/models")" = 401 ]' "a wrong key accepted"
 check '[ "$(code -H "Authorization: Bearer secret-test-key" "$url/v1/models")" = 200 ]' "the right key refused"
 check '[ "$(code "$url/health")" = 200 ]' "/health needs a key"
@@ -266,13 +274,41 @@ bin/lm-chat --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --c
     --prompt hi --max-tokens 5 > /dev/null 2> "$tmp/chat.err"
 check 'grep -q "max-tokens reached" "$tmp/chat.err"' "lm-chat --max-tokens 5 did not stop: $(cat "$tmp/chat.err")"
 
-# lm-chat's prefix cache: after /reset a second conversation snapshots the shared system
-# prompt, and a third is restored from it (the stats line counts the ids)
+# /reset drops the prefix cache. The configured system prompt is put back, and each
+# turn is fed from scratch (three "0 from cache" lines, no restore).
 printf 'gamma\n/reset\ndelta\n/reset\ngamma\n' | bin/lm-chat --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" \
     --ctx 256 --temperature 0 --max-tokens 4 --stats --system "You answer in one short line." > /dev/null 2> "$tmp/chat.err"
-check '[ "$(grep -c " 0 from cache" "$tmp/chat.err")" = 2 ] && [ "$(grep "from cache" "$tmp/chat.err" | tail -1 | grep -c " [1-9][0-9]* from cache")" = 1 ]' \
-      "lm-chat did not restore the third conversation from the cache: $(grep "from cache" "$tmp/chat.err")"
+check '[ "$(grep -c " 0 from cache" "$tmp/chat.err")" = 3 ] && ! grep -q " [1-9][0-9]* from cache" "$tmp/chat.err"' \
+      "lm-chat /reset left a prefix snapshot: $(grep "from cache" "$tmp/chat.err")"
 check '[ "$(grep -c "^\[context 256 tokens\]$" "$tmp/chat.err")" = 1 ]' "lm-chat --stats did not print the context window once"
+
+# a file log is cut back to LM_SERVE_LOG_MAX before the next line is written
+LM_SERVE_LOG_MAX=80 start
+check 'grep -q listening "$tmp/serve.err"' "startup was not logged"
+check '[ "$(code "$url/health")" = 200 ]' "health under a small log cap"
+check '! grep -q listening "$tmp/serve.err" && grep -q "GET /health" "$tmp/serve.err"' \
+      "the log was not truncated: $(cat "$tmp/serve.err")"
+stop
+LM_SERVE_LOG_MAX=0 "$SERVE" --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --port 0 \
+    >/dev/null 2>"$tmp/logmax.err"; rc=$?
+check '[ $rc -eq 2 ] && grep -q LM_SERVE_LOG_MAX "$tmp/logmax.err"' "a bad log cap exited $rc: $(cat "$tmp/logmax.err")"
+
+# --system is wiped from argv once the process is running
+secret='ZZ-prompt-not-in-process-list-ZZ'
+mkfifo "$tmp/in"
+sleep 60 >"$tmp/in" &
+holder=$!
+bin/lm-chat --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --system "$secret" \
+    <"$tmp/in" >/dev/null 2>"$tmp/ps.err" &
+chatpid=$!
+for _ in $(seq 50); do kill -0 "$chatpid" 2>/dev/null && break; sleep 0.05; done
+sleep 0.3
+check 'kill -0 "$chatpid" 2>/dev/null' "lm-chat exited before the argv check: $(cat "$tmp/ps.err")"
+check '! ps -ww -p "$chatpid" -o args= | grep -q "$secret"' "system text stayed on argv: $(ps -ww -p "$chatpid" -o args=)"
+printf '/exit\n' >"$tmp/in"
+wait "$chatpid" 2>/dev/null || true
+kill "$holder" 2>/dev/null || true
+wait "$holder" 2>/dev/null || true
 
 if [ "$fails" -ne 0 ]; then echo "test_lm_serve: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_lm_serve: $checks checks passed"
