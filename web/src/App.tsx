@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Composer } from './components/Composer';
 import { MessageView, errorText, type LiveInfo } from './components/MessageView';
+import { ServerPanel } from './components/ServerPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
@@ -239,6 +240,13 @@ function Chat({ state, setState, storage, notice }: {
       <main className="main">
         {settingsOpen && (
           <div id="settings">
+            <ServerPanel
+              busy={busy}
+              onStarted={() => {
+                setServer({ kind: 'loading' });
+                fetchInfo();
+              }}
+            />
             <SettingsPanel settings={state.settings} onChange={updateSettings} />
           </div>
         )}

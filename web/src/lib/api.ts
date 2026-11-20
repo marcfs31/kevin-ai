@@ -1,6 +1,8 @@
 // The only module that calls fetch. Talks to lm-serve (directly in dev, through
-// tools/chat_server.py in production) with same-origin relative URLs.
+// tools/chat_server.py in production) with same-origin relative URLs. Dev also
+// exposes POST /control/serve on the Vite server to start a remote model.
 import { SseParser, obj, parseErrorBody, parsePayload, type ApiErrorBody, type StreamEvent } from './sse';
+import type { ServeOptions, ServeResult } from './serveControl';
 
 export type VisionStatus = 'ok' | 'unavailable' | 'unknown';
 
@@ -87,6 +89,21 @@ export async function fetchServerInfo(signal?: AbortSignal): Promise<ServerInfo>
   const info = parseModels(await res.json().catch(() => null));
   if (!info) throw new ApiError(res.status, { message: '', code: 'bad_models', type: null });
   return info;
+}
+
+/** Starts Qwen or Gemma on the remote host via the Vite /control/serve middleware. */
+export async function startRemoteServe(opts: ServeOptions, signal?: AbortSignal): Promise<ServeResult> {
+  const res = await send('/control/serve', {
+    method: 'POST',
+    signal,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts),
+  });
+  const json = (await res.json().catch(() => null)) as ServeResult | null;
+  if (!json || typeof json !== 'object' || typeof json.ok !== 'boolean') {
+    throw new ApiError(res.status, { message: 'bad control response', code: null, type: null });
+  }
+  return json;
 }
 
 export function requestBody(req: ChatRequest): string {
