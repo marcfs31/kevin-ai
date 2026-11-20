@@ -87,6 +87,55 @@ describe('App', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Una imagen es demasiado grande para el servidor.');
   });
 
+  it('uses the catalog for a context overflow instead of the server sentence', async () => {
+    const body = {
+      error: {
+        message: 'the prompt is 80 tokens and does not fit the 64-token context',
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+      },
+    };
+    mockFetch(() => new Response(JSON.stringify(body), { status: 400 }));
+    renderApp(['es-ES']);
+    const box = screen.getByLabelText('Mensaje');
+    fireEvent.change(box, { target: { value: 'hola' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('La conversación ya no cabe en el contexto del modelo. Empieza un chat nuevo o envía menos.');
+    expect(alert.textContent).not.toContain('does not fit');
+  });
+
+  it('uses the English catalog for the same context overflow', async () => {
+    const body = {
+      error: {
+        message: 'the prompt is 80 tokens and does not fit the 64-token context',
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+      },
+    };
+    mockFetch(() => new Response(JSON.stringify(body), { status: 400 }));
+    renderApp();
+    typeAndSend('hi');
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('The conversation no longer fits the model’s context. Start a new chat or send less.');
+    expect(alert.textContent).not.toContain('does not fit');
+  });
+
+  it('localizes a failed model start with the catalog', async () => {
+    mockFetch((url) => {
+      if (String(url).endsWith('/control/serve')) {
+        return new Response(JSON.stringify({ ok: false, code: 'start_failed', error: 'lm-serve did not become healthy in time' }), { status: 502 });
+      }
+      return new Response('no', { status: 500 });
+    });
+    renderApp(['es-ES']);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ajustes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Arrancar Qwen3.5-4B' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('No se pudo arrancar el modelo en el servidor.');
+    expect(alert.textContent).not.toContain('healthy');
+  });
+
   it('shows the server message for an unknown error code', async () => {
     mockFetch(() => new Response(JSON.stringify({ error: { message: 'tools are not supported', type: 'invalid_request_error' } }), { status: 400 }));
     renderApp();

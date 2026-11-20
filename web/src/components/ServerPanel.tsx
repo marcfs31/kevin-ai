@@ -83,13 +83,13 @@ export function ServerPanel({ busy, onStarted }: Props) {
     try {
       const result = await startRemoteServe(opts);
       if (!result.ok) {
-        setStatus({ kind: 'error', message: result.error || t('serve.failed') });
+        setStatus({ kind: 'error', message: t('serve.failed') });
         return;
       }
       setStatus({ kind: 'ok', model });
       onStarted();
     } catch (e) {
-      const msg = e instanceof ApiError && e.status === 0 ? t('error.network') : e instanceof Error ? e.message : t('serve.failed');
+      const msg = e instanceof ApiError && e.status === 0 ? t('error.network') : t('serve.failed');
       setStatus({ kind: 'error', message: msg });
     }
   };

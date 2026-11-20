@@ -11,6 +11,8 @@ const KNOWN_CODES = new Set([
 
 /** A reply error in the user's language, by code where known. */
 export function errorText(t: I18n['t'], e: Pick<ApiError, 'status' | 'code' | 'serverMessage'>): string {
+  // lm-serve names this context_length_exceeded; the catalogs call it context_overflow.
+  if (e.code === 'context_length_exceeded') return t('error.context_overflow');
   if (e.code && KNOWN_CODES.has(e.code)) return t(`error.${e.code}` as Parameters<I18n['t']>[0]);
   if (e.status === 0) return t('error.network');
   if (e.status === 401 || e.status === 403) return t('error.unauthorized');
