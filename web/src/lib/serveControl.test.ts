@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseServeOptions, serveScriptArgs } from './serveControl';
+import { controlRequestAllowed, parseServeOptions, serveScriptArgs } from './serveControl';
 import { draftToOptions, EMPTY_SERVE_DRAFT } from '../components/ServerPanel';
 
 describe('parseServeOptions', () => {
@@ -40,6 +40,33 @@ describe('parseServeOptions', () => {
         fast: null,
       }),
     ).toEqual(['--id', 'qwen', '--max-tokens', '128', '--ctx', '4096', '--cache-mb', '256', '--name', 'local-qwen', '--think']);
+  });
+});
+
+describe('controlRequestAllowed', () => {
+  const page = {
+    method: 'POST',
+    contentType: 'application/json',
+    origin: 'http://127.0.0.1:5173',
+    secFetchSite: 'same-origin',
+    host: '127.0.0.1:5173',
+  };
+
+  it('allows the Settings page on this dev server', () => {
+    expect(controlRequestAllowed(page)).toEqual({ ok: true });
+    expect(controlRequestAllowed({ ...page, contentType: 'application/json; charset=utf-8' })).toEqual({ ok: true });
+    expect(controlRequestAllowed({ ...page, host: 'localhost:5173', origin: 'http://localhost:5173' })).toEqual({ ok: true });
+  });
+
+  it('refuses a request that is not the dev page', () => {
+    expect(controlRequestAllowed({ ...page, method: 'GET' }).ok).toBe(false);
+    expect(controlRequestAllowed({ ...page, contentType: 'text/plain' }).ok).toBe(false);
+    expect(controlRequestAllowed({ ...page, contentType: null }).ok).toBe(false);
+    expect(controlRequestAllowed({ ...page, secFetchSite: 'cross-site' }).ok).toBe(false);
+    expect(controlRequestAllowed({ ...page, secFetchSite: null }).ok).toBe(false);
+    expect(controlRequestAllowed({ ...page, origin: 'http://127.0.0.1:9999' }).ok).toBe(false);
+    expect(controlRequestAllowed({ ...page, origin: null }).ok).toBe(false);
+    expect(controlRequestAllowed({ ...page, host: '192.0.2.10:5173', origin: 'http://192.0.2.10:5173' }).ok).toBe(false);
   });
 });
 

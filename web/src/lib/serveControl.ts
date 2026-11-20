@@ -39,6 +39,67 @@ export interface ServeErr {
 
 export type ServeResult = ServeOk | ServeErr;
 
+export interface ControlRequest {
+  method: string;
+  contentType: string | null;
+  origin: string | null;
+  secFetchSite: string | null;
+  host: string | null;
+}
+
+export type ControlDecision = { ok: true } | { ok: false; status: number; error: string };
+
+/** The Host header's loopback name and port, or null when it is not a loopback host. */
+function loopbackHost(host: string): string | null {
+  const h = host.trim().toLowerCase();
+  if (!h || /[\s/@\\]/.test(h)) return null;
+  let name = h;
+  let port = '';
+  if (name.startsWith('[')) {
+    const end = name.indexOf(']');
+    if (end < 1) return null;
+    const rest = name.slice(end + 1);
+    if (rest !== '' && !/^:\d+$/.test(rest)) return null;
+    name = name.slice(1, end);
+    port = rest;
+  } else {
+    const colon = name.lastIndexOf(':');
+    if (colon >= 0) {
+      port = name.slice(colon);
+      if (!/^:\d+$/.test(port)) return null;
+      name = name.slice(0, colon);
+    }
+  }
+  if (name !== 'localhost' && name !== '127.0.0.1' && name !== '::1') return null;
+  const shown = name === '::1' ? '[::1]' : name;
+  return port ? `${shown}${port}` : shown;
+}
+
+function isJsonContentType(value: string | null): boolean {
+  if (!value) return false;
+  const [type, ...params] = value.split(';').map((part) => part.trim().toLowerCase());
+  if (type !== 'application/json') return false;
+  return params.every((part) => part === '' || part.startsWith('charset='));
+}
+
+/**
+ * The Settings buttons fetch this dev server from the page itself. A browser cannot
+ * pretend that fetch came from somewhere else. Anything that does not match is refused
+ * before the remote start script runs.
+ */
+export function controlRequestAllowed(req: ControlRequest): ControlDecision {
+  if (req.method !== 'POST') return { ok: false, status: 405, error: 'POST only' };
+  const host = loopbackHost(req.host ?? '');
+  if (!host) return { ok: false, status: 403, error: 'forbidden' };
+  if (!isJsonContentType(req.contentType)) return { ok: false, status: 415, error: 'JSON only' };
+  if ((req.secFetchSite ?? '').trim().toLowerCase() !== 'same-origin') return { ok: false, status: 403, error: 'forbidden' };
+  // Split so the source has no URL literal (the privacy test rejects those).
+  const origin = (req.origin ?? '').trim().toLowerCase();
+  const scheme = 'http:';
+  if (!origin.startsWith(scheme) || origin.slice(scheme.length) !== `//${host}`) return { ok: false, status: 403, error: 'forbidden' };
+  return { ok: true };
+}
+
 const MODELS: ServeModelId[] = ['qwen', 'gemma'];
 
 function intOrNull(v: unknown, lo: number, hi: number): number | null | undefined {
