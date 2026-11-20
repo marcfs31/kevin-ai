@@ -24,6 +24,7 @@ qwen3.5-4b (phase 1, Apache-2.0)
     model.safetensors-00001-of-00002.safetensors  5329398688 bytes, sha256 pinned
     model.safetensors-00002-of-00002.safetensors  3990429408 bytes, sha256 pinned
     tokenizer.json                                12807982 bytes, sha256 pinned
+    preprocessor_config.json                      390 bytes, sha256 pinned (images)
     config.json, model.safetensors.index.json, tokenizer_config.json, chat_template.jinja
                                                   no pinned size or hash (presence checked)
 
@@ -31,6 +32,7 @@ gemma-4-e4b (phase 2, Apache-2.0)
   google/gemma-4-E4B-it at revision 4ecc2ba63bcac23ba4a767fc87025b1450f84c9c
     model.safetensors   15992595884 bytes, sha256 pinned
     tokenizer.json      32156428 bytes, sha256 pinned
+    processor_config.json  1689 bytes, sha256 pinned (images)
     config.json, tokenizer_config.json, chat_template.jinja, generation_config.json
                         no pinned size or hash (presence checked)
 
@@ -83,6 +85,7 @@ case "$MODEL" in
       "model.safetensors-00001-of-00002.safetensors|5329398688|26a93f066e1916adb13453dae5a0c707c0fbc71299ed98779571a907b8e74c61"
       "model.safetensors-00002-of-00002.safetensors|3990429408|cb544bd9bfae93dc59b0f22b292f5933573854a7f9b97835c67060d7d910e188"
       "tokenizer.json|12807982|5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"
+      "preprocessor_config.json|390|27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
       "tokenizer_config.json||"
       "chat_template.jinja||"
     )
@@ -94,6 +97,7 @@ case "$MODEL" in
       "config.json||"
       "model.safetensors|15992595884|cfbd3d2f1cd71bd471c37fe2bf8546d5028d41e5736f64e1ca6c6b8893125503"
       "tokenizer.json|32156428|91d9cf86906f78e197021fda88214d448e5c120665d0243a8e776e046986c6bc"
+      "processor_config.json|1689|32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c"
       "tokenizer_config.json||"
       "chat_template.jinja||"
       "generation_config.json||"
