@@ -12,7 +12,10 @@ machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512
 - **Qwen3.5-4B runs on the real checkpoint** (first run 2026-11-14, re-measured 2026-11-15 with
   `tools/bench_fast.py`, on the target machine). It answers correctly. With the q8 weights:
   about **2.3 tokens/s** generating and about **5.2 tokens/s** on a 32-token prompt, with the
-  CPU still held at 800 MHz of its 2.5 GHz (see Troubleshooting, "cpu clock"). The first run
+  CPU held at 800 MHz of its 2.5 GHz by a non-genuine power adapter (see Troubleshooting,
+  "cpu clock"). With the genuine adapter and the CPU at 2.5 GHz (measured 2026-11-20 with
+  `tools/bench_serve.py`): **3.4 to 4.0 tokens/s** generating and 11.6 to 13.5 tokens/s on a
+  prompt, see "Speed at 800 MHz and at 2.5 GHz". The first run
   gave 1.7 and 1.9: the AVX2 kernels were compiled to about three times more instructions
   than needed, and the prompt now goes through in batches whose inputs stay in the L1 cache
   (4.6 tokens/s before that; the batched multiply itself got 1.35x faster, with 73% fewer L1
@@ -21,12 +24,15 @@ machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512
   Replies read about 4.75 GB per token, so at about 11 GB/s they are bounded by memory
   bandwidth.
 - **Gemma 4 E4B runs on the real checkpoint** (first run 2026-11-16, on the target machine).
-  It answers correctly. With the q8 weights: about **1.9 tokens/s** generating and 3.5 to 5.9
-  tokens/s on a short prompt, at a peak of 5.7 GiB resident.
+  It answers correctly. With the q8 weights at 800 MHz: about **1.9 tokens/s** generating and
+  3.5 to 5.9 tokens/s on a short prompt, at a peak of 5.7 GiB resident. At 2.5 GHz (measured
+  2026-11-20): **2.8 to 3.1 tokens/s** generating and 14 to 22 tokens/s on a prompt, same
+  memory.
 - **The context window is chosen from free memory** when `--ctx` is not given: 81,408 tokens
   for Qwen q8 and 131,072 (the model's maximum) for Gemma q8 on the target. See `--ctx` below.
 - **MTP speculative decoding** (`lm-run --mtp`, Qwen only) accepts 78% of its drafts, but it
-  runs at 0.91x the plain speed on this CPU, so it stays opt-in.
+  runs at 0.91x the plain speed on this CPU, so it stays opt-in. (Measured at 800 MHz; not
+  repeated at 2.5 GHz.)
 
 The full plan, with the normative model equations and test gates, is in
 [docs/PLAN.md](docs/PLAN.md).
@@ -57,7 +63,7 @@ What this means for the engine:
 - **Both models fit in memory.** Measured peaks: q8 Qwen 5.1 GiB, q8 Gemma 5.7 GiB (its
   8.5 GB file includes a per-layer table read one row per token), bf16 Qwen 8.0 GiB. bf16
   Qwen now stays resident instead of streaming from disk, but it is still slower than q8:
-  about 1.1 tokens/s generating.
+  about 1.1 tokens/s generating at 800 MHz and 2.3 at 2.5 GHz.
 - **Models on the NVMe.** The q8 file is read once per boot and then stays in the page cache.
   The NVMe reads at 1.7 GB/s, so the first load after a boot takes about 3 s; the SATA SSD
   would take about 9 s.
@@ -661,12 +667,44 @@ python3 tools/bench_serve.py --model DIR [--weights FILE] [--lens 128,512,1024,2
 - **Peak memory at the full context window is an estimate**: a line through the runs' peak RSS,
   extended to the window `lm-serve` printed. KV memory is only touched as tokens arrive, so RSS
   grows with the tokens fed, not with the window. Filling the window is not practical (a
-  prompt feeds at about 4 to 5 tokens/s), so `--time-budget-min` skips lengths that would not
-  finish in time.
+  Qwen q8 prompt feeds at about 12 tokens/s at 2.5 GHz, 4 to 5 at 800 MHz), so
+  `--time-budget-min` skips lengths that would not finish in time. The line assumes memory
+  grows steadily with each token, which holds for Qwen (about 64 KiB per token). For Gemma it
+  printed 13.8 GiB at its 131,072-token window, which disagrees with the window `lm-serve`
+  chose for the free memory, so treat the Gemma estimate as unverified.
 - `--cache-test` sends three requests with one long system prompt; the third is restored from
   the prefix cache, and the report says how many tokens came from it.
 - Tests: `python3 -m unittest discover -s tools -p 'test_bench_serve.py'` (a fake `lm-serve`, no
   model needed).
+
+#### Speed at 800 MHz and at 2.5 GHz
+
+The same machine (OptiPlex 3050 Micro, i5-6500T, 11 GB) measured twice with `bench_serve.py`
+and 32 reply tokens: first with a non-genuine power adapter that held the CPU at 800 MHz
+then with the genuine adapter at 2.5 GHz (2026-11-20). Prompts are the server's
+own token counts, so the lengths differ slightly between modes.
+
+| mode | prompt tokens | first token, 800 MHz | first token, 2.5 GHz | prompt tok/s, 800 MHz | prompt tok/s, 2.5 GHz | reply tok/s, 800 MHz | reply tok/s, 2.5 GHz |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Qwen q8 | 220 | 45.6 s | 17.5 s | 4.83 | 12.54 | 2.48 | 3.98 |
+| Qwen q8 | 1001 | 226.4 s | 74.2 s | 4.42 | 13.49 | 2.22 | 3.73 |
+| Qwen q8 | 2010 | 517.3 s | 172.9 s | 3.89 | 11.62 | 1.95 | 3.43 |
+| Qwen bf16 | 115 | 93.5 s | 45.7 s | 1.23 | 2.52 | 1.07 | 2.38 |
+| Qwen bf16 | 485 | 364.9 s | 170.8 s | 1.33 | 2.84 | 1.11 | 2.34 |
+| Qwen bf16 | 992 | 760.0 s | 354.0 s | 1.31 | 2.80 | 1.06 | 2.28 |
+
+Gemma q8 at 2.5 GHz (not measured at 800 MHz with this tool; its earlier 800 MHz figures are
+in the status list above): 105 prompt tokens in 7.5 s (13.97 tok/s), 494 in 22.7 s (21.80),
+1020 in 51.9 s (19.65), replies 3.09, 2.89 and 2.83 tokens/s.
+
+- Prompts go 2.6 to 3.1x faster with Qwen q8 and about 2.1x faster with bf16: reading a prompt
+  is bound by the CPU, so it follows the clock.
+- Replies go 1.6 to 1.8x faster with q8 and 2.1 to 2.2x with bf16. A reply reads the whole
+  model per token, so memory bandwidth limits it, yet it still gains from the clock.
+- Memory does not change with the clock: q8 peaks at 5.1 to 5.2 GiB, bf16 at 8.0 GiB, about
+  64 KiB per token fed.
+- Replies slow as the context fills (q8: 3.98 to 3.43 tokens/s from 220 to 2010 prompt
+  tokens), most likely because attention reads a longer cache for every token.
 
 ### scripts/doctor.sh
 
@@ -694,6 +732,8 @@ scripts/doctor.sh [--read-speed] [MODEL_DIR]
   genuine Dell adapter of the right wattage (65 W for the Micro). If the log shows no such
   line, look in the BIOS for SpeedStep, Turbo Boost, C-States and a Thermal Management mode
   set to Quiet, and update the BIOS. It is not a heat problem unless `x86_pkg_temp` is high.
+  After the genuine adapter went in on this machine, `cpuinfo_max_freq` printed 2500000 and
+  Qwen q8 replies went from 2.5 to 4.0 tokens/s (table under `tools/bench_serve.py`).
 - **Installer shows "Mount a filesystem at /" or "Select a boot disk".** Both must be set
   on the Samsung SSD before Done.
 - **doctor reports FAIL on a model file.** The size or hash does not match the pinned

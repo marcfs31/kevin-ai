@@ -25,8 +25,8 @@ the 8 GB the plan was written for. `bin/lm-quant` writes a q8 file (int8, one f3
 32 weights, about 4.75 GB) that the engine mmaps and keeps resident. The original bf16 safetensors also
 load directly; on 8 GB they streamed through the page cache (the kimi-k3-in-c
 technique), slow but exact; in 11 GB bf16 Qwen stays resident (8.0 GiB measured). Speed was an estimate of 2 to 4
-tokens/s for q8; measured on the box it is 2.3 tokens/s generating, bounded by memory bandwidth
-(~4.75 GB read per token).
+tokens/s for q8; measured on the box it is 3.4 to 4.0 tokens/s generating at the full 2.5 GHz
+(2.3 while the CPU was held at 800 MHz), bounded by memory bandwidth (~4.75 GB read per token).
 
 **Repo: from scratch, porting by file** from kimi-k3-in-c (Apache-2.0, attribution in
 `NOTICE`): safetensors reader, bf16 and int8 matmul kernels, ShortConv and the
@@ -244,7 +244,7 @@ mask. So only layers `< first` keep a KV cache; a sliding cache needs only the l
 3.2 GB but is read one 12 KB row per token (page cache, evictable), and the shared
 layers' unused K/V tensors are never touched, so the hot working set is about 5.3 GB.
 Tighter than Qwen. Measured 2026-11-16 with 11 GB: peak 5.7 GiB resident, 1.9 tokens/s
-generating. The 3.2 GB table is read one row per token and never resident.
+generating (CPU held at 800 MHz; 2.8 to 3.1 at 2.5 GHz, measured 2026-11-20). The 3.2 GB table is read one row per token and never resident.
 
 **Tokenizer** (`tokenizer.json` BPE): normalizer replaces `" "` with `"▁"` (U+2581);
 the Split pre-tokenizer then never fires, so each text segment between added tokens is

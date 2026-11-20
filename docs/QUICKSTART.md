@@ -3,9 +3,10 @@
 Target: Dell OptiPlex 3050, i5-6500T (4 cores, AVX2), about 11 GB RAM, Ubuntu Server 26.04.1
 LTS, 238 GB NVMe SSD for the system and the models in `~/models`.
 
-Status: both models run on the real checkpoints on the target machine. Qwen3.5-4B runs at about
-2.3 tokens/s generating with the q8 weights, and Gemma 4 E4B at about 1.9 tokens/s. The CPU is
-held at 800 MHz by the power adapter (see the README, "cpu clock").
+Status: both models run on the real checkpoints on the target machine. With the q8 weights and
+the CPU at its full 2.5 GHz, Qwen3.5-4B generates about 3.4 to 4.0 tokens/s and Gemma 4 E4B
+about 2.8 to 3.1. A non-genuine power adapter once held the CPU at 800 MHz, which gave 2.3 and
+1.9 (see the README, "cpu clock", and "Speed at 800 MHz and at 2.5 GHz").
 
 **Fast path:** after `sudo apt install build-essential python3 curl` and copying the repo
 to the server, `scripts/install.sh` does steps 3 to 7 below in one go (build, tests,
@@ -145,5 +146,6 @@ make portable   # x86-64 build with -mavx2 -mfma
 
 `scripts/download-model.sh --model gemma-4-e4b` fetches the Gemma 4 E4B checkpoint (16 GB).
 The engine runs it the same way as Qwen (`bin/lm-quant`, then `bin/lm-chat`). It has run on the
-real weights: about 1.9 tokens/s generating, peak 5.7 GiB resident. The q8 file is about 8.5 GB
+real weights: about 2.8 to 3.1 tokens/s generating at 2.5 GHz (1.9 at 800 MHz), peak 5.7 GiB
+resident. The q8 file is about 8.5 GB
 on disk; the per-layer embedding table is read one row per token and is never resident.
