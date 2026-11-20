@@ -30,6 +30,12 @@ void *lm_bind_own(LmBind *b, void *p);
 const LmTensor *lm_bind_need(LmBind *b, const char *name, int ndim, int64_t d0, int64_t d1, char *err, size_t n);
 const float *lm_bind_vec(LmBind *b, const char *name, int64_t numel, int ndim, int64_t d0, int64_t d1, char *err, size_t n);
 int lm_bind_mat(LmBind *b, const char *name, int rows, int cols, LmMat *out, char *err, size_t n);
+
+/* For vision weights, which the quantiser stores in either form (tools/quant_ref.py): an I8
+ * tensor binds as q8 (only from a q8 file), a BF16/F32 one as a float matrix from either
+ * file. With flat set, a float tensor of any rank with d0 = rows and rows * cols elements
+ * binds as that [rows][cols] matrix (the checkpoint's Conv patch embedding). */
+int lm_bind_mat_any(LmBind *b, const char *name, int rows, int cols, int flat, LmMat *out, char *err, size_t n);
 /* Opens path (file, index or directory); with q8 set, checks the lm-q8 group-32 metadata. */
 int lm_bind_open(LmBind *b, const char *path, int q8, char *err, size_t n);
 void lm_bind_free(LmBind *b);

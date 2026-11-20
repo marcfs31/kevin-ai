@@ -1,6 +1,7 @@
 /* lm-run.c - bin/lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]
  *                       [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]
  *                       [--mtp [--mtp-out F]]
+ *        bin/lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F
  *
  * Feeds the token ids (through lm_prefill when no logits are written, token by token with
  * --no-prefill or --logits-out: the results are bit-identical), writes one little-endian f32
@@ -12,6 +13,8 @@
  * lm_accept): the ids are exactly those without it; stderr gets how many drafts were accepted.
  * --mtp-out F (with --mtp) writes the head's draft logits for each token position but the last
  * (position p sees the token at p+1), one row each, fed token by token.
+ * --image runs only the vision encoder (src/model/lm_vision.h) on a binary PPM already at its
+ * grid size and writes one little-endian f32 row per image token to the --vision-rows-out file.
  * Original code; contract in docs/PLAN.md. */
 #include <errno.h>
 #include <stdint.h>
@@ -19,13 +22,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "io/lm_image.h"
 #include "lm/lm.h"
+#include "model/lm_vision.h"
 
 static int usage(void)
 {
     fprintf(stderr, "usage: lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]\n"
                     "              [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]\n"
-                    "              [--mtp [--mtp-out F]]\n");
+                    "              [--mtp [--mtp-out F]]\n"
+                    "       lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F\n");
     return 2;
 }
 
@@ -71,9 +77,40 @@ static void print_profile(const char *what, int ntok, const LmTimes *a, const Lm
             rest, rest * pc);
 }
 
+static int run_image(const char *model, const char *weights, const char *image, const char *outp)
+{
+    char err[1024] = "";
+    uint8_t *rgb = NULL;
+    float *rows = NULL;
+    int w, h, rc = 1;
+    LmVision *v = lm_vision_open(model, weights, err, sizeof err);
+    if (!v) { fprintf(stderr, "lm-run: %s\n", err); return 1; }
+    if (lm_ppm_read(image, &rgb, &w, &h, err, sizeof err) != 0) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
+    const int nt = lm_vision_tokens(v, h, w), dim = lm_vision_info(v)->out_dim;
+    if (nt < 1) {
+        fprintf(stderr, "lm-run: image %dx%d: sides must be multiples of %d, at most %d patches\n", w, h,
+                lm_vision_info(v)->unit, LM_VISION_MAX_PATCHES);
+        goto done;
+    }
+    rows = (float *)malloc((size_t)nt * dim * sizeof(float));
+    if (!rows) { fprintf(stderr, "lm-run: out of memory\n"); goto done; }
+    if (lm_vision_encode(v, rgb, h, w, rows, err, sizeof err) != 0) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
+    FILE *f = fopen(outp, "wb");
+    if (!f) { fprintf(stderr, "lm-run: cannot create %s: %s\n", outp, strerror(errno)); goto done; }
+    const int ok = fwrite(rows, sizeof(float), (size_t)nt * dim, f) == (size_t)nt * dim;
+    if (fclose(f) != 0 || !ok) { fprintf(stderr, "lm-run: write to %s failed\n", outp); goto done; }
+    rc = 0;
+done:
+    free(rows);
+    free(rgb);
+    lm_vision_close(v);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *tokstr = NULL, *outp = NULL, *mtp_out = NULL;
+    const char *image = NULL, *vrows = NULL;
     int greedy = 0, ctx = 0, threads = 0, fast = 0, no_prefill = 0, profile = 0, mtp = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -89,8 +126,14 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--profile")) profile = 1;
         else if (!strcmp(a, "--mtp")) mtp = 1;
         else if (!strcmp(a, "--mtp-out") && has) mtp_out = argv[++i];
+        else if (!strcmp(a, "--image") && has) image = argv[++i];
+        else if (!strcmp(a, "--vision-rows-out") && has) vrows = argv[++i];
         else if (!strcmp(a, "--threads") && has) { if (parse_int(argv[++i], 1, &threads)) { fprintf(stderr, "lm-run: bad --threads\n"); return 2; } }
         else return usage();
+    }
+    if (image || vrows) {
+        if (!model || !image || !vrows || tokstr || outp || mtp || greedy) return usage();
+        return run_image(model, weights, image, vrows);
     }
     if (!model || !tokstr || (mtp_out && !mtp)) return usage();
 
