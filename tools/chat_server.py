@@ -87,6 +87,25 @@ def check_config(host, env):
     return password or None
 
 
+def index_dist(root):
+    """URL path -> file for every regular file under root that stays inside it."""
+    files = {}
+    for dirpath, _dirs, names in os.walk(root):
+        for name in names:
+            full = os.path.join(dirpath, name)
+            real = os.path.realpath(full)
+            if os.path.commonpath([root, real]) == root and os.path.isfile(real):
+                files["/" + os.path.relpath(full, root).replace(os.sep, "/")] = real
+    return files
+
+
+def safe_header_value(value):
+    """An upstream header value fit to send on, or None: a folded header keeps its CR/LF."""
+    if value is None or any(c in value for c in "\r\n\x00"):
+        return None
+    return value
+
+
 def is_api(path):
     return path == "/health" or path.startswith("/v1/")
 
@@ -167,9 +186,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if rel == "/":
             rel = "/index.html"
-        root = self.server.dist
-        target = os.path.realpath(os.path.join(root, rel.lstrip("/")))
-        if os.path.commonpath([root, target]) != root or not os.path.isfile(target):
+        # The URL is only a key into the files found under dist, never part of a path itself.
+        target = self.server.find_file(rel)
+        if target is None:
             self.send_json_error(404, "not_found", "not found")
             return
         ext = os.path.splitext(target)[1].lower()
@@ -260,8 +279,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(resp.status)
             self.common_headers()
             for name in ("Content-Type", "Cache-Control", "WWW-Authenticate", "Retry-After"):
-                if resp.getheader(name):
-                    self.send_header(name, resp.getheader(name))
+                value = safe_header_value(resp.getheader(name))
+                if value:
+                    self.send_header(name, value)
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
@@ -296,7 +316,16 @@ class Server(http.server.ThreadingHTTPServer):
         self.password = password
         self.api_key = api_key or None
         self.upstream_timeout = upstream_timeout
+        self.files = index_dist(self.dist)
         super().__init__(addr, Handler)
+
+    def find_file(self, url_path):
+        """The file for a URL path, re-reading dist once on a miss (a new build was deployed)."""
+        found = self.files.get(url_path)
+        if found is None:
+            self.files = index_dist(self.dist)
+            found = self.files.get(url_path)
+        return found if found is not None and os.path.isfile(found) else None
 
 
 def main(argv=None, env=None):

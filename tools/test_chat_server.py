@@ -58,6 +58,11 @@ class FakeHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self.server.requests.append(("POST", self.path, dict(self.headers), body))
+        if self.path == "/v1/folded":
+            self.wfile.write(b"HTTP/1.1 503 Busy\r\nContent-Type: application/json\r\nRetry-After: 1\r\n"
+                             b"\tSet-Cookie: injected=1\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            self.close_connection = True
+            return
         if self.path == "/v1/bad":
             err = b'{"error":{"message":"no","type":"invalid_request_error","code":"image_invalid"}}'
             self.send_response(400)
@@ -169,6 +174,13 @@ class StaticTest(ProxyTest):
         self.assertEqual(resp.status, 404)
         self.assertNotIn(b"outside", data)
 
+    def test_file_added_after_start_is_served(self):
+        with open(os.path.join(self.dist, "assets", "new.css"), "w") as f:
+            f.write("a{}")
+        resp, data = self.request("GET", "/assets/new.css")
+        self.assertEqual((resp.status, data), (200, b"a{}"))
+        self.assertEqual(resp.getheader("Content-Type"), "text/css; charset=utf-8")
+
     def test_post_to_static_refused(self):
         resp, _ = self.request("POST", "/index.html", body=b"x")
         self.assertEqual(resp.status, 405)
@@ -206,6 +218,13 @@ class ApiTest(ProxyTest):
         resp, data = self.request("POST", "/v1/bad", body=b"{}", headers={"Content-Type": "application/json"})
         self.assertEqual(resp.status, 400)
         self.assertEqual(json.loads(data)["error"]["code"], "image_invalid")
+
+    def test_folded_upstream_header_not_passed_on(self):
+        resp, _ = self.request("POST", "/v1/folded", body=b"{}")
+        self.assertEqual(resp.status, 503)
+        self.assertIsNone(resp.getheader("Set-Cookie"))
+        self.assertIsNone(resp.getheader("Retry-After"))
+        self.assertEqual(resp.getheader("Content-Type"), "application/json")
 
     def test_disconnect_while_reading_prompt_closes_upstream(self):
         self.upstream.prefill_s = 5.0
