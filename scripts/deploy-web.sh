@@ -9,6 +9,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 host="${DEPLOY_HOST:-toor@192.168.1.96}"
 path="${DEPLOY_PATH:-~/small-llm-in-c/web/dist/}"
 
+# rsync --delete empties whatever the path names, so only a dist directory is accepted.
+case "$path" in
+  */dist/) ;;
+  */dist) path="$path/" ;;
+  *) echo "deploy-web: DEPLOY_PATH must end in /dist/ (got $path)" >&2; exit 2 ;;
+esac
+
 (cd web && npm ci && npm run build)
 test -f web/dist/index.html || { echo "deploy-web: web/dist/index.html missing after the build" >&2; exit 1; }
 
