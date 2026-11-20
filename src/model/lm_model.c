@@ -61,6 +61,9 @@ struct LmModel {
     LmGemma *gemma;                          /* non-NULL: a Gemma 4 model, every other field unused */
     LmCfg    cfg;
     int      ctx, pos;
+    int      rope_pos;                       /* next M-RoPE text position; equals pos until an image */
+    int      last_t, last_h, last_w;         /* M-RoPE position of the last fed token */
+    int      vrope;                          /* rope_pos at the last lm_verify */
     LmBind   b;                              /* the weight set and every buffer lm_open allocated */
     Layer   *layers;
     LmMat    embed, head;                    /* head == embed when tied */
@@ -288,7 +291,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
 
     /* state and scratch */
     m->ld = (LmLinDims){ c->lk_heads, c->lv_heads, c->lk_dim, c->lv_dim, c->conv_k, c->eps };
-    m->ad = (LmAttnDims){ c->heads, c->kv_heads, c->head_dim, c->rot, c->theta, c->eps };
+    m->ad = (LmAttnDims){ c->heads, c->kv_heads, c->head_dim, c->rot, c->theta, c->eps, c->mrope_h, c->mrope_w };
     {
         const QwenState qs = { c, &m->ld, &m->ad, opts && opts->mtp };
         uint64_t weights = m->b.bytes;
@@ -367,12 +370,19 @@ void lm_reset(LmModel *m)
     }
     if (m->mtp) memset(m->hlast, 0, (size_t)c->hidden * sizeof(float));
     m->pos = 0;
+    m->rope_pos = 0;
+    m->last_t = m->last_h = m->last_w = 0;
     m->vn = 0;
 }
 
 /* ---- snapshots ------------------------------------------------------------------- */
 
-struct LmSnapshot { unsigned long model; int pos; size_t n; float *data; };
+struct LmSnapshot {
+    unsigned long model;
+    int pos, rope_pos, last_t, last_h, last_w;
+    size_t n;
+    float *data;
+};
 
 /* The state regions at position pos, in a fixed order (lm_gemma_state_regions for Gemma). */
 static void state_regions(LmModel *m, int pos, LmRegionFn fn, void *user)
@@ -415,6 +425,10 @@ LmSnapshot *lm_snapshot(const LmModel *cm)
     if (!s->data) { free(s); return NULL; }
     s->model = m->id;
     s->pos = pos;
+    s->rope_pos = m->gemma ? 0 : m->rope_pos;
+    s->last_t = m->gemma ? 0 : m->last_t;
+    s->last_h = m->gemma ? 0 : m->last_h;
+    s->last_w = m->gemma ? 0 : m->last_w;
     s->n = w.off;
     Walk save = { s->data, 0, 1 };
     state_regions(m, pos, walk, &save);
@@ -427,7 +441,14 @@ int lm_restore(LmModel *m, const LmSnapshot *s)
     Walk w = { s->data, 0, 2 };
     state_regions(m, s->pos, walk, &w);
     if (m->gemma) lm_gemma_set_pos(m->gemma, s->pos);
-    else { m->pos = s->pos; m->vn = 0; }
+    else {
+        m->pos = s->pos;
+        m->rope_pos = s->rope_pos;
+        m->last_t = s->last_t;
+        m->last_h = s->last_h;
+        m->last_w = s->last_w;
+        m->vn = 0;
+    }
     return LM_OK;
 }
 
@@ -435,9 +456,11 @@ int    lm_snapshot_pos(const LmSnapshot *s)   { return s->pos; }
 size_t lm_snapshot_bytes(const LmSnapshot *s) { return s->n * sizeof(float); }
 void   lm_snapshot_free(LmSnapshot *s)        { if (s) { free(s->data); free(s); } }
 
-/* The MTP head over n entries starting at position q0: entry j from hidden hid[j] and token
- * tok[j]. Writes the head's KV slots q0..q0+n-1; logits (may be NULL) after the last entry. */
-static void mtp_run(LmModel *m, const float *const *hid, const int *tok, int q0, int n, float *logits)
+/* The MTP head over n entries starting at cache slot q0: entry j from hidden hid[j] and token
+ * tok[j], with M-RoPE thw[j] (n*3 ints). Writes the head's KV slots q0..q0+n-1; logits (may be
+ * NULL) after the last entry. */
+static void mtp_run(LmModel *m, const float *const *hid, const int *tok, int q0, const int *thw,
+                    int n, float *logits)
 {
     const LmCfg *c = &m->cfg;
     const int H = c->hidden;
@@ -450,7 +473,7 @@ static void mtp_run(LmModel *m, const float *const *hid, const int *tok, int q0,
     }
     lm_mat_mul_batch(&m->mtp_fc, m->mx, m->min2, n);
     for (int j = 0; j < n; j++) lm_rmsnorm(m->mn + (size_t)j * H, m->mx + (size_t)j * H, L->in_norm, H, c->eps);
-    lm_attn_mixer_batch(m->bmix, m->mn, &L->attn, &m->ad, m->mkc, m->mvc, q0, m->ctx, m->bscratch, n);
+    lm_attn_mixer_batch(m->bmix, m->mn, &L->attn, &m->ad, m->mkc, m->mvc, q0, thw, q0, m->ctx, m->bscratch, n);
     for (size_t j = 0; j < (size_t)n * H; j++) m->mx[j] += m->bmix[j];
     for (int j = 0; j < n; j++) lm_rmsnorm(m->mn + (size_t)j * H, m->mx + (size_t)j * H, L->post_norm, H, c->eps);
     lm_mlp_batch(m->bmix, m->mn, &L->mlp, m->bscratch, n);
@@ -474,7 +497,8 @@ static int feed(LmModel *m, int token, float *logits)
         const Layer *L = &m->layers[i];
         lm_rmsnorm(m->n, m->h, L->in_norm, c->hidden, c->eps);
         if (L->full)
-            lm_attn_mixer(m->mix, m->n, &L->attn, &m->ad, m->kc[i], m->vc[i], m->pos, m->ctx, m->scratch);
+            lm_attn_mixer(m->mix, m->n, &L->attn, &m->ad, m->kc[i], m->vc[i], m->pos,
+                          m->rope_pos, m->rope_pos, m->rope_pos, m->ctx, m->scratch);
         else
             lm_linear_mixer(m->mix, m->n, &L->lin, &m->ld, m->conv[i], m->S[i], m->scratch);
         for (int j = 0; j < c->hidden; j++) m->h[j] += m->mix[j];
@@ -484,8 +508,11 @@ static int feed(LmModel *m, int token, float *logits)
     }
     if (m->mtp && m->pos > 0) {   /* the head's entry pos-1 is complete now that its next token is known */
         const float *hid = m->hlast;
-        mtp_run(m, &hid, &token, m->pos - 1, 1, NULL);
+        const int prev[3] = { m->last_t, m->last_h, m->last_w };
+        mtp_run(m, &hid, &token, m->pos - 1, prev, 1, NULL);
     }
+    m->last_t = m->last_h = m->last_w = m->rope_pos;
+    m->rope_pos++;
     m->pos++;
     if (logits || m->mtp) lm_rmsnorm(m->n, m->h, m->final_norm, c->hidden, c->eps);
     if (m->mtp) memcpy(m->hlast, m->n, (size_t)c->hidden * sizeof(float));
@@ -504,21 +531,34 @@ static int batch_ok(const LmModel *m, const int *tokens, int n)
     return LM_OK;
 }
 
-/* Feed n checked tokens in chunks. rows: logits for every token (n rows) when all_rows, else
- * after the last one only (may be NULL). ckpt: lm_verify's state checkpoints (one chunk). */
-static void run_chunks(LmModel *m, const int *tokens, int n, float *rows, int all_rows, int ckpt)
+/* Feed n checked positions in chunks. embed_rows NULL: embed tokens[i]; otherwise each position's
+ * input is embed_rows[i] (n * hidden floats) and tokens[] is still the id the MTP head embeds.
+ * thw NULL: position s + t has M-RoPE (rope_pos+s+t,) three times and rope_pos advances by n.
+ * Otherwise thw is n*3 ints and the caller updates rope_pos. rows: logits for every position
+ * (n rows) when all_rows, else after the last one only (may be NULL). ckpt: lm_verify's
+ * checkpoints (one chunk, text only). */
+static void run_chunks(LmModel *m, const int *tokens, const float *embed_rows, int n, const int *thw,
+                       float *rows, int all_rows, int ckpt)
 {
     const LmCfg *c = &m->cfg;
     const int H = c->hidden, V = c->vocab;
+    const int rope_base = m->rope_pos;
     for (int s = 0; s < n; s += LM_PREFILL_CHUNK) {
         const int T = n - s < LM_PREFILL_CHUNK ? n - s : LM_PREFILL_CHUNK;
-        const int pos0 = m->pos, last = s + T == n;
-        for (int t = 0; t < T; t++) lm_mat_row(&m->embed, tokens[s + t], m->bh + (size_t)t * H);
+        const int pos0 = m->pos, rope0 = rope_base + s, last = s + T == n;
+        const int *tw = thw ? thw + s * 3 : NULL;
+        for (int t = 0; t < T; t++) {
+            if (embed_rows)
+                memcpy(m->bh + (size_t)t * H, embed_rows + (size_t)(s + t) * H, (size_t)H * sizeof(float));
+            else
+                lm_mat_row(&m->embed, tokens[s + t], m->bh + (size_t)t * H);
+        }
         for (int i = 0; i < c->layers; i++) {
             const Layer *L = &m->layers[i];
             for (int t = 0; t < T; t++) lm_rmsnorm(m->bn + (size_t)t * H, m->bh + (size_t)t * H, L->in_norm, H, c->eps);
             if (L->full)
-                lm_attn_mixer_batch(m->bmix, m->bn, &L->attn, &m->ad, m->kc[i], m->vc[i], m->pos, m->ctx, m->bscratch, T);
+                lm_attn_mixer_batch(m->bmix, m->bn, &L->attn, &m->ad, m->kc[i], m->vc[i], m->pos, tw, rope0,
+                                    m->ctx, m->bscratch, T);
             else
                 lm_linear_mixer_batch(m->bmix, m->bn, &L->lin, &m->ld, m->conv[i], m->S[i], m->bscratch, T,
                                       ckpt ? m->ck[i] : NULL);
@@ -539,16 +579,33 @@ static void run_chunks(LmModel *m, const int *tokens, int n, float *rows, int al
         if (m->mtp) {
             /* entries pos0-1 .. pos0+T-2: hidden of the previous position, token of this one */
             const float *hid[LM_PREFILL_CHUNK];
+            int trip[LM_PREFILL_CHUNK * 3];
             const int q0 = pos0 > 0 ? pos0 - 1 : 0, ne = pos0 + T - 1 - q0;
             for (int j = 0; j < ne; j++) {
                 const int q = q0 + j;
                 hid[j] = q == pos0 - 1 ? m->hlast : m->bn + (size_t)(q - pos0) * H;
+                if (pos0 > 0 && q == pos0 - 1) {
+                    trip[3 * j] = m->last_t; trip[3 * j + 1] = m->last_h; trip[3 * j + 2] = m->last_w;
+                } else if (thw) {
+                    const int idx = s + (q - pos0);
+                    trip[3 * j] = thw[3 * idx]; trip[3 * j + 1] = thw[3 * idx + 1]; trip[3 * j + 2] = thw[3 * idx + 2];
+                } else {
+                    const int r = rope0 + (q - pos0);
+                    trip[3 * j] = trip[3 * j + 1] = trip[3 * j + 2] = r;
+                }
             }
-            if (ne > 0) mtp_run(m, hid, tokens + s + (q0 + 1 - pos0), q0, ne, NULL);
+            if (ne > 0) mtp_run(m, hid, tokens + s + (q0 + 1 - pos0), q0, trip, ne, NULL);
             memcpy(m->hlast, m->bn + (size_t)(T - 1) * H, (size_t)H * sizeof(float));
             if (ckpt) memcpy(m->vh, m->bn, (size_t)T * H * sizeof(float));
         }
+        if (thw) {
+            const int i = s + T - 1;
+            m->last_t = thw[3 * i]; m->last_h = thw[3 * i + 1]; m->last_w = thw[3 * i + 2];
+        } else {
+            m->last_t = m->last_h = m->last_w = rope0 + T - 1;
+        }
     }
+    if (!thw) m->rope_pos = rope_base + n;
 }
 
 static int prefill(LmModel *m, const int *tokens, int n, float *logits)
@@ -557,7 +614,7 @@ static int prefill(LmModel *m, const int *tokens, int n, float *logits)
     if (rc != LM_OK || n == 0) return rc;
     if (m->gemma) return lm_gemma_prefill(m->gemma, tokens, n, logits);
     m->vn = 0;
-    run_chunks(m, tokens, n, logits, 0, 0);
+    run_chunks(m, tokens, NULL, n, NULL, logits, 0, 0);
     return LM_OK;
 }
 
@@ -567,7 +624,8 @@ int lm_draft(LmModel *m, int token, float *logits)
     if (token < 0 || token >= m->cfg.vocab) return LM_ERR_TOKEN;
     LM_TIMES_T0(t0);
     const float *hid = m->hlast;
-    mtp_run(m, &hid, &token, m->pos - 1, 1, logits);
+    const int prev[3] = { m->last_t, m->last_h, m->last_w };
+    mtp_run(m, &hid, &token, m->pos - 1, prev, 1, logits);
     LM_TIMES_ADD(total, t0);
     return LM_OK;
 }
@@ -579,7 +637,8 @@ int lm_verify(LmModel *m, const int *tokens, int n, float *rows)
     if (rc != LM_OK) return rc;
     LM_TIMES_T0(t0);
     m->vstart = m->pos;
-    run_chunks(m, tokens, n, rows, 1, 1);
+    m->vrope = m->rope_pos;
+    run_chunks(m, tokens, NULL, n, NULL, rows, 1, 1);
     m->vn = n;
     LM_TIMES_ADD(total, t0);
     return LM_OK;
@@ -600,6 +659,8 @@ int lm_accept(LmModel *m, int k)
         }
         memcpy(m->hlast, m->vh + (size_t)(k - 1) * c->hidden, (size_t)c->hidden * sizeof(float));
         m->pos = m->vstart + k;
+        m->rope_pos = m->vrope + k;
+        m->last_t = m->last_h = m->last_w = m->vrope + k - 1;
     }
     m->vn = 0;
     return LM_OK;
@@ -619,6 +680,55 @@ int lm_greedy_check(LmModel *m, int token, int draft, float *rows, float *logits
     if (r != LM_OK) return r;
     memcpy(logits, rows + (size_t)(k - 1) * V, (size_t)V * sizeof(float));
     *kept = k;
+    return LM_OK;
+}
+
+int lm_prefill_image(LmModel *m, const float *rows, int n, int grid_h, int grid_w,
+                     float *logits, int *pos_thw)
+{
+    if (!m || m->gemma) return LM_ERR_STATE;
+    const LmCfg *c = &m->cfg;
+    if (c->vis_start < 0 || c->vis_pad < 0 || c->vis_end < 0) return LM_ERR_STATE;
+    if (!rows || n < 1 || grid_h < 1 || grid_w < 1 || grid_h > n || n % grid_h != 0 || n / grid_h != grid_w)
+        return LM_ERR_TOKEN;
+    if (c->vis_start >= c->vocab || c->vis_pad >= c->vocab || c->vis_end >= c->vocab) return LM_ERR_TOKEN;
+    if ((long)m->pos + (long)n + 2 > m->ctx) return LM_ERR_CTX;
+
+    const int H = c->hidden, total = n + 2;
+    float *hid = (float *)malloc((size_t)total * (size_t)H * sizeof(float));
+    int *toks = (int *)malloc((size_t)total * sizeof(int));
+    int *thw = (int *)malloc((size_t)total * 3 * sizeof(int));
+    if (!hid || !toks || !thw) { free(hid); free(toks); free(thw); return LM_ERR_IO; }
+
+    int p = m->rope_pos;
+    lm_mat_row(&m->embed, c->vis_start, hid);
+    toks[0] = c->vis_start;
+    thw[0] = thw[1] = thw[2] = p;
+    p += 1;
+    const int p_img = p;
+    for (int i = 0; i < grid_h; i++) {
+        for (int j = 0; j < grid_w; j++) {
+            const int k = 1 + i * grid_w + j;
+            memcpy(hid + (size_t)k * H, rows + (size_t)(i * grid_w + j) * H, (size_t)H * sizeof(float));
+            toks[k] = c->vis_pad;
+            thw[3 * k] = p_img;
+            thw[3 * k + 1] = p_img + i;
+            thw[3 * k + 2] = p_img + j;
+        }
+    }
+    p = p_img + (grid_h > grid_w ? grid_h : grid_w);
+    lm_mat_row(&m->embed, c->vis_end, hid + (size_t)(total - 1) * H);
+    toks[total - 1] = c->vis_end;
+    thw[3 * (total - 1)] = thw[3 * (total - 1) + 1] = thw[3 * (total - 1) + 2] = p;
+    p += 1;
+    if (pos_thw) memcpy(pos_thw, thw, (size_t)total * 3 * sizeof(int));
+
+    m->vn = 0;
+    LM_TIMES_T0(t0);
+    run_chunks(m, toks, hid, total, thw, logits, 0, 0);
+    m->rope_pos = p;
+    LM_TIMES_ADD(total, t0);
+    free(hid); free(toks); free(thw);
     return LM_OK;
 }
 

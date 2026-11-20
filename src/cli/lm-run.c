@@ -15,6 +15,9 @@
  * (position p sees the token at p+1), one row each, fed token by token.
  * --image runs only the vision encoder (src/model/lm_vision.h) on a binary PPM already at its
  * grid size and writes one little-endian f32 row per image token to the --vision-rows-out file.
+ * --image-block feeds that image into the Qwen language model after the optional --tokens
+ * prefix (vision_start, the merger rows, vision_end) and writes one f32 logit row after the
+ * block plus the M-RoPE (t, h, w) of every fed position as little-endian int32 triples.
  * Original code; contract in docs/PLAN.md. */
 #include <errno.h>
 #include <stdint.h>
@@ -31,7 +34,9 @@ static int usage(void)
     fprintf(stderr, "usage: lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]\n"
                     "              [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]\n"
                     "              [--mtp [--mtp-out F]]\n"
-                    "       lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F\n");
+                    "       lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F\n"
+                    "       lm-run --model DIR [--weights FILE] [--tokens 1,2] --image-block F.ppm\n"
+                    "              --logits-out F --positions-out F\n");
     return 2;
 }
 
@@ -107,10 +112,94 @@ done:
     return rc;
 }
 
+static int parse_tokens(const char *tokstr, int **out, int *n_out)
+{
+    *out = NULL;
+    *n_out = 0;
+    if (!tokstr) return 0;
+    int *tok = (int *)malloc((strlen(tokstr) / 2 + 2) * sizeof(int));
+    if (!tok) return -1;
+    char *copy = strdup(tokstr), *save = NULL;
+    if (!copy) { free(tok); return -1; }
+    int n = 0;
+    for (char *p = strtok_r(copy, ",", &save); p; p = strtok_r(NULL, ",", &save)) {
+        if (parse_int(p, 0, &tok[n])) { free(copy); free(tok); return -1; }
+        n++;
+    }
+    free(copy);
+    if (n == 0) { free(tok); return -1; }
+    *out = tok;
+    *n_out = n;
+    return 0;
+}
+
+/* Prefix tokens, then one Qwen image block. One logit row after the block; positions are
+ * int32 (t, h, w) for the prefix and the block, in feed order. */
+static int run_image_block(const char *model, const char *weights, const char *tokstr,
+                           const char *image, const char *logits_path, const char *pos_path)
+{
+    char err[1024] = "";
+    int *tok = NULL, ntok = 0, w = 0, h = 0, rc = 1;
+    uint8_t *rgb = NULL;
+    float *rows = NULL, *logits = NULL;
+    int *thw = NULL;
+    LmVision *v = NULL;
+    LmModel *m = NULL;
+    FILE *fl = NULL, *fp = NULL;
+    if (parse_tokens(tokstr, &tok, &ntok) != 0) { fprintf(stderr, "lm-run: bad --tokens\n"); return 2; }
+    LmOpts o = { weights, 0, 0, 0, 0 };
+    m = lm_open(model, &o, err, sizeof err);
+    if (!m) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
+    if (ntok) {
+        const int r = lm_prefill(m, tok, ntok, NULL);
+        if (r != LM_OK) { fprintf(stderr, "lm-run: prompt of %d tokens: %s\n", ntok, code_name(r)); goto done; }
+    }
+    v = lm_vision_open(model, weights, err, sizeof err);
+    if (!v) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
+    if (lm_ppm_read(image, &rgb, &w, &h, err, sizeof err) != 0) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
+    const LmVisionInfo *info = lm_vision_info(v);
+    const int nt = lm_vision_tokens(v, h, w);
+    if (nt < 1 || h % info->unit || w % info->unit || (h / info->unit) * (w / info->unit) != nt) {
+        fprintf(stderr, "lm-run: image %dx%d is not a Qwen merged grid (unit %d)\n", w, h, info->unit);
+        goto done;
+    }
+    const int gh = h / info->unit, gw = w / info->unit;
+    rows = (float *)malloc((size_t)nt * info->out_dim * sizeof(float));
+    thw = (int *)malloc((size_t)(nt + 2) * 3 * sizeof(int));
+    logits = (float *)malloc((size_t)lm_n_vocab(m) * sizeof(float));
+    if (!rows || !thw || !logits) { fprintf(stderr, "lm-run: out of memory\n"); goto done; }
+    if (lm_vision_encode(v, rgb, h, w, rows, err, sizeof err) != 0) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
+    const int r = lm_prefill_image(m, rows, nt, gh, gw, logits, thw);
+    if (r != LM_OK) { fprintf(stderr, "lm-run: image block: %s\n", code_name(r)); goto done; }
+    fl = fopen(logits_path, "wb");
+    fp = fopen(pos_path, "wb");
+    if (!fl || !fp) { fprintf(stderr, "lm-run: cannot create the output files\n"); goto done; }
+    if (fwrite(logits, sizeof(float), (size_t)lm_n_vocab(m), fl) != (size_t)lm_n_vocab(m)) goto write_fail;
+    for (int i = 0; i < ntok; i++) {
+        const int32_t triple[3] = { i, i, i };
+        if (fwrite(triple, sizeof triple, 1, fp) != 1) goto write_fail;
+    }
+    for (int i = 0; i < (nt + 2) * 3; i++) {
+        const int32_t v32 = thw[i];
+        if (fwrite(&v32, sizeof v32, 1, fp) != 1) goto write_fail;
+    }
+    rc = 0;
+    goto done;
+write_fail:
+    fprintf(stderr, "lm-run: write failed\n");
+done:
+    if (fl && fclose(fl) != 0) rc = 1;
+    if (fp && fclose(fp) != 0) rc = 1;
+    free(logits); free(thw); free(rows); free(rgb); free(tok);
+    lm_vision_close(v);
+    lm_close(m);
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *tokstr = NULL, *outp = NULL, *mtp_out = NULL;
-    const char *image = NULL, *vrows = NULL;
+    const char *image = NULL, *vrows = NULL, *image_block = NULL, *pos_out = NULL;
     int greedy = 0, ctx = 0, threads = 0, fast = 0, no_prefill = 0, profile = 0, mtp = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -128,13 +217,20 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--mtp-out") && has) mtp_out = argv[++i];
         else if (!strcmp(a, "--image") && has) image = argv[++i];
         else if (!strcmp(a, "--vision-rows-out") && has) vrows = argv[++i];
+        else if (!strcmp(a, "--image-block") && has) image_block = argv[++i];
+        else if (!strcmp(a, "--positions-out") && has) pos_out = argv[++i];
         else if (!strcmp(a, "--threads") && has) { if (parse_int(argv[++i], 1, &threads)) { fprintf(stderr, "lm-run: bad --threads\n"); return 2; } }
         else return usage();
     }
     if (image || vrows) {
         if (!model || !image || !vrows || tokstr || outp || mtp || mtp_out || greedy || ctx || threads || fast ||
-            no_prefill || profile) return usage();
+            no_prefill || profile || image_block || pos_out) return usage();
         return run_image(model, weights, image, vrows);
+    }
+    if (image_block || pos_out) {
+        if (!model || !image_block || !outp || !pos_out || mtp || mtp_out || greedy || ctx || threads || fast ||
+            no_prefill || profile) return usage();
+        return run_image_block(model, weights, tokstr, image_block, outp, pos_out);
     }
     if (!model || !tokstr || (mtp_out && !mtp)) return usage();
 

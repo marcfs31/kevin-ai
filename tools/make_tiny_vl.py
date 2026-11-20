@@ -10,7 +10,8 @@ make_tiny_gemma4 with their seeds, their fake vision stubs left out; Qwen's MTP 
 vision encoder is real and small and drawn from its own stream. One single-file checkpoint,
 its q8 file, three PPM test images at their grid sizes, and the encoder output of the float64
 oracle (tools/ref_vision_qwen35.py or tools/ref_vision_gemma4.py) for each image from the
-bf16 weights and from the q8 file.
+bf16 weights and from the q8 file. Qwen also gets text goldens: logits after a prefix plus
+one image block, and the M-RoPE positions of every fed token.
 
 Margins asserted: every golden row differs from every other row of its image (no degenerate
 encoder); the q8 rows differ from the bf16 rows by more than 3x the gate tolerance, so a q8
@@ -30,6 +31,7 @@ import fixture_cmp
 import make_tiny
 import make_tiny_gemma4
 import quant_ref
+import ref_qwen35 as ref_text
 import ref_vision_gemma4 as rg
 import ref_vision_qwen35 as rv
 import safetensors as st
@@ -65,6 +67,11 @@ def config():
         "spatial_merge_size": MERGE,
         "temporal_patch_size": TEMPORAL,
     }
+    # The tiny vocab is 384, so the real special-token ids do not index the embedding. The
+    # engine embeds whatever ids the config names; these three sit inside the vocab.
+    c["vision_start_token_id"] = 4
+    c["image_token_id"] = 5
+    c["vision_end_token_id"] = 6
     return c
 
 
@@ -156,6 +163,32 @@ def rnd(rows):
     return [[float("%.9g" % v) for v in r] for r in rows]
 
 
+TEXT_PREFIX = [1, 2]
+
+
+def text_case(model, rows, h, w, name, start, end):
+    """Logits after prefix + vision_start + merger rows + vision_end, and every M-RoPE triple."""
+    gh, gw = h // (PATCH * MERGE), w // (PATCH * MERGE)
+    positions = [list(t) for t in rv.mrope_positions(
+        [("text", len(TEXT_PREFIX) + 1), ("image", h // PATCH, w // PATCH), ("text", 1)])]
+    embed = model.w.get(ref_text.PREFIX + "embed_tokens.weight")
+    state = model.new_state()
+    for tok in TEXT_PREFIX:
+        model.step(state, tok)
+    p = len(TEXT_PREFIX)
+    model.step_vec(state, embed[start], tuple(positions[p]))
+    p += 1
+    logits = None
+    for i in range(gh):
+        for j in range(gw):
+            logits = model.step_vec(state, rows[i * gw + j], tuple(positions[p]))
+            p += 1
+    logits = model.step_vec(state, embed[end], tuple(positions[p]))
+    gap = sorted(logits, reverse=True)
+    return {"image": name, "grid_h": gh, "grid_w": gw, "positions": positions,
+            "logits": [float("%.9g" % v) for v in logits], "gap": gap[0] - gap[1]}
+
+
 def build(seed, family="qwen35"):
     if family == "qwen35":
         text = make_tiny.build_tensors(random.Random(make_tiny.SEED))
@@ -189,6 +222,11 @@ def build(seed, family="qwen35"):
             d, os.path.join(d, "model.q8.safetensors"))
         bf = oracle.VisionModel.load(d)
         q8 = oracle.VisionModel.load(d, os.path.join(d, "model.q8.safetensors"))
+        text_bf = text_q8 = None
+        if family == "qwen35":
+            text_bf = ref_text.Model.load(d)
+            text_q8 = ref_text.Model.load(d, os.path.join(d, "model.q8.safetensors"))
+        text_rows = {"bf16": [], "q8": []}
         worst = None
         for name, h, w in images:
             rgb, pw, ph = rv.read_ppm(os.path.join(d, name))
@@ -214,9 +252,31 @@ def build(seed, family="qwen35"):
                 raise MarginError("%s: q8 rows are too close to bf16 (%.3g x tolerance)" % (name, ratio))
             worst = ratio if worst is None else min(worst, ratio)
             info[name] = {"rows": len(rb), "max_abs": top, "q8_vs_bf16_x_tol": ratio}
+            if family == "qwen35":
+                start, end = cfg["vision_start_token_id"], cfg["vision_end_token_id"]
+                cb = text_case(text_bf, rb, ph, pw, name, start, end)
+                cq = text_case(text_q8, rq, ph, pw, name, start, end)
+                scale = max(max(abs(v) for v in cb["logits"]), max(abs(v) for v in cq["logits"])) or 1.0
+                need = 4 * GATE_REL_TOL * scale
+                if min(cb["gap"], cq["gap"]) <= need:
+                    raise MarginError("%s: text top-1/top-2 gap %.3g <= %.3g (4x tolerance, max|logit| %.3g)"
+                                      % (name, min(cb["gap"], cq["gap"]), need, scale))
+                diff = max(abs(a - b) for a, b in zip(cb["logits"], cq["logits"]))
+                scale = max(abs(v) for v in cb["logits"]) or 1.0
+                if diff <= 3 * GATE_REL_TOL * scale:
+                    raise MarginError("%s: q8 text logits are too close to bf16 (%.3g)" % (name, diff))
+                info[name]["text_gap_bf16"] = cb["gap"]
+                info[name]["text_q8_vs_bf16"] = diff
+                for case in (cb, cq):
+                    case.pop("gap")
+                text_rows["bf16"].append(cb)
+                text_rows["q8"].append(cq)
     for label in ("bf16", "q8"):
         files["golden_vision_%s.json" % label] = make_tiny.jdump(
             {"images": golden[label]}, separators=(",", ":"))
+        if family == "qwen35":
+            files["golden_text_%s.json" % label] = make_tiny.jdump(
+                {"prefix": TEXT_PREFIX, "cases": text_rows[label]}, separators=(",", ":"))
     info["min_q8_vs_bf16_x_tol"] = worst
     return files, info
 

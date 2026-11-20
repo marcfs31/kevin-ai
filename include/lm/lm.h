@@ -75,6 +75,20 @@ int  lm_feed(LmModel *m, int token, float *logits);
  * return LM_ERR_IO if a per-layer embedding row cannot be read. */
 int  lm_prefill(LmModel *m, const int *tokens, int n, float *logits);
 
+/* Feed one Qwen image block: the config's vision_start token, n merger rows, vision_end.
+ * rows is n * hidden floats, row-major on the merged grid (grid_h * grid_w == n). Each row
+ * replaces that position's token embedding. M-RoPE: start and end are text positions; merged
+ * cell (i, j) gets (t = p, h = p + i, w = p + j) where p is the text position after
+ * vision_start, then the text position advances by max(grid_h, grid_w). The cache index
+ * still advances by one per position. logits (nullable) is the next-token distribution
+ * after vision_end. pos_thw (nullable) receives (n + 2) * 3 ints, (t, h, w) of start, each
+ * row and end. LM_ERR_STATE if this is not Qwen or the config has no vision token ids;
+ * LM_ERR_TOKEN if an id is outside the vocab or the grid does not match n; LM_ERR_CTX if
+ * the block does not fit; LM_ERR_IO if the block's scratch cannot be allocated. Nothing
+ * is fed on error. Gemma is LM_ERR_STATE. */
+int lm_prefill_image(LmModel *m, const float *rows, int n, int grid_h, int grid_w,
+                     float *logits, int *pos_thw);
+
 /* ---- speculative decoding with the MTP head (LmOpts.mtp) ----
  * The head drafts the token after next; one batched forward checks the draft, and a rejected
  * draft is rolled back without feeding again. Greedy decoding with them gives exactly the ids

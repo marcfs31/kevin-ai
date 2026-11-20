@@ -102,25 +102,29 @@ About 1.8 MB. Gate: `check_golden.py ... --fixtures tests/fixtures/qwen35-vl-tin
 
 | file | content |
 |---|---|
-| `config.json` | the `qwen35-tiny` config with a real small `vision_config` |
+| `config.json` | the `qwen35-tiny` config with a real small `vision_config`. Vision token ids are 4, 5 and 6 (start, pad, end): the tiny vocab is 384, so the real ids cannot be embedded |
 | `model.safetensors` | ONE bf16 file: the `qwen35-tiny` text and MTP tensors (its visual stubs left out) and a complete `model.visual.*` encoder; the patch embedding is the checkpoint's 5-D Conv3d weight |
 | `model.q8.safetensors` | `tools/quant_ref.py` output: every vision matrix is q8 (the 5-D weight flattened to `[32, 1536]`), `pos_embed.weight` included |
 | `img_64x64.ppm`, `img_64x96.ppm`, `img_32x32.ppm` | P6 test images at grid size (gradient plus noise): 4, 6 and 1 tokens |
 | `golden_vision_bf16.json`, `golden_vision_q8.json` | `{"images":[{"image","height","width","rows"}]}`: the oracle's encoder output per image, rows as `%.9g` |
+| `golden_text_bf16.json`, `golden_text_q8.json` | prefix `[1, 2]` then one image block per PPM. `cases[]` holds `grid_h`, `grid_w`, the M-RoPE `(t, h, w)` of every fed position, and the logit row after `vision_end` |
 
 Vision dimensions: depth 2, hidden 32, 2 heads (`head_dim` 16), intermediate 64, patch 16, merge 2,
 temporal 2, 16 position embeddings (a 4x4 table, so every image interpolates it), out 64 (the text
 hidden size). Seed `VISION_SEED` 1. Margins asserted by the generator: no two rows of an image equal;
-q8 and bf16 rows differ by at least 92x the gate tolerance (3x is required). No text goldens yet
-(phase 2 adds image-conditioned logits).
+q8 and bf16 rows differ by at least 92x the gate tolerance (3x is required). The text goldens
+are the same oracle's language model (`tools/ref_qwen35.py`) on those rows: logits within
+the usual `2e-4 * max|row|`, M-RoPE positions exact. q8 and bf16 text logits differ by more
+than 3x that tolerance, and each row's top-1/top-2 gap is more than 4x it.
 
 ## `gemma4-vl-tiny/`
 
 The Gemma 4 image encoder and `embed_vision`. Same generator (`tools/make_tiny_vl.py --family gemma4`),
 oracle `tools/ref_vision_gemma4.py`, checked once against transformers' `Gemma4VisionModel` plus
 `Gemma4MultimodalEmbedder` (float64, eager): largest difference 8.5e-7 of max|row|. About 2.6 MB.
-Same files and golden schema as `qwen35-vl-tiny/`; the text part is the `gemma4-tiny` model (its
-vision stubs left out, its audio stubs kept, which the quantiser drops).
+Same vision files and encoder golden schema as `qwen35-vl-tiny/` (no text goldens); the text
+part is the `gemma4-tiny` model (its vision stubs left out, its audio stubs kept, which the
+quantiser drops).
 
 Vision dimensions: 2 layers, hidden 32, 2 query heads over 1 KV head (`head_dim` 16), intermediate
 64, patch 16, pooling 3, a 16-entry position table per axis, clipped linears on (bounds drawn in

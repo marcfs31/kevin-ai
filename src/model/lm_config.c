@@ -32,6 +32,17 @@ static int req_num(jval *o, const char *key, double *out, char *err, size_t n)
     return 0;
 }
 
+/* Optional non-negative integer. Missing key stores -1. */
+static int opt_int(jval *o, const char *key, int *out, char *err, size_t n)
+{
+    jval *v = json_get(o, key);
+    if (!v) { *out = -1; return 0; }
+    if (v->t != J_NUM || v->num != floor(v->num) || v->num < 0 || v->num > DIM_MAX)
+        return lm_fail(err, n, "config.json: \"%s\" must be an integer in [0, %d]", key, DIM_MAX);
+    *out = (int)v->num;
+    return 0;
+}
+
 static int req_str(jval *o, const char *key, const char **out, char *err, size_t n)
 {
     jval *v = json_get(o, key);
@@ -82,7 +93,7 @@ int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
     jval *root = lm_config_read_json(path, err, errlen);
     if (!root) return -1;
 
-    int rc = -1;
+    int rc = -1, mrope_sum = 0;
     const char *mt = NULL, *act = NULL, *rtype = NULL;
     double theta = 0, partial = 0, eps = 0;
     int gate_ok = 0;
@@ -128,6 +139,33 @@ int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
     c->theta = (float)theta;
     c->eps = (float)eps;
     c->rot = (int)((double)c->head_dim * partial);
+    {
+        jval *mi = json_get(rp, "mrope_interleaved");
+        jval *sec = json_get(rp, "mrope_section");
+        if (!mi || mi->t != J_BOOL || !mi->boolean) {
+            lm_fail(err, errlen, "mrope_interleaved must be true");
+            goto out;
+        }
+        if (!sec || sec->t != J_ARR || sec->len != 3) {
+            lm_fail(err, errlen, "mrope_section must be an array of 3 integers");
+            goto out;
+        }
+        int secv[3];
+        for (int i = 0; i < 3; i++) {
+            const jval *e = sec->kids[i];
+            if (!e || e->t != J_NUM || e->num != floor(e->num) || e->num < 0 || e->num > DIM_MAX) {
+                lm_fail(err, errlen, "mrope_section must be three integers >= 0");
+                goto out;
+            }
+            secv[i] = (int)e->num;
+        }
+        mrope_sum = secv[0] + secv[1] + secv[2];
+        c->mrope_h = secv[1] * 3;
+        c->mrope_w = secv[2] * 3;
+    }
+    if (opt_int(root, "vision_start_token_id", &c->vis_start, err, errlen) ||
+        opt_int(root, "image_token_id", &c->vis_pad, err, errlen) ||
+        opt_int(root, "vision_end_token_id", &c->vis_end, err, errlen)) goto out;
 
     jval *lt = json_get(t, "layer_types");
     if (!lt) { lm_fail(err, errlen, "config.json is missing \"layer_types\""); goto out; }
@@ -149,6 +187,10 @@ int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
     }
     if (c->rot < 2 || (c->rot & 1) || c->rot > c->head_dim) {
         lm_fail(err, errlen, "rotary dimension %d (head_dim * partial_rotary_factor) must be even and in [2, head_dim]", c->rot);
+        goto out;
+    }
+    if (mrope_sum != c->rot / 2) {
+        lm_fail(err, errlen, "mrope_section must sum to the rotary frequency count (%d)", c->rot / 2);
         goto out;
     }
     c->key_dim = c->lk_heads * c->lk_dim;

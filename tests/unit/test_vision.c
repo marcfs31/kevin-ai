@@ -80,7 +80,8 @@ static void check_variant(const char *fix, const char *weights, const char *gold
     const LmVisionInfo *in = lm_vision_info(v);
     if (!strcmp(fix, FIX)) {
         CHECK(in->family == LM_VISION_QWEN && in->unit == 32 && in->out_dim == 64);
-        CHECK(in->image_token == 248056 && in->start_token == 248053 && in->end_token == 248054);
+        /* in-vocab stand-ins: the tiny vocab is 384, so the real ids do not index it */
+        CHECK(in->image_token == 5 && in->start_token == 4 && in->end_token == 6);
     } else {
         CHECK(in->family == LM_VISION_GEMMA && in->unit == 48 && in->out_dim == 64);
         CHECK(in->image_token == 258880 && in->start_token == 255999 && in->end_token == 258882);
