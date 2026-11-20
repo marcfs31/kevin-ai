@@ -283,6 +283,139 @@ window. Same golden files, q8 file and gate as Qwen.
 | B | Gemma forward | Sonnet: iterate against the oracle | `src/model`, `src/core/lm_ops.*`, `src/cli/lm-run.c`, their tests |
 | C | integration, gates, review | orchestrator | merges, Makefile `gate`, final gate |
 
+## Phase 3: images (normative: transformers vision code)
+
+Both checkpoints carry a vision encoder that the engine does not use yet: Qwen3.5-4B
+`model.visual.*` (297 tensors) and Gemma 4 E4B `model.vision_tower.*` plus
+`model.embed_vision.*`. Gemma's audio tower and video stay out of scope. Upstream reference:
+transformers commit `56547cbb1b39ef75506470902750b4c01fdfff3f` (main, fetched 2026-11-20):
+`vision_utils.py`; `models/qwen3_5/modeling_qwen3_5.py` (`Qwen3_5Vision*`,
+`Qwen3_5Model.get_rope_index`, `get_vision_position_ids`, `Qwen3_5TextRotaryEmbedding`);
+`models/qwen2_vl/image_processing_qwen2_vl.py` (`smart_resize`, `patchify`);
+`models/qwen3_vl/processing_qwen3_vl.py`; `models/gemma4/modeling_gemma4.py`
+(`Gemma4Vision*`, `Gemma4ClippableLinear`, `Gemma4MultimodalEmbedder`, `Gemma4Model.forward`);
+`models/gemma4/image_processing_gemma4.py`, `processing_gemma4.py`. Processor configs at the
+pinned revisions: Qwen `preprocessor_config.json` (390 B, sha256 27225450…), Gemma
+`processor_config.json` (1689 B, sha256 32bdf45d…). Where this section and those files
+disagree, the files win.
+
+**Resampling (both models).** The engine decodes PNG/JPEG to RGB8 and resizes in C with a
+separable bicubic filter (Keys a = -0.5, support widened by the scale factor when shrinking,
+as PIL does). The reference resizes with torchvision (`antialias=True`), so resized pixels are
+not bit-identical; the oracles start from the resized pixel tensor, and the resizer has its
+own tests (identity at the same size, a constant image stays constant, symmetry). No resize
+happens when the input already has the target size, which is what the web client sends.
+
+### Qwen3.5 vision
+
+- **Grid.** `smart_resize` with factor 32 (patch 16 x merge 2): round each side to a multiple
+  of 32; if the area exceeds `max_pixels`, scale by `sqrt(h*w/max_pixels)` and floor to
+  multiples of 32; if below `min_pixels` (65536) scale up and ceil. The checkpoint allows
+  16,777,216 pixels; the engine caps `max_pixels` at 1,048,576 by default (`--image-max-pixels`),
+  which the processor also accepts (`size.longest_edge`). `gh = H/16`, `gw = W/16`.
+- **Pixels.** `x/255`, then `(x - 0.5)/0.5` per channel.
+- **Patches.** Block-major order over 2x2 merge blocks: `(bh, bw, mh, mw)` with
+  `row = 2*bh + mh`, `col = 2*bw + mw`. A patch vector is `[c][t][py][px]` with the frame
+  duplicated (`temporal_patch_size` 2), so `patch_embed` (Conv3d 3->1024, kernel 2x16x16, bias)
+  equals a 2-D conv with `W[:, :, 0] + W[:, :, 1]`; the engine folds the two slices at load
+  (the oracle keeps both, which checks the fold).
+- **Position table.** `pos_embed` is 48x48 (2304 rows); per patch, bilinear with
+  `align_corners=True` at `(row*(47)/(gh-1), col*(47)/(gw-1))` (taps clamped, size 1 maps to
+  0), added after `patch_embed`.
+- **Rotary.** head_dim 64, theta 1e4 (config default), 16 inverse frequencies
+  `1/1e4^(2i/32)`; per patch angles `[row*f, col*f]` (32) duplicated to 64; `rotate_half` over
+  64, applied to q and k in float32.
+- **Blocks x24.** `x += proj(attn(LN1(x)))`, `x += fc2(gelu_tanh(fc1(LN2(x))))`; LayerNorm with
+  bias, eps 1e-6; `qkv` 1024->3072 with bias (q, k, v in that order, 16 heads of 64); attention
+  non-causal over all patches of one image, scale 1/8. Images never attend to each other.
+- **Merger.** LayerNorm(1024) per patch, then 4 consecutive patches (one 2x2 block)
+  concatenated to 4096, `fc1` 4096->4096, **exact-erf GELU** (`nn.GELU()`, not tanh), `fc2`
+  4096->2560. Output rows: `gh*gw/4`, in block order (row-major over the merged grid).
+  `deepstack_visual_indexes` is empty: no injection into decoder layers.
+- **Into the LM.** Text `<|vision_start|>` (248053), `<|image_pad|>` (248056) x N,
+  `<|vision_end|>` (248054), N = `gh*gw/4`; the embeddings of the pad positions are replaced by
+  the merger rows in order. The chat template writes the three tokens at the image's place in
+  the user content (`add_vision_id` false); system messages may not contain images.
+- **M-RoPE positions.** Text token at running position p gets (p, p, p) and p += 1. An image
+  block starting at p gets `t = p, h = p + i, w = p + j` for the merged grid `i < gh/2`,
+  `j < gw/2` in row-major order, then `p += max(gh, gw)/2`. Decoding continues from p. The
+  rotary dim is 64 (`partial_rotary_factor` 0.25 of 256), 32 frequencies, interleaved
+  (`mrope_section` [11, 11, 10]): frequency k uses the h position if `k % 3 == 1 && k < 33`,
+  the w position if `k % 3 == 2 && k < 30`, else t. With text only all three agree, which is
+  why phase 1 needed no change. Linear-attention layers take no positions.
+- **Engine consequence.** The RoPE position is no longer the cache index: the state keeps
+  `rope_pos` (next position) beside `pos`, snapshots store it, and `lm_reset` zeroes it.
+
+### Gemma 4 vision
+
+- **Resize.** `get_aspect_ratio_preserving_size` exactly: `max_patches = 280 * 9 = 2520`,
+  `factor = sqrt(2520*256/(h*w))`, each side floored to a multiple of 48 (patch 16 x pool 3),
+  with the reference's zero-side and over-budget cases (an error, not a clamp). Pixels `x/255`
+  only (`do_normalize` false); the model then uses `2*(x - 0.5)`.
+- **Patches.** Raster order over the patch grid; a patch vector is `[py][px][c]`; position of
+  patch (row r, col c) is `(x = c, y = r)`. Padding to 2520 patches in the reference is masked
+  out of attention and stripped after pooling, so the engine runs only the real patches.
+- **Patch embedding.** `input_proj` 768->768 without bias, plus `table[0][x] + table[1][y]`
+  (`position_embedding_table` 2 x 10240 x 768).
+- **Layers x16.** `x = x + post_attention_norm(attn(input_norm(x)))`,
+  `x = x + post_feedforward_norm(mlp(pre_feedforward_norm(x)))`; RMSNorm with plain `w`
+  (eps 1e-6). Attention: 12 heads, 12 KV heads, head_dim 64, `q_norm`/`k_norm` with weight,
+  `v_norm` without, scaling 1.0, non-causal over the image's patches. Every linear is a
+  clippable linear: clamp the input to `[input_min, input_max]` and the output to
+  `[output_min, output_max]` (scalar tensors in the checkpoint). MLP
+  `down(gelu_tanh(gate(x)) * up(x))`, 768->3072->768.
+- **Rotary.** theta 100 (config, `default` read as `axial`), head_dim 64, 16 inverse
+  frequencies `1/100^(2i/32)`; channels 0..31 rotate by x and 32..63 by y, each half with its
+  own `rotate_half` over 32 (`apply_multidimensional_rope`).
+- **Pooling.** k = 3: the soft token of a patch is `(x/3) + (W/48)*(y/3)` (integer division,
+  `W/48` = pooled columns); each soft token is the mean of its 9 patches, then times
+  `sqrt(768)` in float32. `standardize` is false. N = patches / 9 rows, raster over the pooled
+  grid.
+- **Projection.** `embed_vision`: RMSNorm without weight (eps 1e-6) over 768, then
+  `embedding_projection` 768->2560 without bias. Not multiplied by the text embedding scale.
+- **Into the LM.** `<|image>` (255999), `<|image|>` (258880) x N, `<image|>` (258882); the
+  template writes `<|image|>` once and the processor expands it. At image positions the
+  per-layer input uses the pad token (id 0) for the table lookup and the pad token's scaled
+  embedding for the projection part (`Gemma4Model.forward`). Positions stay sequential, and
+  attention stays causal (`use_bidirectional_attention` is null for E4B; the config check
+  already refuses a non-null value).
+
+### Engine, quantiser and server contract
+
+- `lm-quant` keeps the vision tensors: 2-D linear weights to q8 like the text model, norms,
+  biases, position tables and clamp scalars in their stored dtype. Whether q8 is accurate
+  enough for vision is measured (q8 against bf16 encoder output on a real photo, and greedy
+  replies), not assumed; if it is not, the vision matrices stay bf16 and that is recorded here.
+  A q8 file without vision tensors still loads; vision is then `unavailable`.
+- New engine calls (`include/lm/lm.h`): encode an RGB8 image to rows (`lm_image_encode`, with
+  the grid it chose) and feed an image block (`lm_prefill_image`), which writes the start
+  token, the rows and the end token with the right positions. Images cost memory only while
+  encoding (activations for one image), not afterwards.
+- `lm-serve`: message content parts `{"type":"image_url","image_url":{"url":"data:image/png;base64,…"}}`
+  (PNG or JPEG data URLs only; any other URL is a 400, nothing is fetched). Body limit 24 MiB,
+  at most 8 images per request, decoded size at most 4096 x 4096 before resizing. Errors are
+  400 with `code` `image_unsupported`, `image_invalid`, `image_too_large`, `too_many_images`
+  or `context_overflow`. `GET /v1/models` adds `context_length` and
+  `capabilities.vision` `{status: ok|unavailable, max_pixels, pixels_per_token, tokens_per_image}`
+  (Qwen: `pixels_per_token` 1024; Gemma: `tokens_per_image` up to 280). Usage adds
+  `prompt_tokens_details.cached_tokens`.
+- Conversation reuse and the prefix cache compare the rendered prompt; an image is rendered
+  as its SHA-256, so a different picture never reuses a state built on another.
+- Decoding uses vendored `stb_image` (public domain / MIT), PNG and JPEG only, sizes checked
+  before allocation, run under `make sanitize` and a short fuzz pass over malformed files.
+- `lm-chat --image FILE` (repeatable) attaches images to the first message.
+
+### Gates (phase 3)
+
+1. Oracles `tools/ref_vision_qwen35.py` and `tools/ref_vision_gemma4.py`: standard library,
+   float64, ported from the files above; tiny synthetic vision configs in the tiny fixtures.
+   `make gate` compares encoder rows (`2e-4 * max|x|`) and the logits after an image block,
+   bf16 and q8, plus the M-RoPE positions exactly.
+2. Real checkpoints, once, in a throwaway Python environment outside the repo (torch +
+   transformers at the commit above): encoder rows for one photo from transformers against
+   the engine on the same pixel tensor; the error is recorded here.
+3. Server: a photo described correctly by both models, timings and peak RSS recorded.
+
 ## Later
 
 Batched prefill, the OpenAI-compatible endpoint (`bin/lm-serve`, with
