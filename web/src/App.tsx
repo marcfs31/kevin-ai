@@ -5,12 +5,12 @@ import { ServerPanel } from './components/ServerPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
-import { ApiError, fetchServerInfo, streamChat, type ServerInfo } from './lib/api';
+import { ApiError, fetchServerInfo, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { assess, toWire } from './lib/request';
 import type { Usage } from './lib/sse';
 import {
-  createSaver, loadState, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
+  backupKeys, createSaver, deleteBackups, loadState, STORAGE_KEY, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
   type UserMessage,
 } from './lib/storage';
 
@@ -53,7 +53,10 @@ function Chat({ state, setState, storage, notice }: {
   storage: Storage;
   notice: LoadResult['notice'];
 }) {
-  const { t } = useI18n();
+  const { t, tp } = useI18n();
+  const [hold, setHold] = useState(notice);
+  const [copies, setCopies] = useState(() => backupKeys(storage));
+  const [forgetFailed, setForgetFailed] = useState(false);
   const [server, setServer] = useState<ServerState>({ kind: 'loading' });
   const [live, setLive] = useState<Live | null>(null);
   const [saver] = useState(() => createSaver(storage));
@@ -88,8 +91,8 @@ function Chat({ state, setState, storage, notice }: {
   // Streamed tokens go to `live`, not `state`, so this saves the user's message as soon as it
   // is sent and the reply once it ends, never once per token.
   useEffect(() => {
-    if (notice !== 'locked') saver.save(state);
-  }, [state, saver, notice]);
+    if (hold !== 'locked') saver.save(state);
+  }, [state, saver, hold]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end' });
@@ -188,12 +191,35 @@ function Chat({ state, setState, storage, notice }: {
 
   const updateSettings = (settings: Settings) => setState((s) => ({ ...s, settings }));
 
+  const forgetServer = () => {
+    void resetServer().then(
+      () => setForgetFailed(false),
+      () => setForgetFailed(true),
+    );
+  };
+
+  const discardCopies = () => {
+    const n = Math.max(1, backupKeys(storage).length + (hold === 'locked' ? 1 : 0));
+    if (!window.confirm(tp('sidebar.confirmDeleteAll', n))) return;
+    deleteBackups(storage);
+    if (hold === 'locked') storage.removeItem(STORAGE_KEY);
+    setCopies([]);
+    setHold('none');
+  };
+
   const serverLine =
     server.kind === 'loading' ? t('server.checking') : server.kind === 'error' ? errorText(t, server.error) : t('server.ok', { model: server.info.model });
   // When images are off, the composer says why next to the disabled button.
   const visionLine = info?.vision === 'ok' ? t('vision.ok') : null;
   const storageError =
-    notice === 'locked' ? t('error.storageLocked') : saveResult === 'full' ? t('error.storageFull') : notice === 'unreadable' ? t('error.storageUnreadable') : null;
+    hold === 'locked'
+      ? t('error.storageLocked')
+      : saveResult === 'full'
+        ? t('error.storageFull')
+        : hold === 'unreadable' || copies.length > 0
+          ? t('error.storageUnreadable')
+          : null;
+  const canDiscard = hold === 'locked' || hold === 'unreadable' || copies.length > 0;
   const messages = active?.messages ?? [];
 
   return (
@@ -242,8 +268,16 @@ function Chat({ state, setState, storage, notice }: {
             setSidebarOpen(false);
           }}
           onRename={(id, title) => updateConv(id, (c) => ({ ...c, title }))}
-          onDelete={(id) => setState((s) => ({ ...s, conversations: s.conversations.filter((c) => c.id !== id), activeId: s.activeId === id ? null : s.activeId }))}
-          onDeleteAll={() => setState((s) => ({ ...s, conversations: [], activeId: null }))}
+          onDelete={(id) => {
+            setState((s) => ({ ...s, conversations: s.conversations.filter((c) => c.id !== id), activeId: s.activeId === id ? null : s.activeId }));
+            forgetServer();
+          }}
+          onDeleteAll={() => {
+            deleteBackups(storage);
+            setCopies([]);
+            setState((s) => ({ ...s, conversations: [], activeId: null }));
+            forgetServer();
+          }}
         />
       </aside>
       <main className="main">
@@ -263,6 +297,16 @@ function Chat({ state, setState, storage, notice }: {
         {storageError && (
           <p className="error banner" role="alert">
             {storageError}
+            {canDiscard && (
+              <button type="button" className="danger" onClick={discardCopies}>
+                {t('sidebar.deleteAll')}
+              </button>
+            )}
+          </p>
+        )}
+        {forgetFailed && (
+          <p className="error banner" role="alert">
+            {t('error.network')}
           </p>
         )}
         <div className="log" tabIndex={0} role="region" aria-label={t('app.transcript')}>

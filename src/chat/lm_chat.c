@@ -138,6 +138,29 @@ void lm_chat_reset(LmChat *c)
     c->cfg.backend.reset(c->cfg.backend.ctx);
 }
 
+void lm_chat_purge(LmChat *c)
+{
+    hist_clear(c);
+    lm_ids_free(&c->fed);
+    lm_ids_free(&c->prev);
+    c->dirty = 0;
+    while (c->nslot > 0) drop_slot(c, 0);
+    free(c->system);
+    c->system = NULL;
+    c->cfg.system = NULL;
+    c->cfg.backend.reset(c->cfg.backend.ctx);
+}
+
+int lm_chat_set_system(LmChat *c, const char *text)
+{
+    char *next = text ? dup_str(text) : NULL;
+    if (text && !next) return -1;
+    free(c->system);
+    c->system = next;
+    c->cfg.system = next;
+    return 0;
+}
+
 int lm_chat_reprefills(const LmChat *c) { return c->reprefills; }
 int lm_chat_fed(const LmChat *c) { return c->fed.n; }
 int lm_chat_cached(const LmChat *c) { return c->nslot ? c->slot[0].ids.n : 0; }

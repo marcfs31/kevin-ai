@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, emptyState, loadState, migrate, saveState } from './storage';
+import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, emptyState, loadState, migrate, saveState } from './storage';
 
 describe('migrate', () => {
   it('loads a document missing newer fields with their defaults', () => {
@@ -57,6 +57,14 @@ describe('loadState and saveState', () => {
     const backups = Object.keys(localStorage).filter((k) => k.startsWith(BACKUP_KEY));
     expect(backups).toHaveLength(1);
     expect(localStorage.getItem(backups[0] ?? '')).toBe('{"version":99}');
+  });
+
+  it('deletes unreadable copies and leaves the primary key', () => {
+    localStorage.setItem(`${BACKUP_KEY}.1`, '{"version":99}');
+    localStorage.setItem(STORAGE_KEY, '{"version":1}');
+    deleteBackups(localStorage);
+    expect(Object.keys(localStorage).filter((k) => k.startsWith(BACKUP_KEY))).toEqual([]);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('{"version":1}');
   });
 
   it('reports a full storage', () => {

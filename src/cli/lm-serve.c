@@ -46,6 +46,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "chat/lm_chat.h"
@@ -62,6 +63,7 @@
 enum { MAX_HEAD = 16 * 1024, MAX_BODY = 4 * 1024 * 1024 };
 
 static volatile sig_atomic_t g_stop = 0;
+static long g_log_max = 1 << 20; /* stderr, when it is a file, is cut back to this */
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
 
 static double mono_s(void)
@@ -671,6 +673,13 @@ static void handle(Server *s, Conn *c, int timeout_s)
         if (strcmp(c->method, "GET")) respond_error(c, log.status = 405, NULL, "use GET");
         else respond_name(c, &log, "{\"object\":\"list\",\"data\":[{\"id\":", s->name,
                           ",\"object\":\"model\",\"created\":0,\"owned_by\":\"local\"}]}");
+    } else if (!strcmp(c->path, "/v1/chat/reset")) {
+        if (strcmp(c->method, "POST")) respond_error(c, log.status = 405, NULL, "use POST");
+        else {
+            lm_chat_purge(s->chat);
+            static const char body[] = "{\"status\":\"ok\"}";
+            respond(c, log.status = 200, NULL, body, sizeof body - 1);
+        }
     } else if (!strcmp(c->path, "/v1/chat/completions")) {
         if (strcmp(c->method, "POST")) respond_error(c, log.status = 405, NULL, "use POST");
         else {
@@ -687,6 +696,15 @@ static void handle(Server *s, Conn *c, int timeout_s)
     for (; c->path[i]; i++) path[i] = (unsigned char)c->path[i] < 0x20 || c->path[i] == 0x7f ? '?' : c->path[i];
     path[i] = 0;
     const double dt = mono_s() - t0;
+    /* A file log stays within g_log_max. The journal is not a regular file, so the unit
+     * sends stderr to a file. Truncate, then write this request's line. */
+    fflush(stderr);
+    {
+        const int fd = fileno(stderr);
+        struct stat st;
+        if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > g_log_max && ftruncate(fd, 0) == 0)
+            fseek(stderr, 0, SEEK_SET);
+    }
     if (log.n_prompt)
         fprintf(stderr, "lm-serve: %s %s %d%s | prompt %d, %d from cache, fed %d%s at %.2f tok/s | generated %d at %.2f tok/s | %.1f s\n",
                 c->method, path, log.status, c->broken ? " (client gone)" : "", log.n_prompt, log.n_cached, log.n_prefill,
@@ -810,6 +828,15 @@ int main(int argc, char **argv)
         while (b > model && b[-1] != '/') b--;
         snprintf(nb, sizeof nb, "%.*s", (int)(model + n - b), b);
         name = nb;
+    }
+    const char *log_max = getenv("LM_SERVE_LOG_MAX");
+    if (log_max && log_max[0]) {
+        long v;
+        if (parse_long(log_max, 1, 1L << 30, &v)) {
+            fprintf(stderr, "lm-serve: invalid LM_SERVE_LOG_MAX\n");
+            return 2;
+        }
+        g_log_max = v;
     }
     const char *key = getenv("LM_SERVE_API_KEY");
     if (key && !key[0]) key = NULL;

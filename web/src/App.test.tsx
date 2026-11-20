@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
-import { STORAGE_KEY } from './lib/storage';
+import { BACKUP_KEY, STORAGE_KEY } from './lib/storage';
 import { DONE, FINISH, USAGE, axeViolations, delta, mockFetch, modelsResponse, sseResponse } from './test/helpers';
 
 function renderApp(languages: readonly string[] = ['en-US']) {
@@ -253,7 +253,7 @@ describe('App', () => {
   });
 
   it('renames, deletes and deletes all conversations', async () => {
-    mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+    const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderApp();
     typeAndSend('first chat');
@@ -270,9 +270,43 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
     fireEvent.click(within(nav).getByRole('button', { name: 'Delete “Renamed”' }));
     expect(within(nav).getAllByRole('listitem')).toHaveLength(1);
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/v1/chat/reset') && (init as RequestInit | undefined)?.method === 'POST')).toBe(true);
     fireEvent.click(within(nav).getByRole('button', { name: 'Delete all' }));
     expect(within(nav).getByText('No conversations yet.')).toBeTruthy();
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations).toEqual([]);
+  });
+
+  it('deletes an unreadable copy from the banner', () => {
+    localStorage.setItem(STORAGE_KEY, '{"version":99,"secret":"keep-me"}');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockFetch(() => sseResponse([FINISH]));
+    renderApp();
+    const banner = screen.getByRole('alert');
+    expect(banner.textContent).toContain('set aside');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Delete all' }));
+    expect(Object.keys(localStorage).filter((k) => k.startsWith(BACKUP_KEY))).toEqual([]);
+    expect(localStorage.getItem(STORAGE_KEY)).not.toContain('keep-me');
+  });
+
+  it('discards a locked save so later edits can be stored', () => {
+    const data = new Map<string, string>([[STORAGE_KEY, '{"version":99}']]);
+    const storage = {
+      get length() { return data.size; },
+      key: (i: number) => [...data.keys()][i] ?? null,
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        if (k.startsWith(BACKUP_KEY)) throw new DOMException('full', 'QuotaExceededError');
+        data.set(k, v);
+      },
+      removeItem: (k: string) => { data.delete(k); },
+      clear: () => { data.clear(); },
+    } as Storage;
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockFetch(() => sseResponse([FINISH]));
+    render(<App storage={storage} />);
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Delete all' }));
+    const saved = JSON.parse(storage.getItem(STORAGE_KEY) ?? '{}') as { version?: number };
+    expect(saved.version).toBe(1);
   });
 
   it('switches language from settings', async () => {
