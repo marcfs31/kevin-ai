@@ -295,7 +295,30 @@ describe('App', () => {
     renderApp();
     typeAndSend('slow');
     expect(await screen.findByText(/Reading the prompt… \d+ s/)).toBeTruthy();
+    expect(within(screen.getByRole('log')).queryByText(/Reading the prompt/)).toBeNull();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Stop' })));
+  });
+
+  it('keeps focus where it is when a reply ends', async () => {
+    mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+    renderApp();
+    const settings = screen.getByRole('button', { name: 'Settings' });
+    settings.focus();
+    typeAndSend('hi');
+    await screen.findByText('ok');
+    expect(document.activeElement).toBe(settings);
+  });
+
+  it('returns focus to Rename after cancelling', async () => {
+    mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+    renderApp();
+    typeAndSend('first chat');
+    await screen.findByText('ok');
+    const nav = screen.getByRole('navigation', { name: 'Conversations' });
+    const rename = within(nav).getByRole('button', { name: 'Rename “first chat”' });
+    fireEvent.click(rename);
+    fireEvent.click(within(nav).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(document.activeElement).toBe(within(nav).getByRole('button', { name: 'Rename “first chat”' })));
   });
 });
 
@@ -304,6 +327,7 @@ describe('accessibility', () => {
     mockFetch(() => sseResponse([delta('think', 'reasoning_content'), delta('# Title\n\n```js\nx()\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |'), FINISH, USAGE, DONE]));
     const { container } = renderApp();
     await screen.findByText('Model: qwen3.5-4b');
+    expect(screen.getByRole('region', { name: 'Conversation' }).tabIndex).toBe(0);
     expect(await axeViolations(container)).toEqual([]);
     typeAndSend('hello');
     await screen.findByText('Title');

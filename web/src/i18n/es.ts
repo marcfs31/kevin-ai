@@ -5,6 +5,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'app.title': 'Chat local',
   'app.empty': 'Pregunta lo que quieras. Las conversaciones se quedan en este navegador y solo van a tu propio servidor.',
   'app.skip': 'Ir al cuadro de mensaje',
+  'app.transcript': 'Conversación',
 
   'sidebar.label': 'Conversaciones',
   'sidebar.show': 'Mostrar conversaciones',

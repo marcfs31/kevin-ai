@@ -188,7 +188,11 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .sidebar > button.primary { inline-size: 100%; }
 .conv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
 .conv-list li { border-radius: 0.55rem; padding: 0.1rem; }
-.conv-list li.active { background: var(--surface-2); }
+.conv-list li.active {
+  background: var(--surface-2);
+  border-inline-start: 3px solid var(--accent);
+}
+.conv-list li.active .conv-title { font-weight: 700; }
 .conv {
   inline-size: 100%;
   text-align: start;
@@ -248,6 +252,14 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .serve-advanced[open] { display: flex; flex-direction: column; gap: 0.75rem; }
 .serve-advanced summary { cursor: pointer; font-size: 0.875rem; font-weight: 600; }
 .serve-check { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; font-weight: 500; }
+.serve-log {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.75rem/1.45 var(--mono);
+  color: var(--muted);
+}
+.log-entries { display: flex; flex-direction: column; gap: 1.4rem; }
 .log {
   flex: 1 1 auto;
   overflow-y: auto;

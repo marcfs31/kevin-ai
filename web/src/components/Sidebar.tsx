@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useI18n } from '../i18n';
 import type { Conversation } from '../lib/storage';
 
@@ -17,12 +17,24 @@ export function Sidebar({ conversations, activeId, busy, onSelect, onNew, onRena
   const { t, tp, date } = useI18n();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const restoreFocus = useRef<string | null>(null);
   const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  const finishEdit = (id: string) => {
+    restoreFocus.current = id;
+    setEditing(null);
+  };
+  useEffect(() => {
+    const id = restoreFocus.current;
+    if (!id || editing !== null) return;
+    restoreFocus.current = null;
+    document.getElementById(`rename-btn-${id}`)?.focus();
+  }, [editing]);
 
   const submit = (e: FormEvent, id: string) => {
     e.preventDefault();
     if (draft.trim()) onRename(id, draft.trim());
-    setEditing(null);
+    finishEdit(id);
   };
 
   return (
@@ -45,7 +57,7 @@ export function Sidebar({ conversations, activeId, busy, onSelect, onNew, onRena
                     </label>
                     <input id={`rename-${c.id}`} value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus maxLength={200} />
                     <button type="submit">{t('sidebar.save')}</button>
-                    <button type="button" onClick={() => setEditing(null)}>
+                    <button type="button" onClick={() => finishEdit(c.id)}>
                       {t('sidebar.cancel')}
                     </button>
                   </form>
@@ -64,6 +76,7 @@ export function Sidebar({ conversations, activeId, busy, onSelect, onNew, onRena
                     <div className="conv-actions">
                       <button
                         type="button"
+                        id={`rename-btn-${c.id}`}
                         aria-label={t('sidebar.renameNamed', { title })}
                         onClick={() => {
                           setDraft(c.title);

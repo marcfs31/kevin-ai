@@ -36,10 +36,10 @@ function LiveStatus({ live }: { live: LiveInfo }) {
     return () => clearInterval(id);
   }, []);
   if (live.firstAt === null)
-    return <p className="live">{t('message.readingPrompt', { s: num(Math.max(0, (now - live.startedAt) / 1000)) })}</p>;
+    return <p className="live" aria-live="off">{t('message.readingPrompt', { s: num(Math.max(0, (now - live.startedAt) / 1000)) })}</p>;
   const secs = (now - live.firstAt) / 1000;
   const rate = live.chunks > 1 && secs > 0 ? (live.chunks - 1) / secs : null;
-  return <p className="live">{rate === null ? t('message.waiting') : t('message.live', { rate: num(rate, 1) })}</p>;
+  return <p className="live" aria-live="off">{rate === null ? t('message.waiting') : t('message.live', { rate: num(rate, 1) })}</p>;
 }
 
 function StatsLine({ stats }: { stats: Stats }) {

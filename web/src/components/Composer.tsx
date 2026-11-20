@@ -99,8 +99,14 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
     void addFiles(Array.from(e.dataTransfer.files));
   };
 
+  const wasBusy = useRef(false);
   useEffect(() => {
-    if (!busy) inputRef.current?.focus();
+    const ended = wasBusy.current && !busy;
+    wasBusy.current = busy;
+    if (!ended) return;
+    const el = document.activeElement;
+    if (el instanceof HTMLElement && el !== document.body && !el.closest('.composer')) return;
+    inputRef.current?.focus();
   }, [busy, inputRef]);
 
   const visionReason = vision === 'unavailable' ? t('vision.unavailable') : t('vision.unknown');

@@ -4,6 +4,7 @@ export const en = {
   'app.title': 'Local chat',
   'app.empty': 'Ask something. Conversations stay in this browser and go only to your own server.',
   'app.skip': 'Skip to the message box',
+  'app.transcript': 'Conversation',
 
   'sidebar.label': 'Conversations',
   'sidebar.show': 'Show conversations',

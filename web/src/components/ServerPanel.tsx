@@ -57,7 +57,11 @@ export function draftToOptions(model: ServeModelId, draft: ServeDraft): ServeOpt
   };
 }
 
-type Status = { kind: 'idle' } | { kind: 'starting'; model: ServeModelId } | { kind: 'ok'; model: ServeModelId } | { kind: 'error'; message: string };
+type Status =
+  | { kind: 'idle' }
+  | { kind: 'starting'; model: ServeModelId }
+  | { kind: 'ok'; model: ServeModelId }
+  | { kind: 'error'; message: string; detail?: string };
 
 interface Props {
   busy: boolean;
@@ -82,15 +86,19 @@ export function ServerPanel({ busy, onStarted }: Props) {
     setStatus({ kind: 'starting', model });
     try {
       const result = await startRemoteServe(opts);
-      if (!result.ok) {
-        setStatus({ kind: 'error', message: t('serve.failed') });
+        if (!result.ok) {
+        setStatus({ kind: 'error', message: t('serve.failed'), detail: result.error || undefined });
         return;
       }
       setStatus({ kind: 'ok', model });
       onStarted();
     } catch (e) {
-      const msg = e instanceof ApiError && e.status === 0 ? t('error.network') : t('serve.failed');
-      setStatus({ kind: 'error', message: msg });
+      if (e instanceof ApiError && e.status === 0) {
+        setStatus({ kind: 'error', message: t('error.network') });
+        return;
+      }
+      const detail = e instanceof Error ? e.message : '';
+      setStatus({ kind: 'error', message: t('serve.failed'), detail: detail || undefined });
     }
   };
 
@@ -114,9 +122,12 @@ export function ServerPanel({ busy, onStarted }: Props) {
         </p>
       )}
       {status.kind === 'error' && (
-        <p className="error" role="alert">
-          {status.message}
-        </p>
+        <>
+          <p className="error" role="alert">
+            {status.message}
+          </p>
+          {status.detail && <pre className="serve-log">{status.detail}</pre>}
+        </>
       )}
       <details className="serve-advanced">
         <summary>{t('serve.advanced')}</summary>
