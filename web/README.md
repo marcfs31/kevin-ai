@@ -52,14 +52,15 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
 - **Statistics per reply:** time to first token, tokens per second, prompt tokens and, when the
   server reports it, tokens taken from its cache.
 - **Server state reuse.** Every earlier answer is re-sent exactly as received (no reasoning, no
-  edits), because lm-serve reuses its state only then. Failed replies are left out.
+  edits), because lm-serve reuses its state only then. Stopped replies are re-sent as far as
+  they got; failed replies are left out, even when they streamed some text.
 - **Thinking.** `reasoning_content` (lm-serve `--think`) goes in a collapsible block.
 - **Markdown** with GitHub tables and code blocks with a copy button. Raw HTML in a reply is shown
   as text; images in a reply are never loaded (they could be remote trackers).
 - **Conversations** are saved in `localStorage` under `lm-chat` (schema version 1): rename,
   delete, delete all. A saved document missing a newer field loads with its default; one that
   cannot be read is copied aside to `lm-chat.unreadable.<time>` rather than overwritten.
-  Nothing is saved while a reply streams.
+  A message is saved as soon as it is sent and its reply once it ends, never once per token.
 - **Settings:** system prompt, temperature, longest reply, image size preset (512, 768 or 1024 px
   on the longer side), language.
 - **Attachments** by button or drag and drop:
@@ -68,7 +69,8 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   - PDFs (`pdfjs-dist`, its worker bundled, loaded only when a PDF is attached): text with
     `--- page N ---` markers and a page-range field; pages with no text layer are rendered to PNG
     and sent as images only when the server reports vision `ok`, otherwise they are listed as
-    left out;
+    left out. pdf.js's JPEG 2000 and JBIG2 decoders for scanned pages are its JavaScript builds,
+    copied to `dist/pdfjs/` with their BSD licences, so the CSP needs no `wasm-unsafe-eval`;
   - images (PNG, JPEG, WebP) are resized in the browser to the preset (and the server's
     `max_pixels`) and re-encoded as PNG data URLs.
 - **Estimates before sending,** labelled as estimates: text ≈ characters / 3.5 tokens, images
@@ -81,7 +83,10 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   lm-serve reports neither `capabilities` nor `context_length`, so images stay off and no context
   check is made until the server's image support lands.
 - **Errors** are shown in the user's language by `code` (`image_unsupported`, `image_invalid`,
-  `image_too_large`, `too_many_images`, `context_overflow`), else the server's own message.
+  `image_too_large`, `too_many_images`, `context_overflow`, and the proxy's
+  `upstream_unreachable`, `upstream_failed`), else the server's own message.
+- **Privacy test:** `src/privacy.test.ts` fails if the code names a remote URL, uses beacons,
+  WebSockets or cookies, or calls `fetch` anywhere but `src/lib/api.ts`.
 - **i18n:** `src/i18n/en.ts` and `src/i18n/es.ts`, written by hand; `Intl` formats numbers,
   dates, durations and plurals. The language follows the browser and can be switched in
   Settings. The model's reply language is not forced.

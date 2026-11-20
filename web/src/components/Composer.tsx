@@ -49,7 +49,7 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
-  const [reading, setReading] = useState<string[]>([]);
+  const [reading, setReading] = useState<Array<{ id: string; name: string }>>([]);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
@@ -64,7 +64,8 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
   const addFiles = async (files: File[]) => {
     setErrors([]);
     for (const file of files) {
-      setReading((r) => [...r, file.name]);
+      const pending = { id: newId(), name: file.name };
+      setReading((r) => [...r, pending]);
       try {
         const att = await readAttachment(file, info, imagePreset);
         setAttachments((list) => [...list, att]);
@@ -72,7 +73,7 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
         const code = e instanceof AttachError ? e.code : 'read_failed';
         setErrors((list) => [...list, t(`attach.${code}`, { name: file.name })]);
       } finally {
-        setReading((r) => r.filter((n) => n !== file.name));
+        setReading((r) => r.filter((p) => p.id !== pending.id));
       }
     }
   };
@@ -144,9 +145,9 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
               onRange={(range) => setAttachments((list) => list.map((x) => (x.id === a.id && x.kind === 'pdf' ? { ...x, range } : x)))}
             />
           ))}
-          {reading.map((name) => (
-            <li key={`reading-${name}`} className="attachment muted">
-              {t('composer.reading', { name })}
+          {reading.map((p) => (
+            <li key={p.id} className="attachment muted">
+              {t('composer.reading', { name: p.name })}
             </li>
           ))}
         </ul>
@@ -255,7 +256,7 @@ function AttachmentItem({ a, info, onRemove, onRange }: { a: Attachment; info: S
             aria-invalid={sel === null}
           />
           <span id={`${rangeId}-hint`} className="hint">
-            {t('composer.pdfPagesHint', { count: a.pages.length })}
+            {tp('composer.pdfPagesHint', a.pages.length)}
           </span>
           {sel === null && <p className="error">{t('composer.pdfRangeInvalid')}</p>}
           {sel && sel.images.length > 0 && <p className="hint">{tp('composer.pdfImages', sel.images.length)}</p>}

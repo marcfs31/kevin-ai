@@ -92,6 +92,47 @@ describe('App', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('The server answered 400: tools are not supported');
   });
 
+  it('saves the sent message before the reply finishes', async () => {
+    mockFetch((_url, init) => heldReply(init));
+    renderApp();
+    typeAndSend('keep me');
+    await screen.findByText('partial');
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
+    expect(saved.conversations[0].messages.map((m: { typed?: string }) => m.typed)).toEqual(['keep me']);
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText('Stopped.');
+  });
+
+  it('localizes proxy errors and errors sent inside a stream', async () => {
+    let call = 0;
+    mockFetch(() => {
+      call += 1;
+      return call === 1
+        ? new Response(JSON.stringify({ error: { message: 'lm-serve is not reachable', type: 'proxy_error', code: 'upstream_unreachable' } }), { status: 502 })
+        : sseResponse([delta('a'), 'data: {"error":{"message":"generation failed","type":"server_error","code":null}}\n\n']);
+    });
+    renderApp(['es']);
+    const box = screen.getByLabelText('Mensaje');
+    fireEvent.change(box, { target: { value: 'uno' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect((await screen.findByRole('alert')).textContent).toBe('El proxy no puede conectar con lm-serve. ¿Está en marcha?');
+    await screen.findByRole('button', { name: 'Enviar' });
+    fireEvent.change(box, { target: { value: 'dos' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
+    expect(screen.getAllByRole('alert')[1]?.textContent).toBe('El servidor detuvo la respuesta con un error: generation failed');
+  });
+
+  it('attaches two files that share a name', async () => {
+    mockFetch(() => sseResponse([FINISH]));
+    renderApp();
+    const files = [new File(['one'], 'notes.txt'), new File(['two'], 'notes.txt')];
+    fireEvent.change(screen.getByTestId('file-input'), { target: { files } });
+    const list = await screen.findByRole('list', { name: 'Attachments' });
+    await waitFor(() => expect(within(list).getAllByText('notes.txt')).toHaveLength(2));
+    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('renders raw HTML in a reply as text', async () => {
     mockFetch(() => sseResponse([delta('<script>alert(1)</script> and <b>bold</b>'), FINISH, DONE]));
     const { container } = renderApp();
