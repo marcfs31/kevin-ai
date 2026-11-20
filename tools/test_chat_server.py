@@ -226,6 +226,19 @@ class ApiTest(ProxyTest):
         self.assertIsNone(resp.getheader("Retry-After"))
         self.assertEqual(resp.getheader("Content-Type"), "application/json")
 
+    def test_response_headers_are_the_proxys_own(self):
+        class Up:
+            def __init__(self, **h):
+                self.h = h
+
+            def getheader(self, name):
+                return self.h.get(name.replace("-", "_"))
+
+        h = dict(chat_server.response_headers(Up(Content_Type="text/event-stream; charset=utf-8", Retry_After=" 5 ")))
+        self.assertEqual(h, {"Content-Type": "text/event-stream", "Cache-Control": "no-store", "Retry-After": "5"})
+        h = dict(chat_server.response_headers(Up(Content_Type="text/html\r\nX: y", Retry_After="Wed, 21 Oct")))
+        self.assertEqual(h, {"Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"})
+
     def test_disconnect_while_reading_prompt_closes_upstream(self):
         self.upstream.prefill_s = 5.0
         s = socket.create_connection(("127.0.0.1", self.port))
