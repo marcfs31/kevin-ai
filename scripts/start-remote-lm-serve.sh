@@ -20,49 +20,71 @@ EOF
   exit 2
 }
 
-ID=""
-EXTRA=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --id)
-      [[ $# -ge 2 ]] || usage
-      ID=$2
-      shift 2
-      ;;
-    --host|--port)
-      echo "start-remote-lm-serve.sh: refusing $1 (tunnel expects 127.0.0.1:8080)" >&2
-      exit 2
-      ;;
-    --help|-h) usage ;;
-    --)
-      shift
-      EXTRA+=("$@")
-      break
-      ;;
-    *)
-      EXTRA+=("$1")
-      shift
-      ;;
+# One shell word per argument, for the remote login shell. The result is parsed
+# once, as the remote command, and is not run through another substitution.
+quote_for_remote() {
+  local a out=
+  for a in "$@"; do
+    out+=$(printf '%q ' "$a")
+  done
+  printf '%s' "$out"
+}
+
+main() {
+  local ID="" DIR_NAME SSH_TARGET REMOTE_BIN REMOTE_ROOT quoted
+  local -a EXTRA=() args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --id)
+        [[ $# -ge 2 ]] || usage
+        ID=$2
+        shift 2
+        ;;
+      --host|--port)
+        echo "start-remote-lm-serve.sh: refusing $1 (tunnel expects 127.0.0.1:8080)" >&2
+        exit 2
+        ;;
+      --help|-h) usage ;;
+      --)
+        shift
+        EXTRA+=("$@")
+        break
+        ;;
+      *)
+        EXTRA+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  case "$ID" in
+    qwen) DIR_NAME=qwen3.5-4b ;;
+    gemma) DIR_NAME=gemma-4-e4b ;;
+    *) echo "start-remote-lm-serve.sh: --id must be qwen or gemma" >&2; usage ;;
   esac
-done
 
-case "$ID" in
-  qwen) DIR_NAME=qwen3.5-4b ;;
-  gemma) DIR_NAME=gemma-4-e4b ;;
-  *) echo "start-remote-lm-serve.sh: --id must be qwen or gemma" >&2; usage ;;
-esac
+  SSH_TARGET=${LM_SERVE_SSH:-toor@192.168.1.96}
+  REMOTE_BIN=${LM_SERVE_REMOTE_BIN:-'$HOME/small-llm-in-c/bin/lm-serve'}
+  REMOTE_ROOT=${LM_SERVE_REMOTE_ROOT:-'$HOME/models'}
 
-SSH_TARGET=${LM_SERVE_SSH:-toor@192.168.1.96}
-REMOTE_BIN=${LM_SERVE_REMOTE_BIN:-'$HOME/small-llm-in-c/bin/lm-serve'}
-REMOTE_ROOT=${LM_SERVE_REMOTE_ROOT:-'$HOME/models'}
-
-# Build a remote argv array as a NUL-safe bash -c script.
-# shellcheck disable=SC2016
-remote_cmd=$(cat <<'EOS'
+  # Values travel as positional parameters. A leading $HOME/ is expanded on the
+  # remote host, after the login shell has parsed each quoted word.
+  local remote_script
+  remote_script=$(cat <<'EOS'
 set -euo pipefail
-BIN=__BIN__
-ROOT=__ROOT__
-DIR="$ROOT/__DIR__"
+expand_home() {
+  local v=$1 prefix='$HOME/'
+  if [[ "$v" == "$prefix"* ]]; then
+    printf '%s\n' "$HOME/${v#"$prefix"}"
+  else
+    printf '%s\n' "$v"
+  fi
+}
+BIN=$(expand_home "$1")
+ROOT=$(expand_home "$2")
+DIR_NAME=$3
+shift 3
+DIR="$ROOT/$DIR_NAME"
 WEIGHTS="$DIR/model.q8.safetensors"
 LOG=${HOME}/logs/lm-serve.log
 mkdir -p "$(dirname "$LOG")"
@@ -81,7 +103,7 @@ if pgrep -x lm-serve >/dev/null; then
     exit 1
   fi
 fi
-nohup "$BIN" --model "$DIR" --weights "$WEIGHTS" --host 127.0.0.1 --port 8080 __EXTRA__ >"$LOG" 2>&1 &
+nohup "$BIN" --model "$DIR" --weights "$WEIGHTS" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
 # Wait until /health answers (model load can take a while).
 ok=0
 for _ in $(seq 1 120); do
@@ -107,15 +129,15 @@ echo
 EOS
 )
 
-# Quote each extra flag for remote bash.
-extra_q=
-for a in "${EXTRA[@]+"${EXTRA[@]}"}"; do
-  extra_q+=$(printf '%q ' "$a")
-done
+  args=("$REMOTE_BIN" "$REMOTE_ROOT" "$DIR_NAME")
+  if [[ ${#EXTRA[@]} -gt 0 ]]; then
+    args+=("${EXTRA[@]}")
+  fi
+  quoted=$(quote_for_remote "${args[@]}")
 
-remote_cmd=${remote_cmd//__BIN__/$REMOTE_BIN}
-remote_cmd=${remote_cmd//__ROOT__/$REMOTE_ROOT}
-remote_cmd=${remote_cmd//__DIR__/$DIR_NAME}
-remote_cmd=${remote_cmd//__EXTRA__/$extra_q}
+  exec ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_TARGET" "bash -s -- $quoted" <<<"$remote_script"
+}
 
-exec ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_TARGET" "bash -s" <<<"$remote_cmd"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

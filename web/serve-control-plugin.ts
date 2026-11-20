@@ -4,10 +4,16 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
-import { parseServeOptions, serveScriptArgs, type ServeResult } from './src/lib/serveControl.ts';
+import { controlRequestAllowed, parseServeOptions, serveScriptArgs, type ServeResult } from './src/lib/serveControl.ts';
 
 const webDir = dirname(fileURLToPath(import.meta.url));
 const scriptPath = resolve(webDir, '..', 'scripts', 'start-remote-lm-serve.sh');
+
+function header(req: import('node:http').IncomingMessage, name: string): string | null {
+  const value = req.headers[name];
+  if (Array.isArray(value)) return value[0] ?? null;
+  return typeof value === 'string' ? value : null;
+}
 
 function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   return new Promise((resolveBody, reject) => {
@@ -53,10 +59,17 @@ export function serveControl(): Plugin {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url?.split('?')[0] ?? '';
         if (url !== '/control/serve') return next();
-        if (req.method !== 'POST') {
-          res.statusCode = 405;
+        const gate = controlRequestAllowed({
+          method: req.method ?? '',
+          contentType: header(req, 'content-type'),
+          origin: header(req, 'origin'),
+          secFetchSite: header(req, 'sec-fetch-site'),
+          host: header(req, 'host'),
+        });
+        if (!gate.ok) {
+          res.statusCode = gate.status;
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ ok: false, error: 'POST only' } satisfies ServeResult));
+          res.end(JSON.stringify({ ok: false, error: gate.error } satisfies ServeResult));
           return;
         }
         if (!existsSync(scriptPath)) {
