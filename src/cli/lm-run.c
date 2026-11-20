@@ -132,7 +132,8 @@ int main(int argc, char **argv)
         else return usage();
     }
     if (image || vrows) {
-        if (!model || !image || !vrows || tokstr || outp || mtp || greedy) return usage();
+        if (!model || !image || !vrows || tokstr || outp || mtp || mtp_out || greedy || ctx || threads || fast ||
+            no_prefill || profile) return usage();
         return run_image(model, weights, image, vrows);
     }
     if (!model || !tokstr || (mtp_out && !mtp)) return usage();
