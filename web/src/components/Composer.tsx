@@ -7,6 +7,7 @@ import {
 } from '../lib/attachments';
 import { WARN_WAIT_SECONDS } from '../lib/estimate';
 import { imageToPng } from '../lib/image';
+import { finePointer } from '../lib/pointer';
 import type { Assessment } from '../lib/request';
 
 interface Props {
@@ -87,6 +88,8 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // A phone keyboard has no Shift+Enter. Return inserts a line; Send is the button.
+    if (!finePointer()) return;
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       send();
@@ -103,7 +106,7 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
   useEffect(() => {
     const ended = wasBusy.current && !busy;
     wasBusy.current = busy;
-    if (!ended) return;
+    if (!ended || !finePointer()) return;
     const el = document.activeElement;
     if (el instanceof HTMLElement && el !== document.body && !el.closest('.composer')) return;
     inputRef.current?.focus();
@@ -166,7 +169,8 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
         ref={inputRef}
         rows={3}
         value={text}
-        placeholder={t('composer.placeholder')}
+        placeholder={finePointer() ? t('composer.placeholder') : t('composer.placeholderTouch')}
+        enterKeyHint={finePointer() ? 'send' : 'enter'}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
       />

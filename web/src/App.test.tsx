@@ -129,6 +129,7 @@ describe('App', () => {
       return new Response('no', { status: 500 });
     });
     renderApp(['es-ES']);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(await screen.findByRole('button', { name: 'Ajustes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Arrancar Qwen3.5-4B' }));
     const alert = await screen.findByRole('alert');
@@ -281,6 +282,64 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'es' } });
     expect(await screen.findByRole('button', { name: 'Enviar' })).toBeTruthy();
     expect(document.documentElement.lang).toBe('es');
+  });
+
+  it('names the conversation toggle in full and shows a short label', () => {
+    mockFetch(() => sseResponse([FINISH]));
+    renderApp();
+    const toggle = screen.getByRole('button', { name: 'Show conversations' });
+    expect(toggle.textContent).toBe('Show');
+  });
+
+  it('inserts a line from a phone keyboard instead of sending', async () => {
+    const fetchMock = mockFetch(() => sseResponse([delta('nope'), FINISH, DONE]));
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return false;
+      },
+    }));
+    try {
+      renderApp();
+      const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+      expect(document.activeElement).not.toBe(box);
+      expect(box.placeholder).toBe('Message');
+      expect(box.getAttribute('enterkeyhint')).toBe('enter');
+      fireEvent.change(box, { target: { value: 'line' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await Promise.resolve();
+      expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/completions'))).toHaveLength(0);
+      expect(box.value).toBe('line');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('asks before replacing the running model', async () => {
+    const fetchMock = mockFetch(
+      () => new Response(JSON.stringify({ ok: true, model: 'gemma', health: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderApp();
+    await screen.findByText('Model: qwen3.5-4b');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    const qwen = screen.getByRole('button', { name: 'Start Qwen3.5-4B' });
+    expect(qwen.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(qwen);
+    expect(confirm).toHaveBeenCalledWith('Stop the current model and start Qwen3.5-4B?');
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/control/serve'))).toBe(false);
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/control/serve'))).toBe(true));
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/control/serve'));
+    expect(JSON.parse(String(call?.[1]?.body)).model).toBe('gemma');
   });
 
   it('shows the live prompt-reading timer before the first token', async () => {

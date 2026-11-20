@@ -203,8 +203,15 @@ function Chat({ state, setState, storage, notice }: {
       </a>
       <header className="top">
         <div className="brand">
-          <button type="button" className="sidebar-toggle" aria-expanded={sidebarOpen} aria-controls="sidebar" onClick={() => setSidebarOpen((o) => !o)}>
-            {sidebarOpen ? t('sidebar.hide') : t('sidebar.show')}
+          <button
+            type="button"
+            className="sidebar-toggle"
+            aria-expanded={sidebarOpen}
+            aria-controls="sidebar"
+            aria-label={sidebarOpen ? t('sidebar.hide') : t('sidebar.show')}
+            onClick={() => setSidebarOpen((o) => !o)}
+          >
+            {sidebarOpen ? t('sidebar.hideShort') : t('sidebar.showShort')}
           </button>
           <h1>{t('app.title')}</h1>
         </div>
@@ -244,6 +251,7 @@ function Chat({ state, setState, storage, notice }: {
           <div id="settings" className="panels">
             <ServerPanel
               busy={busy}
+              runningModel={info?.model ?? null}
               onStarted={() => {
                 setServer({ kind: 'loading' });
                 fetchInfo();
