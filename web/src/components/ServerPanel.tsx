@@ -63,12 +63,24 @@ type Status =
   | { kind: 'ok'; model: ServeModelId }
   | { kind: 'error'; message: string; detail?: string };
 
+const MODEL_LABEL: Record<ServeModelId, string> = {
+  qwen: 'Qwen3.5-4B',
+  gemma: 'Gemma 4 E4B',
+};
+
 interface Props {
   busy: boolean;
+  /** Model id reported by the server, when one is running. */
+  runningModel?: string | null;
   onStarted: () => void;
 }
 
-export function ServerPanel({ busy, onStarted }: Props) {
+function isRunning(runningModel: string | null | undefined, id: ServeModelId): boolean {
+  if (!runningModel) return false;
+  return runningModel.toLowerCase().includes(id);
+}
+
+export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
   const { t } = useI18n();
   const id = useId();
   const [draft, setDraft] = useState<ServeDraft>(EMPTY_SERVE_DRAFT);
@@ -83,10 +95,11 @@ export function ServerPanel({ busy, onStarted }: Props) {
       setStatus({ kind: 'error', message: t('serve.badParams') });
       return;
     }
+    if (!window.confirm(t('serve.confirm', { model: MODEL_LABEL[model] }))) return;
     setStatus({ kind: 'starting', model });
     try {
       const result = await startRemoteServe(opts);
-        if (!result.ok) {
+      if (!result.ok) {
         setStatus({ kind: 'error', message: t('serve.failed'), detail: result.error || undefined });
         return;
       }
@@ -109,16 +122,16 @@ export function ServerPanel({ busy, onStarted }: Props) {
         {t('serve.hint')}
       </p>
       <div className="serve-actions" role="group" aria-describedby={`${id}-hint`}>
-        <button type="button" className="primary" disabled={busy || starting} onClick={() => void start('qwen')}>
-          {starting && status.model === 'qwen' ? t('serve.starting', { model: 'Qwen3.5-4B' }) : t('serve.startQwen')}
+        <button type="button" className="primary" aria-pressed={isRunning(runningModel, 'qwen')} disabled={busy || starting} onClick={() => void start('qwen')}>
+          {starting && status.model === 'qwen' ? t('serve.starting', { model: MODEL_LABEL.qwen }) : t('serve.startQwen')}
         </button>
-        <button type="button" className="primary" disabled={busy || starting} onClick={() => void start('gemma')}>
-          {starting && status.model === 'gemma' ? t('serve.starting', { model: 'Gemma 4 E4B' }) : t('serve.startGemma')}
+        <button type="button" className="primary" aria-pressed={isRunning(runningModel, 'gemma')} disabled={busy || starting} onClick={() => void start('gemma')}>
+          {starting && status.model === 'gemma' ? t('serve.starting', { model: MODEL_LABEL.gemma }) : t('serve.startGemma')}
         </button>
       </div>
       {status.kind === 'ok' && (
         <p className="hint" role="status">
-          {t('serve.started', { model: status.model === 'qwen' ? 'Qwen3.5-4B' : 'Gemma 4 E4B' })}
+          {t('serve.started', { model: MODEL_LABEL[status.model] })}
         </p>
       )}
       {status.kind === 'error' && (

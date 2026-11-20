@@ -16,6 +16,7 @@ describe('ServerPanel', () => {
         <ServerPanel busy={false} onStarted={() => {}} />
       </I18nProvider>,
     );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }));
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe('Could not start the model on the server.');
