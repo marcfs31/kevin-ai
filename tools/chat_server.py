@@ -99,11 +99,21 @@ def index_dist(root):
     return files
 
 
-def safe_header_value(value):
-    """An upstream header value fit to send on, or None: a folded header keeps its CR/LF."""
-    if value is None or any(c in value for c in "\r\n\x00"):
-        return None
-    return value
+def response_headers(upstream):
+    """Headers for the browser, chosen by the proxy: nothing upstream sends is copied verbatim,
+    so a folded or hostile upstream header cannot split the response."""
+    ctype = (upstream.getheader("Content-Type") or "").lower()
+    if ctype.startswith("text/event-stream"):
+        ctype = "text/event-stream"
+    elif ctype.startswith("application/json"):
+        ctype = "application/json"
+    else:
+        ctype = "text/plain; charset=utf-8"
+    out = [("Content-Type", ctype), ("Cache-Control", "no-store")]
+    retry = (upstream.getheader("Retry-After") or "").strip()
+    if retry.isascii() and retry.isdigit():
+        out.append(("Retry-After", str(int(retry))))
+    return out
 
 
 def is_api(path):
@@ -278,10 +288,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             self.send_response(resp.status)
             self.common_headers()
-            for name in ("Content-Type", "Cache-Control", "WWW-Authenticate", "Retry-After"):
-                value = safe_header_value(resp.getheader(name))
-                if value:
-                    self.send_header(name, value)
+            for name, value in response_headers(resp):
+                self.send_header(name, value)
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
