@@ -107,6 +107,42 @@ int lm_bind_mat(LmBind *b, const char *name, int rows, int cols, LmMat *out, cha
     return 0;
 }
 
+int lm_bind_mat_any(LmBind *b, const char *name, int rows, int cols, int flat, LmMat *out, char *err, size_t n)
+{
+    const LmTensor *t = lm_st_find(&b->st, name);
+    if (!t) return lm_fail(err, n, "tensor %s is missing from the weights", name);
+    if (t->dtype == LM_DT_I8) {
+        if (!b->q8) return lm_fail(err, n, "tensor %s is I8 outside a q8 file", name);
+        return lm_bind_mat(b, name, rows, cols, out, err, n);
+    }
+    if (!flat || (t->ndim == 2 && !t->rank_overflow)) {
+        const int q8 = b->q8;
+        b->q8 = 0;                    /* a float matrix kept as it is inside a q8 file */
+        const int rc = lm_bind_mat(b, name, rows, cols, out, err, n);
+        b->q8 = q8;
+        return rc;
+    }
+    if (t->shape[0] != rows || t->numel != (int64_t)rows * cols)
+        return lm_fail(err, n, "tensor %s has d0 %lld and %lld elements, the config needs [%d][%d]", name,
+                       (long long)t->shape[0], (long long)t->numel, rows, cols);
+    if (t->dtype != LM_DT_BF16 && t->dtype != LM_DT_F32)
+        return lm_fail(err, n, "matrix %s has dtype %s; BF16 or F32 expected", name, lm_dtype_name(t->dtype));
+    const void *p = lm_st_data(&b->st, t);
+    if (!p) {
+        void *cp = lm_bind_own(b, malloc((size_t)(t->nbytes ? t->nbytes : 1)));
+        if (!cp) return lm_fail(err, n, "out of memory binding %s", name);
+        if (lm_st_read(&b->st, t, cp, err, n) != 0) return -1;
+        p = cp;
+    }
+    b->bytes += (uint64_t)t->nbytes;
+    memset(out, 0, sizeof *out);
+    out->rows = rows;
+    out->cols = cols;
+    if (t->dtype == LM_DT_BF16) { out->kind = LM_MAT_BF16; out->bf = (const uint16_t *)p; }
+    else { out->kind = LM_MAT_F32; out->f = (const float *)p; }
+    return 0;
+}
+
 int lm_bind_open(LmBind *b, const char *path, int q8, char *err, size_t n)
 {
     if (lm_st_open(&b->st, path, 1, err, n) != 0) return -1;

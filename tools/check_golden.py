@@ -20,6 +20,11 @@ but the last), also:
      each within the same tolerance of the golden head row with the same argmax;
   4. `lm-run ... --tokens <greedy prompt> --greedy N --mtp`: speculative greedy prints exactly the
      golden ids (the head only proposes; the main model decides every id).
+When the fixture holds golden_vision_{bf16,q8}.json (the image encoder, qwen35-vl-tiny), also,
+for each variant and each image listed:
+  5. `lm-run ... --image IMG --vision-rows-out TMP`: TMP is exactly the golden number of rows of
+     the golden width, all finite, every value within 2e-4 * max|golden rows of that image|.
+The text checks 1-4 are required unless the fixture holds vision goldens.
 Then `lm-quant --model DIR --out TMP`: its file must be byte-identical to model.q8.safetensors.
 
 Fails closed: a missing binary or fixture, non-zero exit, timeout, wrong row count, NaN/Inf,
@@ -184,6 +189,41 @@ def check_variant(label, run_bin, model_dir, weights, golden_path, vocab, timeou
         label, len(tokens), 100 * max_err, n_ids, len(mtp), 100 * mtp_err)
 
 
+def check_vision(label, run_bin, model_dir, weights, golden_path, timeout, tmp):
+    need_file(golden_path, "golden file")
+    with open(golden_path) as f:
+        images = json.load(f)["images"]
+    if not images:
+        raise Failure("%s lists no images" % golden_path)
+    worst, nrows = 0.0, 0
+    for im in images:
+        img = os.path.join(model_dir, im["image"])
+        need_file(img, "test image")
+        rows = im["rows"]
+        width = len(rows[0])
+        out = os.path.join(tmp, "%s.%s.f32" % (label, im["image"]))
+        cmd = [run_bin, "--model", model_dir] + (["--weights", weights] if weights else [])
+        stdout = run(cmd + ["--image", img, "--vision-rows-out", out], timeout, "%s vision run on %s" % (label, im["image"]))
+        if stdout:
+            raise Failure("%s vision run printed to stdout: %r" % (label, stdout[:80]))
+        with open(out, "rb") as f:
+            raw = f.read()
+        if len(raw) != len(rows) * width * 4:
+            raise Failure("%s %s: %d bytes of rows, expected %d rows of %d" % (label, im["image"], len(raw), len(rows), width))
+        got = struct.unpack("<%df" % (len(rows) * width), raw)
+        if not all(math.isfinite(v) for v in got):
+            raise Failure("%s %s: rows contain NaN or Inf" % (label, im["image"]))
+        flat = [v for r in rows for v in r]
+        tol = REL_TOL * (max(abs(v) for v in flat) or 1.0)
+        for i, (a, b) in enumerate(zip(got, flat)):
+            if abs(a - b) > tol:
+                raise Failure("%s %s: row %d value %d is %.9g, golden %.9g (tolerance %.3g)"
+                              % (label, im["image"], i // width, i % width, a, b, tol))
+        worst = max(worst, max(abs(a - b) for a, b in zip(got, flat)) / tol)
+        nrows += len(rows)
+    return "%s vision %d images, %d rows (worst error %.0f%% of tolerance)" % (label, len(images), nrows, 100 * worst)
+
+
 def check_quantiser(quant_bin, model_dir, golden_q8, timeout, tmp):
     need_file(golden_q8, "q8 fixture")
     out = os.path.join(tmp, "quant.q8.safetensors")
@@ -227,11 +267,19 @@ def check(run_bin, quant_bin, fixtures, timeout):
     q8 = os.path.join(fixtures, "model.q8.safetensors")
     need_file(q8, "q8 fixture")
     parts = []
+    vision = os.path.isfile(os.path.join(fixtures, "golden_vision_bf16.json"))
+    text = not vision or os.path.isfile(os.path.join(fixtures, "golden_bf16.json"))
     with tempfile.TemporaryDirectory() as tmp:
-        parts.append(check_variant("bf16", run_bin, fixtures, None,
-                                   os.path.join(fixtures, "golden_bf16.json"), vocab, timeout, tmp))
-        parts.append(check_variant("q8", run_bin, fixtures, q8,
-                                   os.path.join(fixtures, "golden_q8.json"), vocab, timeout, tmp))
+        if text:
+            parts.append(check_variant("bf16", run_bin, fixtures, None,
+                                       os.path.join(fixtures, "golden_bf16.json"), vocab, timeout, tmp))
+            parts.append(check_variant("q8", run_bin, fixtures, q8,
+                                       os.path.join(fixtures, "golden_q8.json"), vocab, timeout, tmp))
+        if vision:
+            parts.append(check_vision("bf16", run_bin, fixtures, None,
+                                      os.path.join(fixtures, "golden_vision_bf16.json"), timeout, tmp))
+            parts.append(check_vision("q8", run_bin, fixtures, q8,
+                                      os.path.join(fixtures, "golden_vision_q8.json"), timeout, tmp))
         size = check_quantiser(quant_bin, fixtures, q8, timeout, tmp)
     parts.append("quantiser byte-identical (%d bytes)" % size)
     tag = " [gemma4]" if family == "gemma4" else ""

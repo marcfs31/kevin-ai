@@ -65,6 +65,7 @@ test: $(TESTS) bin/lm-run bin/lm-serve bin/lm-chat
 gate: bin/lm-run bin/lm-quant
 	python3 tools/check_golden.py --run bin/lm-run --quant bin/lm-quant --fixtures tests/fixtures/qwen35-tiny
 	python3 tools/check_golden.py --run bin/lm-run --quant bin/lm-quant --fixtures tests/fixtures/gemma4-tiny
+	python3 tools/check_golden.py --run bin/lm-run --quant bin/lm-quant --fixtures tests/fixtures/qwen35-vl-tiny
 
 # Not a gate: how far the opt-in int8 fast path is from the q8 oracle (see README, --fast).
 gate-fast: bin/lm-run bin/lm-quant

@@ -25,14 +25,17 @@ import fixture_cmp  # noqa: E402
 import make_ops  # noqa: E402
 import make_tiny  # noqa: E402
 import make_tiny_gemma4  # noqa: E402
+import make_tiny_vl  # noqa: E402
 import quant_ref  # noqa: E402
 import ref_gemma4 as gem  # noqa: E402
 import ref_qwen35 as ref  # noqa: E402
+import ref_vision_qwen35 as rv  # noqa: E402
 import safetensors as st  # noqa: E402
 
 ROOT = os.path.dirname(TOOLS)
 TINY = os.path.join(ROOT, "tests", "fixtures", "qwen35-tiny")
 GTINY = os.path.join(ROOT, "tests", "fixtures", "gemma4-tiny")
+VLTINY = os.path.join(ROOT, "tests", "fixtures", "qwen35-vl-tiny")
 OPS = os.path.join(ROOT, "tests", "fixtures", "ops")
 
 REAL_TEXT_KEYS = [
@@ -646,6 +649,18 @@ FAKE_RUN = textwrap.dedent('''\
     def opt(name):
         return a[a.index(name) + 1] if name in a else None
     mode = os.environ.get("FAKE_MODE", "ok")
+    if opt("--image"):
+        import ref_vision_qwen35 as rv
+        rgb, w, h = rv.read_ppm(opt("--image"))
+        vrows = rv.VisionModel.load(opt("--model"), opt("--weights")).encode(rgb, h, w)
+        if mode == "visionperturb":
+            vrows[-1][3] += 0.05
+        if mode == "visionmissing":
+            vrows = vrows[:-1]
+        with open(opt("--vision-rows-out"), "wb") as f:
+            for r in vrows:
+                f.write(struct.pack("<%df" % len(r), *r))
+        sys.exit(0)
     model = ref.Model.load(opt("--model"), opt("--weights"))
     tokens = [int(t) for t in opt("--tokens").split(",")]
     greedy = int(opt("--greedy") or 0)
@@ -736,6 +751,23 @@ class CheckGoldenTests(unittest.TestCase):
         self.assertIn("check_golden FAILED", p.stderr)
         self.assertIn(needle, p.stderr)
         self.assertEqual(p.stdout, "")
+
+    def test_vision_fixture_passes(self):
+        p = self.go(fixtures=VLTINY)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("bf16 vision 3 images, 11 rows", p.stdout)
+        self.assertIn("q8 vision 3 images, 11 rows", p.stdout)
+
+    def test_wrong_vision_rows_fail(self):
+        self.assert_fails(self.go(fake_mode="visionperturb", fixtures=VLTINY), "bf16 img_64x64.ppm: row 3 value 3")
+        self.assert_fails(self.go(fake_mode="visionmissing", fixtures=VLTINY), "bytes of rows")
+
+    def test_fixture_without_goldens_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            for n in ("config.json", "model.safetensors", "model.q8.safetensors"):
+                with open(os.path.join(d, n), "wb") as f:
+                    f.write(rbytes(os.path.join(VLTINY, n)))
+            self.assert_fails(self.go(fixtures=d), "golden file not found")
 
     def test_perturbed_logits_fail(self):
         self.assert_fails(self.go(fake_mode="perturb"), "bf16 logits row 5")
@@ -1388,6 +1420,48 @@ class GemmaFixtureTests(unittest.TestCase):
         self.assertEqual(sorted(n for n in files if n[:-5] not in qwen),
                          ["gelu_tanh.json", "gelu_tanh_mul.json", "gemma_rmsnorm.json", "gemma_rope.json",
                           "logit_softcap.json", "sliding_attention.json"])
+
+
+class VisionOracleTests(unittest.TestCase):
+    def test_smart_resize_matches_transformers(self):
+        # expected values printed by transformers' qwen2_vl smart_resize @56547cb (factor 32,
+        # min_pixels 65536, max_pixels 1048576)
+        for hw, want in (((1000, 800), (992, 800)), ((32, 32), (256, 256)), ((4000, 3000), (1152, 864)),
+                         ((300, 1200), (288, 1216)), ((64, 96), (224, 320))):
+            self.assertEqual(rv.smart_resize(*hw), want, hw)
+        with self.assertRaises(ValueError):
+            rv.smart_resize(2000, 9)
+
+    def test_mrope_positions(self):
+        # 2 text tokens, a 4x6 patch grid (2x3 merged), 1 text token
+        pos = rv.mrope_positions([("text", 2), ("image", 4, 6), ("text", 1)])
+        self.assertEqual(pos[:2], [(0, 0, 0), (1, 1, 1)])
+        self.assertEqual(pos[2:8], [(2, 2, 2), (2, 2, 3), (2, 2, 4), (2, 3, 2), (2, 3, 3), (2, 3, 4)])
+        self.assertEqual(pos[8], (5, 5, 5))     # text resumes at p + max(2, 3)
+
+    def test_section_axis(self):
+        sec = [11, 11, 10]   # Qwen3.5-4B mrope_section
+        axes = [rv.section_axis(k, sec) for k in range(32)]
+        self.assertEqual(axes[:6], [0, 1, 2, 0, 1, 2])
+        self.assertEqual(axes[30:], [0, 1])
+        self.assertEqual(sum(1 for a in axes if a == 1), 11)
+        self.assertEqual(sum(1 for a in axes if a == 2), 10)
+
+    def test_config_refusals(self):
+        raw = jload(os.path.join(VLTINY, "config.json"))
+        rv.VisionConfig(raw)
+        for key, val in (("deepstack_visual_indexes", [5]), ("hidden_act", "gelu"), ("num_position_embeddings", 15)):
+            bad = json.loads(json.dumps(raw))
+            bad["vision_config"][key] = val
+            with self.assertRaises(ValueError):
+                rv.VisionConfig(bad)
+
+    def test_patch_order_is_block_major(self):
+        self.assertEqual(rv.block_order(4, 4, 2)[:8],
+                         [(0, 0), (0, 1), (1, 0), (1, 1), (0, 2), (0, 3), (1, 2), (1, 3)])
+
+    def test_vl_fixture_regenerates_identically(self):
+        self.assertEqual(make_tiny_vl.main(["--check"]), 0)
 
 
 if __name__ == "__main__":
