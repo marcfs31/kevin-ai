@@ -10,6 +10,7 @@
 #include "model/lm_vision.h"
 
 #define FIX "tests/fixtures/qwen35-vl-tiny"
+#define GFIX "tests/fixtures/gemma4-vl-tiny"
 
 static char g_dir[512];
 
@@ -68,23 +69,28 @@ static jval *read_json(const char *path)
 
 /* Every golden image within 2e-4 * max|golden| (docs/PLAN.md gate), and a second encode
  * bit-identical to the first. */
-static void check_variant(const char *weights, const char *golden)
+static void check_variant(const char *fix, const char *weights, const char *golden)
 {
     char err[512];
-    LmVision *v = lm_vision_open(FIX, weights, err, sizeof err);
+    LmVision *v = lm_vision_open(fix, weights, err, sizeof err);
     CHECK_MSG(v != NULL, "%s", err);
     jval *g = read_json(golden);
     CHECK_MSG(g != NULL, "cannot read %s", golden);
     if (!v || !g) { lm_vision_close(v); json_free_tree(g); return; }
     const LmVisionInfo *in = lm_vision_info(v);
-    CHECK(in->family == LM_VISION_QWEN && in->unit == 32 && in->out_dim == 64);
-    CHECK(in->image_token == 248056 && in->start_token == 248053 && in->end_token == 248054);
+    if (!strcmp(fix, FIX)) {
+        CHECK(in->family == LM_VISION_QWEN && in->unit == 32 && in->out_dim == 64);
+        CHECK(in->image_token == 248056 && in->start_token == 248053 && in->end_token == 248054);
+    } else {
+        CHECK(in->family == LM_VISION_GEMMA && in->unit == 48 && in->out_dim == 64);
+        CHECK(in->image_token == 258880 && in->start_token == 255999 && in->end_token == 258882);
+    }
     jval *imgs = json_get(g, "images");
     CHECK(imgs && imgs->t == J_ARR && imgs->len == 3);
     for (int i = 0; imgs && i < imgs->len; i++) {
         jval *im = imgs->kids[i], *rows = json_get(im, "rows");
         char path[1024];
-        snprintf(path, sizeof path, "%s/%s", FIX, json_get(im, "image")->str);
+        snprintf(path, sizeof path, "%s/%s", fix, json_get(im, "image")->str);
         uint8_t *rgb;
         int w, h;
         CHECK_MSG(lm_ppm_read(path, &rgb, &w, &h, err, sizeof err) == 0, "%s", err);
@@ -131,14 +137,29 @@ static void test_refusals(void)
     /* a family without an encoder */
     lt_write_text(P("config.json"), "{\"model_type\":\"llama\"}");
     CHECK_ERR(lm_vision_open(g_dir, NULL, err, sizeof err) == NULL ? -1 : 0, err, "no supported vision encoder");
+
+    /* Gemma: sides in multiples of patch * pooling, and inside the position table */
+    v = lm_vision_open(GFIX, NULL, err, sizeof err);
+    CHECK_MSG(v != NULL, "%s", err);
+    if (!v) return;
+    CHECK(lm_vision_tokens(v, 96, 144) == 6);
+    CHECK(lm_vision_tokens(v, 64, 96) == -1);
+    CHECK(lm_vision_tokens(v, 48 * 5, 48 * 5) == 25);    /* 15 patches a side: inside the 16-entry table */
+    CHECK(lm_vision_tokens(v, 48 * 6, 48) == -1);        /* 18 patches: past it */
+    lm_vision_close(v);
+    /* the text-only Gemma fixture's vision stubs are refused, naming a tensor */
+    CHECK(lm_vision_open("tests/fixtures/gemma4-tiny", NULL, err, sizeof err) == NULL);
+    CHECK_MSG(strstr(err, "model.vision_tower.") || strstr(err, "model.embed_vision."), "%s", err);
 }
 
 int main(void)
 {
     lt_mkdtemp(g_dir);
     test_ppm();
-    check_variant(NULL, FIX "/golden_vision_bf16.json");
-    check_variant(FIX "/model.q8.safetensors", FIX "/golden_vision_q8.json");
+    check_variant(FIX, NULL, FIX "/golden_vision_bf16.json");
+    check_variant(FIX, FIX "/model.q8.safetensors", FIX "/golden_vision_q8.json");
+    check_variant(GFIX, NULL, GFIX "/golden_vision_bf16.json");
+    check_variant(GFIX, GFIX "/model.q8.safetensors", GFIX "/golden_vision_q8.json");
     test_refusals();
     lt_rmtree(g_dir);
     return lt_finish("test_vision");

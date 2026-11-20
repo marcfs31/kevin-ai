@@ -640,9 +640,21 @@ token, and about 50 MiB for the rollback state. Measured on the target: 78% of d
 accepted, but 0.91x the plain speed, because a two-token verify costs more than one token on
 this CPU. It is not in `lm-chat` or `lm-serve`.
 
+```
+bin/lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F
+```
+
+`--image` runs only the image encoder (Qwen3.5 or Gemma 4) on a binary PPM that is already at
+the encoder's grid size: sides in multiples of 32 for Qwen3.5 and 48 for Gemma 4. It writes one
+little-endian f32 row of the text hidden size per image token. Resizing, other image formats,
+and feeding the rows to the language model come in later phases (docs/PLAN.md "Phase 3").
+
 ### bin/lm-quant
 
-Writes the q8 file from the bf16 checkpoint.
+Writes the q8 file from the bf16 checkpoint. The vision encoder's weights are kept: matrices
+whose width is a multiple of 32 are quantised, the rest are copied, and the Conv patch
+embedding is stored flattened to the matrix the encoder multiplies by. A q8 file written by an
+older `lm-quant` has no vision weights; write it again to use images.
 
 ```
 bin/lm-quant --model DIR --out FILE
