@@ -49,6 +49,14 @@ size_t   lm_gemma_state_bytes(const LmGemmaCfg *c, int ctx);
  * then not applied, as with lm_gemma_feed, but earlier chunks are). */
 int      lm_gemma_prefill(LmGemma *g, const int *tokens, int n, float *logits);
 
+/* The Gemma image block of lm_prefill_image (include/lm/lm.h): start token, n vision rows of
+ * `width` floats, end token. The caller has checked grid_h * grid_w == n; positions stay
+ * sequential and attention stays causal. pos_thw (nullable) receives (n + 2) * 3 ints,
+ * (p + k, p + k, p + k) for each token of the block, and only on LM_OK. LM_ERR_TOKEN and
+ * LM_ERR_CTX feed nothing; LM_ERR_IO leaves earlier tokens of this call fed. */
+int      lm_gemma_prefill_image(LmGemma *g, const float *rows, int n, int width, float *logits,
+                                int *pos_thw);
+
 /* The state regions at position pos, in a fixed order: for every cache-owning layer its K and
  * V rows in use (min(pos, slots) of them; a ring once it wrapped is all of its slots). With
  * lm_gemma_set_pos this is what lm_snapshot / lm_restore copy. */

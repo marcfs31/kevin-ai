@@ -56,12 +56,17 @@ typedef struct {
     LmMat q, k, v, o;
     const float *q_norm, *k_norm;   /* [head_dim], zero-centred */
 } LmAttnW;
-typedef struct { int heads, kv_heads, head_dim, rot; float theta, eps; } LmAttnDims;
+typedef struct {
+    int heads, kv_heads, head_dim, rot;
+    float theta, eps;
+    int mrope_h, mrope_w;           /* frequency-index limits; 0 keeps every frequency on t */
+} LmAttnDims;
 size_t lm_attn_scratch(const LmAttnDims *d, int ctx);   /* floats */
-/* Writes K and V of position pos into the caches ([ctx][kv_heads*head_dim]) and attends
- * over positions 0..pos. */
+/* Writes K and V of cache slot pos into the caches ([ctx][kv_heads*head_dim]) and attends
+ * over slots 0..pos. RoPE uses (rt, rh, rw); for text those three are equal. */
 void   lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnDims *d,
-                     float *k_cache, float *v_cache, int pos, int ctx, float *scratch);
+                     float *k_cache, float *v_cache, int pos, int rt, int rh, int rw,
+                     int ctx, float *scratch);
 
 /* ---- batched forms for prompt prefill ----
  * Each *_batch function does for T consecutive tokens exactly what T calls of its
@@ -87,9 +92,11 @@ size_t lm_linear_state_floats(const LmLinDims *d);
 void   lm_linear_mixer_batch(float *out, const float *x, const LmLinW *w, const LmLinDims *d,
                              float *conv_state, float *S, float *scratch, int T, float *ckpt);
 
-/* pos0 is the position of the first of the T tokens; they go to cache slots pos0..pos0+T-1. */
+/* pos0 is the cache slot of the first of the T tokens (slots pos0..pos0+T-1). thw NULL: token t
+ * has M-RoPE (rope0+t, rope0+t, rope0+t). Otherwise thw is T*3 ints, (t, h, w) per token. */
 size_t lm_attn_batch_scratch(const LmAttnDims *d, int ctx, int T);   /* floats */
 void   lm_attn_mixer_batch(float *out, const float *x, const LmAttnW *w, const LmAttnDims *d,
-                           float *k_cache, float *v_cache, int pos0, int ctx, float *scratch, int T);
+                           float *k_cache, float *v_cache, int pos0, const int *thw, int rope0,
+                           int ctx, float *scratch, int T);
 
 #endif /* LM_LAYERS_H */
