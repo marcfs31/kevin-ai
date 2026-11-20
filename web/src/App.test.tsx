@@ -38,6 +38,8 @@ describe('App', () => {
     typeAndSend('hi there');
     expect(await screen.findByText('world')).toBeTruthy();
     expect(within(screen.getByRole('log')).getByText('hi there')).toBeTruthy();
+    expect(within(screen.getByRole('log')).getByText('You')).toBeTruthy();
+    expect(within(screen.getByRole('log')).getByText('Assistant')).toBeTruthy();
     const stats = await screen.findByLabelText('Reply statistics');
     expect(stats.textContent).toContain('12 prompt tokens');
     expect(stats.textContent).toContain('8 from cache');

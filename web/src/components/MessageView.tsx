@@ -59,6 +59,7 @@ function Assistant({ m, live }: { m: AssistantMessage; live: LiveInfo | null }) 
   const { t } = useI18n();
   return (
     <article className="msg assistant" aria-label={t('message.assistant')}>
+      <p className="role">{t('message.assistant')}</p>
       {m.reasoning && (
         <details className="think" open={live !== null && !m.content}>
           <summary>{t('message.thinking')}</summary>
@@ -92,6 +93,7 @@ export function MessageView({ m, live = null }: { m: Message; live?: LiveInfo | 
   if (m.role === 'assistant') return <Assistant m={m} live={live} />;
   return (
     <article className="msg user" aria-label={t('message.you')}>
+      <p className="role">{t('message.you')}</p>
       {m.typed && <p className="typed">{m.typed}</p>}
       {m.attachmentNames.length > 0 && <p className="attached">{t('message.attached', { names: m.attachmentNames.join(', ') })}</p>}
     </article>
