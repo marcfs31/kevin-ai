@@ -30,7 +30,11 @@ describe('privacy', () => {
       const calls = f.text.match(/\bfetch\(/g) ?? [];
       if (f.path === join('lib', 'api.ts')) {
         expect(calls).toHaveLength(1);
-        expect(f.text.match(/send\('([^']+)'/g)).toEqual(["send('/v1/models'", "send('/v1/chat/completions'"]);
+        expect(f.text.match(/send\('([^']+)'/g)).toEqual([
+          "send('/v1/models'",
+          "send('/control/serve'",
+          "send('/v1/chat/completions'",
+        ]);
       } else expect(calls, f.path).toEqual([]);
     }
   });

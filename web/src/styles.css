@@ -106,6 +106,10 @@ textarea { resize: vertical; inline-size: 100%; }
 .main { grid-area: main; display: flex; flex-direction: column; min-block-size: 0; }
 .settings { display: grid; gap: var(--space-2); padding: var(--space-4); border-block-end: 1px solid var(--border); background: var(--surface); }
 .settings h2 { margin: 0; font-size: 1rem; }
+.serve-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.serve-advanced { display: grid; gap: var(--space-2); }
+.serve-advanced[open] { display: grid; gap: var(--space-2); }
+.serve-check { display: flex; align-items: center; gap: var(--space-2); }
 .log { flex: 1 1 auto; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); }
 .empty { color: var(--muted); margin: auto; text-align: center; max-inline-size: 30rem; }
 
