@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, emptyState, loadState, migrate, saveState } from './storage';
+import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, emptyState, loadState, migrate, saveState, truncateFrom, type Message } from './storage';
 
 describe('migrate', () => {
   it('loads a document missing newer fields with their defaults', () => {
@@ -106,5 +106,25 @@ describe('loadState and saveState', () => {
   it('reports a full storage', () => {
     const full = { setItem: () => { throw new DOMException('full', 'QuotaExceededError'); } } as unknown as Storage;
     expect(saveState(full, emptyState())).toBe('full');
+  });
+});
+
+describe('truncateFrom', () => {
+  const msgs = [
+    { id: 'u1', role: 'user', content: 'a', typed: 'a', attachmentNames: [], createdAt: 0 },
+    { id: 'a1', role: 'assistant', content: 'b', reasoning: '', status: 'done', error: null, stats: null, createdAt: 1 },
+    { id: 't1', role: 'tool', toolCallId: 'c', name: 'f', content: 'r', isError: false, createdAt: 2 },
+    { id: 'u2', role: 'user', content: 'c', typed: 'c', attachmentNames: [], createdAt: 3 },
+  ] as Message[];
+
+  it('drops the chosen message and everything after, including tool results', () => {
+    expect(truncateFrom(msgs, 1).map((m) => m.id)).toEqual(['u1']);
+    expect(truncateFrom(msgs, 0)).toEqual([]);
+    expect(truncateFrom(msgs, 3).map((m) => m.id)).toEqual(['u1', 'a1', 't1']);
+  });
+
+  it('leaves the list alone when the index is out of range', () => {
+    expect(truncateFrom(msgs, -1)).toBe(msgs);
+    expect(truncateFrom(msgs, 99)).toBe(msgs);
   });
 });
