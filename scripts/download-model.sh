@@ -11,7 +11,7 @@ Usage: scripts/download-model.sh [--model NAME] [--allow-hdd] [--help] [MODEL_DI
 
 Downloads the pinned checkpoint files for one model into MODEL_DIR.
 
-  --model NAME  qwen3.5-4b (default) or gemma-4-e4b
+  --model NAME  qwen3.5-4b (default), gemma-4-e4b or whiterabbitneo-2.5-7b-q4km
   --allow-hdd   Continue when MODEL_DIR is on a rotational disk. Not recommended: the
                 engine reads the weights from this directory and an HDD is far too slow.
   --help        Show this help and exit.
@@ -35,6 +35,16 @@ gemma-4-e4b (phase 2, Apache-2.0)
     processor_config.json  1689 bytes, sha256 pinned (images)
     config.json, tokenizer_config.json, chat_template.jinja, generation_config.json
                         no pinned size or hash (presence checked)
+
+whiterabbitneo-2.5-7b-q4km (GGUF Qwen2.5-Coder 7B fine-tune, Apache-2.0)
+  bartowski/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-GGUF at revision 4874da7ad5fa4da4f2584ae64ddc21f5a8e7dfce
+  (base model WhiteRabbitNeo/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B, itself Apache-2.0 on Qwen/Qwen2.5-Coder-7B;
+  the licence is also in the file's own metadata, general.license). The Q4_K_M quant, chosen to
+  leave an 11 GB machine room for the KV cache (see README):
+    WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-Q4_K_M.gguf  4683072032 bytes, sha256 pinned
+  The file carries the tokenizer and the chat template; nothing else is needed. Keep exactly
+  one .gguf in the directory: the engine treats a directory with one .gguf and no config.json
+  as a GGUF model.
 
 Behaviour:
   - Requires curl and sha256sum, and free space of the checkpoint size plus 1 GB.
@@ -103,8 +113,15 @@ case "$MODEL" in
       "generation_config.json||"
     )
     ;;
+  whiterabbitneo-2.5-7b-q4km)
+    BASE_URL="https://huggingface.co/bartowski/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-GGUF/resolve/4874da7ad5fa4da4f2584ae64ddc21f5a8e7dfce"
+    CHECKPOINT_BYTES=4683072032
+    FILES=(
+      "WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-Q4_K_M.gguf|4683072032|3790b0bf2c505fcbd144b6b69354fe45a83ac09238a87469db0082027c127de4"
+    )
+    ;;
   *)
-    usage_error "unknown model: $MODEL (use qwen3.5-4b or gemma-4-e4b)"
+    usage_error "unknown model: $MODEL (use qwen3.5-4b, gemma-4-e4b or whiterabbitneo-2.5-7b-q4km)"
     ;;
 esac
 
