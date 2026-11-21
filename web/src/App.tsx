@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { Composer } from './components/Composer';
 import { MessageView, errorText, type LiveInfo } from './components/MessageView';
 import { TokenLine } from './components/TokenLine';
+import { ChatModelSelect } from './components/ChatModelSelect';
 import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
-import { ApiError, fetchServerInfo, resetServer, streamChat, type ServerInfo } from './lib/api';
+import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { assess, toWire } from './lib/request';
 import { estimateWireTokens, sessionTotals } from './lib/tokens';
@@ -72,8 +73,14 @@ function Chat({ state, setState, storage, notice }: {
   const logRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const busy = live !== null;
-  const info = server.kind === 'ok' ? server.info : null;
+  const serverInfo = server.kind === 'ok' ? server.info : null;
   const active = state.conversations.find((c) => c.id === state.activeId) ?? null;
+  // The model is per conversation; before the first message it is the pick for the next new one.
+  const [draftModel, setDraftModel] = useState<string | null>(null);
+  const modelId = active ? active.model : draftModel;
+  // Context window and vision follow the model chosen, so everything below reads `info`.
+  const info = infoForModel(serverInfo, modelId);
+  const requestModel = serverInfo && serverInfo.models.length > 1 ? (info?.model ?? null) : null;
 
   const fetchInfo = useCallback((signal?: AbortSignal) => {
     fetchServerInfo(signal).then(
@@ -145,7 +152,7 @@ function Chat({ state, setState, storage, notice }: {
     };
     let conv = active;
     if (!conv) {
-      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, messages: [] };
+      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, messages: [] };
       const created = conv;
       setState((s) => ({ ...s, conversations: [...s.conversations, created], activeId: created.id }));
     }
@@ -166,7 +173,7 @@ function Chat({ state, setState, storage, notice }: {
     publish();
     try {
       await streamChat(
-        { messages: wire, temperature: state.settings.temperature, maxTokens: state.settings.maxTokens },
+        { messages: wire, temperature: state.settings.temperature, maxTokens: state.settings.maxTokens, model: requestModel },
         controller.signal,
         (e) => {
           if (e.kind === 'content' || e.kind === 'reasoning') {
@@ -277,6 +284,14 @@ function Chat({ state, setState, storage, notice }: {
             />
           ) : (
             serverLine && <span>{serverLine}</span>
+          )}
+          {serverInfo && serverInfo.models.length > 1 && (
+            <ChatModelSelect
+              models={serverInfo.models}
+              value={info?.model ?? ''}
+              disabled={busy}
+              onChange={(id) => (active ? updateConv(active.id, (c) => ({ ...c, model: id })) : setDraftModel(id))}
+            />
           )}
           {info?.contextLength && <span>{t('server.context', { n: info.contextLength })}</span>}
           {server.kind === 'error' && (

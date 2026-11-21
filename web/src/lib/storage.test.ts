@@ -24,6 +24,11 @@ describe('migrate', () => {
     expect(state?.conversations[0]?.messages[0]).toMatchObject({ stats: { promptTokens: 4, completionTokens: 2, promptEstimate: null, completionEstimate: null } });
   });
 
+  it('loads a conversation saved before models were chosen on the default, and keeps a chosen one', () => {
+    const state = migrate({ version: 1, conversations: [{ id: 'a', messages: [] }, { id: 'b', model: 'rabbit', messages: [] }, { id: 'c', model: 7, messages: [] }] });
+    expect(state?.conversations.map((c) => c.model)).toEqual([null, 'rabbit', null]);
+  });
+
   it('drops broken entries and resets invalid settings', () => {
     const state = migrate({
       version: 1,

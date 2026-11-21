@@ -513,3 +513,6 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   button { min-inline-size: 2.75rem; }
   input[type='range'] { min-block-size: 2.75rem; }
 }
+
+.chat-model { display: inline-flex; align-items: center; gap: 0.4rem; }
+.chat-model select { font: inherit; font-size: 0.8125rem; max-inline-size: 16rem; }

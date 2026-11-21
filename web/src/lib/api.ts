@@ -40,6 +40,8 @@ export interface ChatRequest {
   messages: WireMessage[];
   temperature: number;
   maxTokens: number | null;
+  /** Sent as `model` when set; left out for a server that lists a single model. */
+  model?: string | null;
 }
 
 /** An HTTP or stream failure. status 0 means the server could not be reached. */
@@ -149,6 +151,7 @@ export function requestBody(req: ChatRequest): string {
     temperature: req.temperature,
   };
   if (req.maxTokens !== null) body.max_tokens = req.maxTokens;
+  if (req.model) body.model = req.model;
   return JSON.stringify(body);
 }
 
