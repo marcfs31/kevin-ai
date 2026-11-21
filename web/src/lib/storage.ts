@@ -44,7 +44,23 @@ export interface AssistantMessage {
   createdAt: number;
 }
 
-export type Message = UserMessage | AssistantMessage;
+/** Stands in, for the model, for the `covered` messages just before it. Those stay in the chat, shown as compacted. */
+export interface SummaryMessage {
+  id: string;
+  role: 'summary';
+  content: string;
+  covered: number;
+  /** Made by the automatic trigger rather than the Compact button. */
+  auto: boolean;
+  createdAt: number;
+}
+
+export type Message = UserMessage | AssistantMessage | SummaryMessage;
+
+export function lastSummaryIndex(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i]?.role === 'summary') return i;
+  return -1;
+}
 
 export interface Conversation {
   id: string;
@@ -145,6 +161,10 @@ function message(v: unknown): Message | null {
       stats: stats(o.stats),
       createdAt: time(o.createdAt),
     };
+  }
+  if (o.role === 'summary' && typeof o.content === 'string' && o.content.trim()) {
+    const covered = numOrNull(o.covered);
+    return { id: o.id, role: 'summary', content: o.content, covered: covered !== null && covered >= 0 ? Math.floor(covered) : 0, auto: o.auto === true, createdAt: time(o.createdAt) };
   }
   return null;
 }

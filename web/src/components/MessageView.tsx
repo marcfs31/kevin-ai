@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useI18n, type I18n } from '../i18n';
 import type { ApiError, ContentPart } from '../lib/api';
 import { isAllowedImageDataUrl } from '../lib/attachments';
-import type { AssistantMessage, Message, Stats, UserMessage } from '../lib/storage';
+import type { AssistantMessage, Message, Stats, SummaryMessage, UserMessage } from '../lib/storage';
 import { liveCount, replyCount } from '../lib/tokens';
 import type { Usage } from '../lib/sse';
 import { CopyButton, Markdown } from './Markdown';
@@ -10,7 +10,7 @@ import { TokenLine } from './TokenLine';
 
 const KNOWN_CODES = new Set([
   'image_unsupported', 'image_invalid', 'image_too_large', 'too_many_images', 'context_overflow',
-  'stream_cut', 'bad_stream', 'bad_models', 'upstream_unreachable', 'upstream_failed',
+  'stream_cut', 'bad_stream', 'summary_empty', 'bad_models', 'upstream_unreachable', 'upstream_failed',
 ]);
 
 /** A reply error in the user's language, by code where known. */
@@ -143,7 +143,24 @@ function User({ m }: { m: UserMessage }) {
   );
 }
 
+/** The marker where older turns were replaced by a summary; the summary itself folds away. */
+function Summary({ m }: { m: SummaryMessage }) {
+  const { t, tp } = useI18n();
+  return (
+    <aside className="msg summary" aria-label={t('compact.label')}>
+      <details>
+        <summary>{tp('compact.marker', m.covered)}</summary>
+        <p className="hint">{m.auto ? t('compact.byAuto') : t('compact.byHand')}</p>
+        <div className="md">
+          <Markdown text={m.content} />
+        </div>
+      </details>
+    </aside>
+  );
+}
+
 export function MessageView({ m, live = null }: { m: Message; live?: LiveInfo | null }) {
   if (m.role === 'assistant') return <Assistant m={m} live={live} />;
+  if (m.role === 'summary') return <Summary m={m} />;
   return <User m={m} />;
 }
