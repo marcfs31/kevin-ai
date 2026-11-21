@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useI18n, type I18n } from '../i18n';
-import type { ApiError } from '../lib/api';
-import type { AssistantMessage, Message, Stats } from '../lib/storage';
+import type { ApiError, ContentPart } from '../lib/api';
+import { isAllowedImageDataUrl } from '../lib/attachments';
+import type { AssistantMessage, Message, Stats, UserMessage } from '../lib/storage';
 import { CopyButton, Markdown } from './Markdown';
 
 const KNOWN_CODES = new Set([
@@ -90,14 +91,36 @@ function Assistant({ m, live }: { m: AssistantMessage; live: LiveInfo | null }) 
   );
 }
 
-export function MessageView({ m, live = null }: { m: Message; live?: LiveInfo | null }) {
+function imageParts(content: string | ContentPart[]): Extract<ContentPart, { type: 'image_url' }>[] {
+  if (typeof content === 'string') return [];
+  return content.filter(
+    (p): p is Extract<ContentPart, { type: 'image_url' }> =>
+      p.type === 'image_url' && isAllowedImageDataUrl(p.image_url.url),
+  );
+}
+
+function User({ m }: { m: UserMessage }) {
   const { t } = useI18n();
-  if (m.role === 'assistant') return <Assistant m={m} live={live} />;
+  const images = imageParts(m.content);
   return (
     <article className="msg user" aria-label={t('message.you')}>
       <p className="role">{t('message.you')}</p>
+      {images.length > 0 && (
+        <ul className="msg-images" aria-label={t('message.images')}>
+          {images.map((p, i) => (
+            <li key={i}>
+              <img src={p.image_url.url} alt="" className="msg-thumb" />
+            </li>
+          ))}
+        </ul>
+      )}
       {m.typed && <p className="typed">{m.typed}</p>}
       {m.attachmentNames.length > 0 && <p className="attached">{t('message.attached', { names: m.attachmentNames.join(', ') })}</p>}
     </article>
   );
+}
+
+export function MessageView({ m, live = null }: { m: Message; live?: LiveInfo | null }) {
+  if (m.role === 'assistant') return <Assistant m={m} live={live} />;
+  return <User m={m} />;
 }

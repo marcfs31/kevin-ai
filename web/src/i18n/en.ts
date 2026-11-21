@@ -122,6 +122,7 @@ export const en = {
   'message.waiting': 'Waiting for the reply…',
   'message.stopped': 'Stopped.',
   'message.attached': 'Attached: {names}',
+  'message.images': 'Attached images',
   'message.copy': 'Copy answer',
   'message.copyCode': 'Copy code',
   'message.copied': 'Copied',

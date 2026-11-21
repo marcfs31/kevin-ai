@@ -11,10 +11,14 @@ describe('parseModels', () => {
   });
 
   it('reads context length and vision capabilities', () => {
-    const info = parseModels({
-      data: [{ id: 'm', context_length: 8192, capabilities: { vision: { status: 'ok', max_pixels: 1048576, pixels_per_token: 784, tokens_per_image: null } } }],
+    const qwen = parseModels({
+      data: [{ id: 'm', context_length: 8192, capabilities: { vision: { status: 'ok', max_pixels: 1048576, pixels_per_token: 1024 } } }],
     });
-    expect(info).toMatchObject({ contextLength: 8192, vision: 'ok', maxPixels: 1048576, pixelsPerToken: 784, tokensPerImage: null });
+    expect(qwen).toMatchObject({ contextLength: 8192, vision: 'ok', maxPixels: 1048576, pixelsPerToken: 1024, tokensPerImage: null });
+    const gemma = parseModels({
+      data: [{ id: 'g', capabilities: { vision: { status: 'ok', max_pixels: 1048576, tokens_per_image: 280 } } }],
+    });
+    expect(gemma).toMatchObject({ vision: 'ok', maxPixels: 1048576, pixelsPerToken: null, tokensPerImage: 280 });
   });
 
   it('keeps unavailable distinct from unknown, and refuses unknown statuses', () => {

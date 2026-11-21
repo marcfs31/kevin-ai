@@ -1,5 +1,5 @@
 // Browser-only: decode an image file and re-encode it as PNG at the chosen size.
-import { AttachError, fitSize, type ImageData } from './attachments';
+import { AttachError, MAX_DECODE_SIDE, fitSize, type ImageData } from './attachments';
 
 async function decode(blob: Blob, name: string): Promise<ImageBitmap> {
   try {
@@ -16,6 +16,7 @@ export function canvasToPng(canvas: HTMLCanvasElement): ImageData {
 export async function imageToPng(blob: Blob, name: string, preset: number, maxPixels: number | null): Promise<ImageData> {
   const bitmap = await decode(blob, name);
   try {
+    if (bitmap.width > MAX_DECODE_SIDE || bitmap.height > MAX_DECODE_SIDE) throw new AttachError('too_large', name);
     const size = fitSize(bitmap.width, bitmap.height, preset, maxPixels);
     const canvas = document.createElement('canvas');
     canvas.width = size.width;

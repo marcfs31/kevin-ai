@@ -351,6 +351,23 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .msg.assistant { align-self: stretch; }
 .msg.user .typed { white-space: pre-wrap; margin: 0; }
 .attached { font-size: 0.875rem; color: var(--muted); margin: 0.35rem 0 0; }
+.msg-images {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.msg-thumb {
+  display: block;
+  inline-size: auto;
+  max-inline-size: min(100%, 12rem);
+  max-block-size: 12rem;
+  object-fit: contain;
+  border-radius: 0.25rem;
+  background: var(--surface-2);
+}
 .think {
   border-inline-start: 1px solid var(--border);
   padding-inline-start: 0.75rem;

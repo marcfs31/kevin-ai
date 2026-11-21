@@ -5,6 +5,10 @@ import { estimateImageTokens, estimateTextTokens } from './estimate';
 
 export const MAX_BODY_BYTES = 24 * 1024 * 1024;
 export const MAX_IMAGES = 8;
+/** Server refuses a decoded image larger than this on either side before resizing (Phase 3). */
+export const MAX_DECODE_SIDE = 4096;
+/** lm-serve --image-max-pixels default when /v1/models omits max_pixels. */
+export const DEFAULT_MAX_PIXELS = 1_048_576;
 export const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_IMAGE_FILE_BYTES = 30 * 1024 * 1024;
 export const MAX_PDF_FILE_BYTES = 60 * 1024 * 1024;
@@ -175,17 +179,25 @@ export function estimateAttachment(att: Attachment, info: ServerInfo | null): Es
   return { tokens, images: sel.images.length };
 }
 
+/** OpenAI-style data URLs the server accepts (remote URLs are refused). */
+export function isAllowedImageDataUrl(url: string): boolean {
+  return /^data:image\/(?:png|jpeg|jpg);base64,/i.test(url);
+}
+
 /** The user message content: a plain string, or text and image parts when images are attached. */
 export function buildUserContent(text: string, attachments: Attachment[], visionOk: boolean): string | ContentPart[] {
   const blocks: string[] = [];
   const images: ImageData[] = [];
   for (const att of attachments) {
     if (att.kind === 'text') blocks.push(fence(att.name, att.text));
-    else if (att.kind === 'image') images.push(att);
-    else {
+    else if (att.kind === 'image') {
+      // Keep old servers text-only: never put image parts on the wire without vision.
+      // Only PNG/JPEG data URLs — never remote http(s) URLs.
+      if (visionOk && isAllowedImageDataUrl(att.dataUrl)) images.push(att);
+    } else {
       const sel = selectPdf(att, visionOk);
       if (sel?.text) blocks.push(sel.text);
-      if (sel) images.push(...sel.images);
+      if (sel) images.push(...sel.images.filter((img) => isAllowedImageDataUrl(img.dataUrl)));
     }
   }
   if (text.trim()) blocks.push(text);
