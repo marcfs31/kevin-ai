@@ -137,6 +137,11 @@ void lm_template_set_vision(LmTemplate *t, int start, int pad, int end);
  * a stop id. NULL with a message in err if the tokenizer lacks <|im_start|>, <|im_end|>,
  * <think>, </think>, <tool_call> or </tool_call>. tok must outlive the template. */
 LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen);
+/* Plain ChatML, the template inside the GGUF of Qwen2.5-Coder fine-tunes: <|im_start|>role\n
+ * content<|im_end|>\n per message (content verbatim), then <|im_start|>assistant\n. No default
+ * system prompt, no reasoning block, no tools, no images. <|im_end|> is always a stop id; eos_ids
+ * are extra ones. NULL with a message in err if the tokenizer lacks <|im_start|> or <|im_end|>. */
+LmTemplate *lm_template_chatml(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen);
 /* Gemma 4 (the model's chat_template.jinja, text-only): <bos>, an optional system turn that
  * carries the thinking flag, <|turn>user|model\n ... <turn|>\n turns, generation prompt
  * <|turn>model\n. <turn|> is always a stop id; eos_ids are the others (generation_config.json

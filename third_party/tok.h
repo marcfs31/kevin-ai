@@ -68,7 +68,9 @@ typedef struct {
                           * Han excluded from the letter classes, no '/' tail in the punct rule */
     int qwen35;          /* 1 = Qwen3.5 family: cl100k rule order, but \p{N} one digit at a time,
                           * letters are [\p{L}\p{M}], marks excluded from the punctuation rule */
-    int keep_merges;     /* qwen35 only: model.ignore_merges is false, so a piece that is itself a
+    int qwen2;           /* 1 = Qwen2/2.5 family (GGUF): the cl100k rules with a digit as a piece on its own;
+                          * letters are \p{L}+ (no \p{M}), so pretok_chunk is the matcher. keep_merges applies */
+    int keep_merges;     /* qwen35 and qwen2 only: model.ignore_merges is false, so a piece that is itself a
                           * vocab entry still goes through the merge list (no whole-piece shortcut) */
     int rankbpe;         /* 1 = no merges list (tiktoken-derived vocab): merge the adjacent
                           * pair whose CONCATENATION has the lowest vocab id, exactly
@@ -124,10 +126,15 @@ static char *tk_read_file(const char *path, long *out_n){
 }
 static int cmp_sp_len(const void *a, const void *b){ return ((const Special*)b)->len - ((const Special*)a)->len; }
 
+static void tok_load_text(Tok *T, char *buf);
 static void tok_load(Tok *T, const char *path){
+    long fn; char *buf=tk_read_file(path,&fn);
+    tok_load_text(T,buf);
+}
+/* The document of tokenizer.json already in memory (malloc'd, NUL-terminated); T owns buf. */
+static void tok_load_text(Tok *T, char *buf){
     memset(T,0,sizeof(*T));
     tk_build_bytemap(T);
-    long fn; char *buf=tk_read_file(path,&fn);
     char *arena=NULL; jval *root=json_parse(buf,&arena);
     T->file_buf_=buf; T->json_root_=root;
     jval *model=json_get(root,"model");
@@ -217,9 +224,10 @@ static void tok_load(Tok *T, const char *path){
             if(rx&&rx->t==J_STR&&strstr(rx->str,"\\p{Lu}")) T->o200k=1;
             if(rx&&rx->t==J_STR&&strstr(rx->str,"\\p{Han}")) T->kimi=1;
             if(rx&&rx->t==J_STR&&strstr(rx->str,"[\\p{L}\\p{M}]+")&&!strstr(rx->str,"\\p{Lu}")) T->qwen35=1;
+            if(rx&&rx->t==J_STR&&strstr(rx->str,"?\\p{L}+|\\p{N}|")&&!strstr(rx->str,"\\p{M}")&&!strstr(rx->str,"\\p{Lu}")) T->qwen2=1;
         }
     }
-    if(T->qwen35){
+    if(T->qwen35||T->qwen2){
         jval *ig=json_get(model,"ignore_merges");
         if(!ig || (ig->t==J_BOOL && !ig->boolean)) T->keep_merges=1;   /* absent = HF default false */
     }
@@ -310,8 +318,8 @@ static void pretok_chunk(Tok *T, const unsigned char *p, int a, int b, int *out,
                 if(is_L(cp[j])){ while(j<n && is_L(cp[j])) j++; i=j; bpe_piece(T,p,off[start],off[i],out,no,max); continue; }
             }
         }
-        /* 3) \p{N}{1,3} */
-        if(is_N(c)){ int j=i,k=0; while(j<n && is_N(cp[j]) && k<3){ j++; k++; } i=j; bpe_piece(T,p,off[start],off[i],out,no,max); continue; }
+        /* 3) \p{N}{1,3}  (qwen2: \p{N}, one digit) */
+        if(is_N(c)){ int j=i,k=0,lim=T->qwen2?1:3; while(j<n && is_N(cp[j]) && k<lim){ j++; k++; } i=j; bpe_piece(T,p,off[start],off[i],out,no,max); continue; }
         /* 4) ' ?[^\s\p{L}\p{N}]+[\r\n]*' */
         {
             int j=i;

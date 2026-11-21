@@ -300,15 +300,14 @@ int main(int argc, char **argv)
     if (!model) { fputs("lm-chat: --model DIR is required\n", stderr); usage(stderr); return 2; }
     if (n_images && !prompt) { fputs("lm-chat: --image requires --prompt (attach to the first message)\n", stderr); return 2; }
 
-    char err[1024] = "", path[4096];
+    char err[1024] = "";
     LmProfile prof;
     if (lm_profile_read(model, &prof, err, sizeof err)) { fprintf(stderr, "lm-chat: %s\n", err); return 1; }
     /* flag > the model directory's generation_config.json > the built-in default */
     if (temperature < 0) temperature = prof.has_temperature ? prof.temperature : think ? 0.6 : 0.7;
     if (top_p < 0) top_p = prof.has_top_p ? prof.top_p : think ? 0.95 : 0.8;
     if (top_k < 0) top_k = prof.has_top_k ? prof.top_k : 20;
-    snprintf(path, sizeof path, "%s/tokenizer.json", model);
-    LmTok *tok = lm_tok_open(path, err, sizeof err);
+    LmTok *tok = lm_tok_open_model(model, err, sizeof err);
     if (!tok) { fprintf(stderr, "lm-chat: %s\n", err); return 1; }
     LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-chat: %s\n", err); lm_tok_close(tok); return 1; }

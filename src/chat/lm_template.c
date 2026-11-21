@@ -556,6 +556,83 @@ LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, 
     return t;
 }
 
+/* ---- plain ChatML (Qwen2 / Qwen2.5 GGUF models) ----------------------------------
+ * The chat template stored in the GGUF file of WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B:
+ *   for each message: <|im_start|>role\ncontent<|im_end|>\n     (content verbatim, not trimmed)
+ *   then the generation prompt <|im_start|>assistant\n
+ * No default system prompt, no thinking block, no tools. Messages with image parts are
+ * refused. Generation stops at <|im_end|> or any extra eos id. */
+
+static int c_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRenderOpts *opts,
+                    LmIds *out, char *err, size_t errlen)
+{
+    const Qwen *q = (const Qwen *)t->impl;
+#define FAIL(m) do { if (err && errlen) snprintf(err, errlen, "%s", m); return -1; } while (0)
+    out->n = 0;
+    if (opts && opts->n_spans) *opts->n_spans = 0;
+    if (n <= 0) FAIL("No messages provided.");
+    int has_user = 0;
+    for (int i = 0; i < n; i++) {
+        if (msgs[i].role == LM_ROLE_USER) has_user = 1;
+        if (i > 0 && msgs[i].role == LM_ROLE_SYSTEM) FAIL("System message must be at the beginning.");
+        for (int k = 0; k < msgs[i].n_parts; k++)
+            if (msgs[i].parts[k].kind == LM_PART_IMAGE) FAIL("This model takes text only: image parts are not supported.");
+    }
+    if (!has_user) FAIL("No user query found in messages.");
+    Bld b = { q->tok, out, NULL, 0, 0, 0 };
+    for (int i = 0; i < n; i++) {
+        const LmMsg *m = &msgs[i];
+        b_special(&b, q->im_start);
+        b_text(&b, m->role == LM_ROLE_SYSTEM ? "system\n" : m->role == LM_ROLE_USER ? "user\n" : "assistant\n");
+        if (m->role == LM_ROLE_USER && m->parts && m->n_parts > 0) {
+            for (int k = 0; k < m->n_parts; k++) if (m->parts[k].text) b_text(&b, m->parts[k].text);
+        } else {
+            b_text(&b, m->content ? m->content : "");
+        }
+        b_special(&b, q->im_end);
+        b_text(&b, "\n");
+    }
+    b_special(&b, q->im_start);
+    b_text(&b, "assistant\n");
+    b_flush(&b);
+    free(b.txt);
+    if (b.oom) FAIL("out of memory");
+    return 0;
+#undef FAIL
+}
+
+LmTemplate *lm_template_chatml(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen)
+{
+    Qwen *q = (Qwen *)calloc(1, sizeof *q);
+    LmTemplate *t = (LmTemplate *)calloc(1, sizeof *t);
+    if (!q || !t) {
+        free(q); free(t);
+        if (err && errlen) snprintf(err, errlen, "out of memory");
+        return NULL;
+    }
+    q->tok = tok;
+    q->vis_start = q->vis_pad = q->vis_end = -1;
+    q->think = q->think_end = q->tool_call = q->tool_call_end = -1;   /* never match a generated id */
+    if (lm_tok_require(tok, "<|im_start|>", &q->im_start, err, errlen) ||
+        lm_tok_require(tok, "<|im_end|>", &q->im_end, err, errlen)) {
+        free(q); free(t);
+        return NULL;
+    }
+    q->stop[q->n_stop++] = q->im_end;
+    for (int i = 0; i < n_eos; i++) {
+        int dup = 0;
+        for (int j = 0; j < q->n_stop; j++) if (q->stop[j] == eos_ids[i]) dup = 1;
+        if (!dup && eos_ids[i] >= 0 && q->n_stop < MAX_STOP) q->stop[q->n_stop++] = eos_ids[i];
+    }
+    t->name = "chatml";
+    t->render = c_render;
+    t->parser_new = q_parser_new;
+    t->is_stop = q_is_stop;
+    t->destroy = q_destroy;
+    t->impl = q;
+    return t;
+}
+
 /* ---- Gemma 4 --------------------------------------------------------------------
  * Mirrors chat_template.jinja of google/gemma-4-E4B-it, text only:
  *   <bos>

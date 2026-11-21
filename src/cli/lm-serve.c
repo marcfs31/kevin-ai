@@ -1070,11 +1070,10 @@ int main(int argc, char **argv)
     const char *key = getenv("LM_SERVE_API_KEY");
     if (key && !key[0]) key = NULL;
 
-    char err[1024] = "", path[4096];
+    char err[1024] = "";
     LmProfile prof;
     if (lm_profile_read(model, &prof, err, sizeof err)) { fprintf(stderr, "lm-serve: %s\n", err); return 1; }
-    snprintf(path, sizeof path, "%s/tokenizer.json", model);
-    LmTok *tok = lm_tok_open(path, err, sizeof err);
+    LmTok *tok = lm_tok_open_model(model, err, sizeof err);
     if (!tok) { fprintf(stderr, "lm-serve: %s\n", err); return 1; }
     LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-serve: %s\n", err); lm_tok_close(tok); return 1; }

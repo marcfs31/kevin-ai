@@ -38,6 +38,8 @@
 
 #include <stddef.h>
 
+#include "io/lm_gguf.h"
+
 typedef struct LmTok LmTok;
 
 /* Longest buffer lm_tok_piece() may need. */
@@ -48,6 +50,17 @@ typedef struct LmTok LmTok;
  * list or added_tokens entry. */
 LmTok *lm_tok_open(const char *path, char *err, size_t errlen);
 void   lm_tok_close(LmTok *t);
+
+/* The byte-level BPE tables of a GGUF file (tokenizer.ggml.*, model "gpt2", pre "qwen2") as a
+ * tokenizer of the Qwen2 family: NFC, then the Qwen2 split (a digit is a piece on its own) and
+ * BPE. Control tokens (type 3) are special added tokens, user-defined ones (4) added but not
+ * special, unused placeholders (5) absent. Nothing refers to g afterwards. NULL with a message
+ * in err for any other tokenizer model or pre-tokenizer name or a malformed table. */
+LmTok *lm_tok_open_gguf(const LmGguf *g, char *err, size_t errlen);
+
+/* The tokenizer of a model path as the CLIs name it: DIR/tokenizer.json, or the tables inside
+ * a GGUF model (lm_gguf_locate). */
+LmTok *lm_tok_open_model(const char *model, char *err, size_t errlen);
 
 /* Size of the id -> string table: every id the file defines is < lm_tok_n_ids(). */
 int lm_tok_n_ids(const LmTok *t);
