@@ -43,6 +43,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'serve.title': 'Modelo en el servidor',
   'serve.hint': 'Al pulsar se detiene el lm-serve actual en la máquina y se arranca el modelo elegido. El túnel local sigue activo.',
   'serve.startQwen': 'Arrancar Qwen3.5-4B',
+  'serve.startQwenUncensored': 'Arrancar Qwen3.5-4B sin censura',
   'serve.startGemma': 'Arrancar Gemma 4 E4B',
   'serve.confirm': '¿Detener el modelo actual y arrancar {model}?',
   'serve.starting': 'Arrancando {model}…',

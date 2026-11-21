@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Stop the remote lm-serve (if any) and start one for Qwen or Gemma.
+# Stop the remote lm-serve (if any) and start one for Qwen, Qwen uncensored or Gemma.
 # Extra flags are forwarded to lm-serve as-is; omit a flag to keep lm-serve's own default.
 # The local SSH tunnel to port 8080 is left alone — only the remote process is replaced.
 set -euo pipefail
 
 usage() {
   cat <<'EOF' >&2
-usage: start-remote-lm-serve.sh --id qwen|gemma [lm-serve flags…]
+usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma [lm-serve flags…]
 
-  --id qwen|gemma   which checkpoint under ~/models on the remote host
+  --id qwen|qwen-uncensored|gemma
+                    which checkpoint under ~/models on the remote host
   Remaining arguments are passed to lm-serve (for example --ctx 8192 --think).
   --host and --port are always 127.0.0.1 and 8080 so the local tunnel keeps working.
 
@@ -59,8 +60,9 @@ main() {
 
   case "$ID" in
     qwen) DIR_NAME=qwen3.5-4b ;;
+    qwen-uncensored) DIR_NAME=qwen3.5-4b-uncensored ;;
     gemma) DIR_NAME=gemma-4-e4b ;;
-    *) echo "start-remote-lm-serve.sh: --id must be qwen or gemma" >&2; usage ;;
+    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored or gemma" >&2; usage ;;
   esac
 
   SSH_TARGET=${LM_SERVE_SSH:-toor@192.168.1.96}

@@ -65,6 +65,7 @@ type Status =
 
 const MODEL_LABEL: Record<ServeModelId, string> = {
   qwen: 'Qwen3.5-4B',
+  'qwen-uncensored': 'Qwen3.5-4B Uncensored',
   gemma: 'Gemma 4 E4B',
 };
 
@@ -77,7 +78,11 @@ interface Props {
 
 function isRunning(runningModel: string | null | undefined, id: ServeModelId): boolean {
   if (!runningModel) return false;
-  return runningModel.toLowerCase().includes(id);
+  const name = runningModel.toLowerCase();
+  // The uncensored model's name also contains "qwen"; keep the two buttons apart.
+  if (id === 'qwen') return name.includes('qwen') && !name.includes('uncensored');
+  if (id === 'qwen-uncensored') return name.includes('qwen') && name.includes('uncensored');
+  return name.includes(id);
 }
 
 export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
@@ -124,6 +129,9 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
       <div className="serve-actions" role="group" aria-describedby={`${id}-hint`}>
         <button type="button" className="primary" aria-pressed={isRunning(runningModel, 'qwen')} disabled={busy || starting} onClick={() => void start('qwen')}>
           {starting && status.model === 'qwen' ? t('serve.starting', { model: MODEL_LABEL.qwen }) : t('serve.startQwen')}
+        </button>
+        <button type="button" className="primary" aria-pressed={isRunning(runningModel, 'qwen-uncensored')} disabled={busy || starting} onClick={() => void start('qwen-uncensored')}>
+          {starting && status.model === 'qwen-uncensored' ? t('serve.starting', { model: MODEL_LABEL['qwen-uncensored'] }) : t('serve.startQwenUncensored')}
         </button>
         <button type="button" className="primary" aria-pressed={isRunning(runningModel, 'gemma')} disabled={busy || starting} onClick={() => void start('gemma')}>
           {starting && status.model === 'gemma' ? t('serve.starting', { model: MODEL_LABEL.gemma }) : t('serve.startGemma')}
