@@ -29,6 +29,16 @@ describe('ModelCtxPicker', () => {
     expect(screen.getByRole('dialog', { name: 'Model and context' })).toBeTruthy();
   });
 
+  it('marks Uncensored models with a warning', () => {
+    renderPicker();
+    fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
+    const warns = screen.getAllByTitle('Uncensored: fewer safety filters than the stock model');
+    expect(warns).toHaveLength(2);
+    expect(screen.getByRole('button', { name: /Qwen3.5-4B Uncensored/ }).querySelector('.model-warn')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Gemma 4 E4B Uncensored/ }).querySelector('.model-warn')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Gemma 4 E4B' }).querySelector('.model-warn')).toBeNull();
+  });
+
   it('does not POST when confirm is cancelled', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);

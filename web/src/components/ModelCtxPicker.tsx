@@ -7,8 +7,10 @@ import {
   SERVE_MODEL_OPTIONS,
   ctxPresetsFor,
   formatCtxPreset,
+  isUncensoredServeModel,
   matchServeModel,
 } from '../lib/serveModels';
+import { UncensoredMark } from './UncensoredMark';
 import { draftToOptions, EMPTY_SERVE_DRAFT } from './ServerPanel';
 
 type Status =
@@ -136,6 +138,7 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
                 <button
                   key={id}
                   type="button"
+                  className={isUncensoredServeModel(id) ? 'has-uncensored-warn' : undefined}
                   aria-pressed={model === id}
                   disabled={disabled}
                   onClick={() => {
@@ -144,6 +147,7 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
                     if (ctxPreset !== null && !next.includes(ctxPreset)) setCtxPreset(null);
                   }}
                 >
+                  {isUncensoredServeModel(id) && <UncensoredMark />}
                   {label}
                 </button>
               ))}

@@ -3,6 +3,7 @@ import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { SERVE_DEFAULTS, startRemoteServe, type ServeModelId, type ServeOptions } from '../lib/serve';
 import { isServeModelRunning, SERVE_MODEL_LABEL } from '../lib/serveModels';
+import { UncensoredMark } from './UncensoredMark';
 
 export interface ServeDraft {
   maxTokens: string;
@@ -116,7 +117,8 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
         <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'qwen')} disabled={busy || starting} onClick={() => void start('qwen')}>
           {starting && status.model === 'qwen' ? t('serve.starting', { model: SERVE_MODEL_LABEL.qwen }) : t('serve.startQwen')}
         </button>
-        <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'qwen-uncensored')} disabled={busy || starting} onClick={() => void start('qwen-uncensored')}>
+        <button type="button" className="primary has-uncensored-warn" aria-pressed={isServeModelRunning(runningModel, 'qwen-uncensored')} disabled={busy || starting} onClick={() => void start('qwen-uncensored')}>
+          <UncensoredMark />
           {starting && status.model === 'qwen-uncensored' ? t('serve.starting', { model: SERVE_MODEL_LABEL['qwen-uncensored'] }) : t('serve.startQwenUncensored')}
         </button>
         <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'gemma')} disabled={busy || starting} onClick={() => void start('gemma')}>
@@ -125,7 +127,8 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
         <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'whiterabbitneo')} disabled={busy || starting} onClick={() => void start('whiterabbitneo')}>
           {starting && status.model === 'whiterabbitneo' ? t('serve.starting', { model: SERVE_MODEL_LABEL.whiterabbitneo }) : t('serve.startWhiteRabbitNeo')}
         </button>
-        <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'gemma-uncensored')} disabled={busy || starting} onClick={() => void start('gemma-uncensored')}>
+        <button type="button" className="primary has-uncensored-warn" aria-pressed={isServeModelRunning(runningModel, 'gemma-uncensored')} disabled={busy || starting} onClick={() => void start('gemma-uncensored')}>
+          <UncensoredMark />
           {starting && status.model === 'gemma-uncensored' ? t('serve.starting', { model: SERVE_MODEL_LABEL['gemma-uncensored'] }) : t('serve.startGemmaUncensored')}
         </button>
       </div>

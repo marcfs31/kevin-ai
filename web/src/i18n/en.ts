@@ -86,6 +86,7 @@ export const en = {
   'picker.ctxAuto': 'Auto (server default)',
   'picker.ctxSize': '{label}',
   'picker.start': 'Start',
+  'picker.uncensoredWarn': 'Uncensored: fewer safety filters than the stock model',
 
   'chatModel.label': 'Model for this chat',
   'chatModel.option': '{model} · {n} tokens of context',

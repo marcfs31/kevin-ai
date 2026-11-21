@@ -88,6 +88,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'picker.ctxAuto': 'Automático (predeterminado del servidor)',
   'picker.ctxSize': '{label}',
   'picker.start': 'Arrancar',
+  'picker.uncensoredWarn': 'Sin censura: menos filtros de seguridad que el modelo de referencia',
 
   'chatModel.label': 'Modelo de este chat',
   'chatModel.option': '{model} · {n} tokens de contexto',
