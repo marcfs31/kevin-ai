@@ -255,7 +255,8 @@ writes `<bos>`). 24 `added_tokens` (all special, `normalized` false) are matched
 raw text first. Decoder: `▁` -> space, byte-fallback tokens reassembled to UTF-8, no
 strip. Must handle long single words without quadratic blow-up on a 2k-token prompt.
 
-**Chat template** (`chat_template.jinja`, text only, no tools):
+**Chat template** (`chat_template.jinja`; text here, tool calling is described under
+`lm-serve` in the README and implemented in `src/chat/lm_template.c` / `lm_toolfmt.c`):
 `<bos>` + [`<|turn>system\n` + trim(system) + `<turn|>\n`] + per message
 `<|turn>{user|model}\n` + trim(content) + `<turn|>\n`; generation prompt
 `<|turn>model\n`. Thinking off by default (`enable_thinking` false; on adds
