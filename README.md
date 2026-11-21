@@ -164,6 +164,15 @@ The service starts a server when it is first used, stops it after five idle minu
 three at once and none while less than 700 MiB of memory is available. The files tool may only
 touch `~/chat-files`.
 
+### Web search for the chat (SearXNG)
+
+`scripts/setup-remote-searxng.sh` installs SearXNG on the same machine (a pinned commit, in `~/opt/searxng`
+with its own virtualenv made by `uv`; settings in `~/.config/searxng/settings.yml`, written once, with
+a random key) and starts it on 127.0.0.1:8888 with the JSON format on. It needs about 250 MB. In
+Settings > Tools and internet, turn the internet on and put `http://127.0.0.1:8888` as the web search
+address: the address is used by the tool service, which runs on that machine too. Queries go from
+SearXNG to the search engines it is configured for, and nowhere else.
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
