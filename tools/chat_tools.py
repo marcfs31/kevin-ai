@@ -195,6 +195,13 @@ def check_address(host, port, allow_private):
     return infos[0][4][0].split("%")[0]
 
 
+def tls_context():
+    """The default context, refusing anything older than TLS 1.2."""
+    ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
+
 def open_connection(url, allow_private, timeout):
     parts = urllib.parse.urlsplit(url)
     port = parts.port or (443 if parts.scheme == "https" else 80)
@@ -205,7 +212,7 @@ def open_connection(url, allow_private, timeout):
         raise ToolError("unreachable", f"cannot connect to {parts.hostname}: {e}", 502) from None
     if parts.scheme == "https":
         try:
-            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=parts.hostname)
+            sock = tls_context().wrap_socket(sock, server_hostname=parts.hostname)
         except (ssl.SSLError, OSError) as e:
             sock.close()
             raise ToolError("unreachable", f"TLS to {parts.hostname} failed: {e}", 502) from None
