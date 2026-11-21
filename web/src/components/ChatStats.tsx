@@ -2,7 +2,7 @@ import { useI18n } from '../i18n';
 import type { ServerInfo } from '../lib/api';
 import { chatFigures, contextBar } from '../lib/chatStats';
 import type { Message } from '../lib/storage';
-import type { Figure } from '../lib/tokens';
+import type { Count, Figure } from '../lib/tokens';
 
 function Box({ kind, label, value }: { kind: 'prompt' | 'reply' | 'free' | 'plain'; label: string; value: string }) {
   return (
@@ -15,10 +15,10 @@ function Box({ kind, label, value }: { kind: 'prompt' | 'reply' | 'free' | 'plai
 
 /** "This chat": the context window as one bar of coloured boxes with their numbers, and the
  * chat's totals as boxes under it. Every figure is also written out, so colour is never the only cue. */
-export function ChatStats({ messages, systemPrompt, autoCompact, info }: { messages: Message[]; systemPrompt: string; autoCompact: boolean; info: ServerInfo | null }) {
+export function ChatStats({ messages, systemPrompt, autoCompact, info, live }: { messages: Message[]; systemPrompt: string; autoCompact: boolean; info: ServerInfo | null; live: Count | null }) {
   const { t, num } = useI18n();
-  const figures = chatFigures(messages);
-  const bar = contextBar(messages, systemPrompt, info);
+  const figures = chatFigures(messages, live);
+  const bar = contextBar(messages, systemPrompt, info, live);
   if (!figures || !bar) return null;
   const f = (x: Figure) => `${x.estimated ? '≈' : ''}${num(x.n)}`;
   const approx = bar.estimated ? '≈' : '';
