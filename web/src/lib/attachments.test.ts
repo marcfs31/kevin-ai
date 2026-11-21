@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerInfo } from './api';
 import {
-  AttachError, buildUserContent, checkText, classifyFile, estimateAttachment, fence, fitSize, joinTextItems, parsePageRange,
-  selectPdf, type Attachment,
+  AttachError, DEFAULT_MAX_PIXELS, MAX_BODY_BYTES, MAX_DECODE_SIDE, MAX_IMAGES, buildUserContent, checkText, classifyFile,
+  estimateAttachment, fence, fitSize, isAllowedImageDataUrl, joinTextItems, parsePageRange, selectPdf, type Attachment,
 } from './attachments';
 import { checkContext, estimateImageTokens, estimateTextTokens, estimateWaitSeconds } from './estimate';
 import { requestBody } from './api';
@@ -89,7 +89,7 @@ describe('estimates', () => {
     expect(estimateTextTokens('abcdefgh')).toBe(3);
   });
   it('counts images from tokens_per_image first, then pixels_per_token, else unknown', () => {
-    expect(estimateImageTokens(512, 512, info({ tokensPerImage: 256, pixelsPerToken: 784 }))).toBe(256);
+    expect(estimateImageTokens(512, 512, info({ tokensPerImage: 280, pixelsPerToken: 1024 }))).toBe(280);
     expect(estimateImageTokens(512, 512, info({ pixelsPerToken: 1024 }))).toBe(256);
     expect(estimateImageTokens(512, 512, info())).toBeNull();
     expect(estimateImageTokens(512, 512, null)).toBeNull();
@@ -150,6 +150,22 @@ describe('fitSize', () => {
   });
 });
 
+describe('serve image contract constants', () => {
+  it('matches lm-serve limits', () => {
+    expect(MAX_IMAGES).toBe(8);
+    expect(MAX_DECODE_SIDE).toBe(4096);
+    expect(MAX_BODY_BYTES).toBe(24 * 1024 * 1024);
+    expect(DEFAULT_MAX_PIXELS).toBe(1_048_576);
+  });
+  it('accepts only PNG/JPEG data URLs', () => {
+    expect(isAllowedImageDataUrl('data:image/png;base64,AA')).toBe(true);
+    expect(isAllowedImageDataUrl('data:image/jpeg;base64,AA')).toBe(true);
+    expect(isAllowedImageDataUrl('data:image/jpg;base64,AA')).toBe(true);
+    expect(isAllowedImageDataUrl('data:image/webp;base64,AA')).toBe(false);
+    expect(isAllowedImageDataUrl('https://example.com/x.png')).toBe(false);
+  });
+});
+
 describe('buildUserContent', () => {
   it('is a plain string without images, file blocks before the typed text', () => {
     const att: Attachment = { id: 't', kind: 'text', name: 'a.txt', text: 'body' };
@@ -161,6 +177,14 @@ describe('buildUserContent', () => {
       { type: 'image_url', image_url: { url: 'data:image/png;base64,A' } },
       { type: 'text', text: 'what is this' },
     ]);
+  });
+  it('drops images when vision is off (text-only servers)', () => {
+    const img: Attachment = { id: 'i', kind: 'image', name: 'a.png', dataUrl: 'data:image/png;base64,A', width: 1, height: 1 };
+    expect(buildUserContent('what is this', [img], false)).toBe('what is this');
+  });
+  it('refuses remote image URLs even when vision is ok', () => {
+    const img: Attachment = { id: 'i', kind: 'image', name: 'a.png', dataUrl: 'https://evil.example/x.png', width: 1, height: 1 };
+    expect(buildUserContent('x', [img], true)).toBe('x');
   });
 });
 

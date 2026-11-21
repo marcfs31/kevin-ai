@@ -126,6 +126,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'message.waiting': 'Esperando la respuesta…',
   'message.stopped': 'Detenido.',
   'message.attached': 'Adjuntos: {names}',
+  'message.images': 'Imágenes adjuntas',
   'message.copy': 'Copiar respuesta',
   'message.copyCode': 'Copiar código',
   'message.copied': 'Copiado',

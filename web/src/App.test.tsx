@@ -226,8 +226,17 @@ describe('App', () => {
     expect(document.getElementById('image-reason')?.textContent).toBe('Images: off, because this server does not say whether it can read them.');
   });
 
+  it('disables image upload when vision is unavailable', async () => {
+    mockFetch(() => sseResponse([FINISH]), () => modelsResponse({ capabilities: { vision: { status: 'unavailable' } } }));
+    renderApp();
+    await screen.findByText('Model: qwen3.5-4b');
+    const button = screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(document.getElementById('image-reason')?.textContent).toBe('Images: this model cannot read images.');
+  });
+
   it('enables image upload when the server reports vision ok', async () => {
-    mockFetch(() => sseResponse([FINISH]), () => modelsResponse({ context_length: 8192, capabilities: { vision: { status: 'ok', max_pixels: 1048576, pixels_per_token: 784 } } }));
+    mockFetch(() => sseResponse([FINISH]), () => modelsResponse({ context_length: 8192, capabilities: { vision: { status: 'ok', max_pixels: 1048576, pixels_per_token: 1024 } } }));
     renderApp();
     await screen.findByText(/Context: 8,192 tokens/);
     await waitFor(() => expect((screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement).disabled).toBe(false));

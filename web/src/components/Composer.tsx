@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEven
 import { useI18n } from '../i18n';
 import type { ServerInfo } from '../lib/api';
 import {
-  ACCEPT_ATTRIBUTE, AttachError, checkText, classifyFile, estimateAttachment, maxBytes, newId, parsePageRange,
+  ACCEPT_ATTRIBUTE, AttachError, DEFAULT_MAX_PIXELS, checkText, classifyFile, estimateAttachment, maxBytes, newId, parsePageRange,
   selectPdf, type Attachment,
 } from '../lib/attachments';
 import { WARN_WAIT_SECONDS } from '../lib/estimate';
@@ -25,7 +25,7 @@ async function readAttachment(file: File, info: ServerInfo | null, preset: numbe
   if (!kind) throw new AttachError('unsupported_type', file.name);
   if (file.size > maxBytes(kind)) throw new AttachError('too_large', file.name);
   const visionOk = info?.vision === 'ok';
-  const maxPixels = info?.maxPixels ?? null;
+  const maxPixels = info?.maxPixels ?? DEFAULT_MAX_PIXELS;
   if (kind === 'image') {
     if (!visionOk) throw new AttachError('vision_off', file.name);
     return { id: newId(), kind: 'image', name: file.name, ...(await imageToPng(file, file.name, preset, maxPixels)) };
