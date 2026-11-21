@@ -61,6 +61,23 @@ describe('ServerPanel', () => {
     expect(body.model).toBe('qwen-uncensored');
   });
 
+  it('sends --id gemma-uncensored and marks only it running by its llama-server alias', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} runningModel="gemma-4-e4b-uncensored" onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B Uncensored' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Start Gemma 4 E4B Uncensored' }));
+    await screen.findByRole('status');
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.model).toBe('gemma-uncensored');
+  });
+
   it('sends --id whiterabbitneo and marks it running by its llama-server alias', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
