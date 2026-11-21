@@ -39,8 +39,7 @@ function LiveStatus({ live }: { live: LiveInfo }) {
   const counter = <TokenLine className="live" count={liveCount(live.usage, live.promptEstimate, live.chunks)} />;
   if (live.firstAt === null) {
     const elapsed = Math.max(0, (now - live.startedAt) / 1000);
-    const promptTokens = live.usage?.promptTokens ?? live.promptEstimate;
-    const left = Math.max(0, estimateWaitSeconds(promptTokens) - elapsed);
+    const left = Math.max(0, estimateWaitSeconds(live.readEstimate) - elapsed);
     const eta = etaParts(left);
     // While the estimate still has time left, show minutes and seconds remaining.
     const line =

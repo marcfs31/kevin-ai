@@ -137,6 +137,30 @@ describe('runAgent', () => {
     expect(second?.stats).toMatchObject({ promptTokens: 9, completionTokens: 2 });
   });
 
+  it('expects to read only what the server has not cached, and all of it when the tools changed', async () => {
+    const prior: AssistantMessage = {
+      id: 'a', role: 'assistant', content: 'earlier', reasoning: '', status: 'done', error: null, createdAt: 0,
+      stats: { ttftMs: 1, tokensPerSecond: 1, promptTokens: 400, cachedTokens: null, completionTokens: 20, promptEstimate: 400, completionEstimate: 20, finish: 'stop' } as AssistantMessage['stats'],
+    };
+    const run = async (history: Message[], tools: boolean) => {
+      const lives: number[][] = [];
+      const up = upstream([say('ok')]);
+      await runAgent({
+        history, settings: { ...settings, tools }, model: null, info: null, signal: new AbortController().signal, stream: up.stream,
+        onLive: (_m, info) => lives.push([info.promptEstimate, info.readEstimate]), onCommit: () => undefined,
+      });
+      return lives[0] as [number, number];
+    };
+    const long: UserMessage = { ...user, id: 'u2', content: 'x'.repeat(3500), typed: 'x'.repeat(3500) };
+    await run([user, prior, long], false);
+    // The same tool list as the request before: the earlier 420 tokens are cached.
+    const [total, read] = await run([user, prior, long], false);
+    expect(read).toBe(total - 420);
+    // A different tool list moves everything after it, so all of it is read again.
+    const [total2, read2] = await run([user, prior, long], true);
+    expect(read2).toBe(total2);
+  });
+
   describe('compacting between steps', () => {
     const old = (i: number): Message[] => [
       { ...user, id: `ou${i}`, typed: `old ${i}`, content: `old ${i} ${'x'.repeat(120)}` },

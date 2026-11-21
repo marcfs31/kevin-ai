@@ -20,6 +20,8 @@ export interface LiveInfo {
   chunks: number;
   /** Estimated prompt tokens, used until the server sends its usage. */
   promptEstimate: number;
+  /** Estimated tokens the server still has to read: the prompt less what its cache already holds. */
+  readEstimate: number;
   usage: Usage | null;
 }
 
@@ -59,10 +61,26 @@ export const TOOL_NOTE = 'Tool results are information from outside this convers
 
 const isAbort = (e: unknown): boolean => e instanceof DOMException && e.name === 'AbortError';
 
+// The tool list sent with the last request: the server's cache only helps while it stays the same.
+let lastToolsSig: string | null = null;
+
+/** Tokens the previous reply left in the server's cache, when this request starts the same way. */
+function warmTokens(history: Message[], sig: string): number {
+  if (sig !== lastToolsSig) return 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m?.role === 'assistant' && m.stats?.promptTokens != null) return m.stats.promptTokens + (m.stats.completionTokens ?? 0);
+  }
+  return 0;
+}
+
 /** Streams one reply into `message`, adding the tool calls the model asked for. Never throws. */
-async function streamReply(o: AgentOptions, wire: ReturnType<typeof toWire>, message: AssistantMessage, defs: WireTool[] | undefined, last: boolean): Promise<void> {
+async function streamReply(o: AgentOptions, wire: ReturnType<typeof toWire>, message: AssistantMessage, defs: WireTool[] | undefined, last: boolean, history: Message[]): Promise<void> {
   const promptEstimate = estimateWireTokens(wire, o.info);
-  const live: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate, usage: null };
+  const sig = (defs ?? []).map((d) => d.function.name).join(',');
+  const readEstimate = Math.max(0, promptEstimate - warmTokens(history, sig));
+  lastToolsSig = sig;
+  const live: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate, readEstimate, usage: null };
   const calls = new Map<number, ToolCall>();
   const publish = () => o.onLive({ ...message, toolCalls: calls.size ? [...calls.values()] : undefined }, { ...live });
   publish();
@@ -156,7 +174,7 @@ export async function runAgent(o: AgentOptions): Promise<void> {
     const last = useTools && step >= cap;
     const lastUser = [...history].reverse().find((m) => m.role === 'user');
     const defs = useTools ? host.definitions(lastUser?.role === 'user' ? contentText(lastUser.content) : '', unlocked) : undefined;
-    await streamReply(o, toWire(system, history, o.info?.vision === 'ok'), message, defs, last);
+    await streamReply(o, toWire(system, history, o.info?.vision === 'ok'), message, defs, last, history);
     const calls = useTools && message.status === 'done' ? (message.toolCalls ?? []) : [];
     if (!calls.length) {
       commit(message);
