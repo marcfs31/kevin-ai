@@ -3420,7 +3420,7 @@ static int stbi__process_frame_header(stbi__jpeg *z, int scan)
             return stbi__free_jpeg_components(z, i+1, stbi__err("outofmem", "Out of memory"));
          z->img_comp[i].coeff = (short*) (((size_t) z->img_comp[i].raw_coeff + 15) & ~15);
          // 0 all the coeffs now so they're guaranteed to be initialized
-         memset(z->img_comp[i].coeff,0,z->img_comp[i].w2 * z->img_comp[i].h2 * sizeof(short));
+         memset(z->img_comp[i].coeff,0,(size_t) z->img_comp[i].w2 * (size_t) z->img_comp[i].h2 * sizeof(short));
       }
    }
 
@@ -4873,7 +4873,7 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
          stbi_uc *in = cur;
          stbi_uc *out = dest;
          stbi_uc inb = 0;
-         stbi__uint32 nsmp = x*img_n;
+         stbi__uint32 nsmp = (stbi__uint32) ((size_t) x * (size_t) img_n);
 
          // expand bits to bytes first
          if (depth == 4) {
@@ -4908,7 +4908,7 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
       } else if (depth == 16) {
          // convert the image data from big-endian to platform-native
          stbi__uint16 *dest16 = (stbi__uint16*)dest;
-         stbi__uint32 nsmp = x*img_n;
+         stbi__uint32 nsmp = (stbi__uint32) ((size_t) x * (size_t) img_n);
 
          if (img_n == out_n) {
             for (i = 0; i < nsmp; ++i, ++dest16, cur += 2)
