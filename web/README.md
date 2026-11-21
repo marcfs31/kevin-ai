@@ -69,6 +69,10 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   N s" (on this hardware that can take minutes), then tokens per second. Stop (or Esc) aborts the
   request; the server stops when the client disconnects. A reply that ends without a finish
   reason is shown as cut short, never as complete.
+- **Redirect.** While a reply streams in the open chat, type a new message and press Redirect (or
+  Enter): the reply stops where it is, is kept and marked stopped, and the new message is sent
+  right after it with everything already written, so the model carries on from there. Not offered
+  while another chat is being written. It can be repeated.
 - **Statistics per reply:** time to first token, tokens per second, prompt tokens and, when the
   server reports it, tokens taken from its cache.
 - **Token counter.** While a reply streams: tokens read (prompt) and written, with `≈` and a note

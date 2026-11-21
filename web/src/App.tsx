@@ -194,7 +194,9 @@ function Chat({ state, setState, storage, notice }: {
   // Runs the model on `history` (ending with the user's message, or with the step to resume from)
   // and commits what comes back into the chat. `prior` is the saved chat before the new message.
   // With automatic compacting on and the chat near the limit, the older turns are summarised first.
-  const run = async (convId: string, prior: Message[], history: Message[], newTokens: number) => {
+  // Returns the chat as it stands when the run ends: the history it started from plus every
+  // message it committed (a reply that was stopped included), which is what a redirect continues from.
+  const run = async (convId: string, prior: Message[], history: Message[], newTokens: number): Promise<Message[]> => {
     const controller = new AbortController();
     controllerRef.current = controller;
     setBusy(true);
@@ -206,6 +208,7 @@ function Chat({ state, setState, storage, notice }: {
         const plan = planCompaction(prior);
         if (plan) history = (await compact(convId, history, plan, true, controller.signal)) ?? history;
       }
+      let current = history;
       await runAgent({
         history,
         settings: state.settings,
@@ -213,19 +216,34 @@ function Chat({ state, setState, storage, notice }: {
         info,
         signal: controller.signal,
         stream: streamChat,
-        compact: auto ? (h, plan) => compact(convId, h, plan, true, controller.signal) : undefined,
+        compact: auto
+          ? async (h, plan) => {
+              const next = await compact(convId, h, plan, true, controller.signal);
+              if (next) current = next;
+              return next;
+            }
+          : undefined,
         onLive: (message, liveInfo) => setLive({ convId, message, info: liveInfo }),
         onCommit: (m) => {
+          current = [...current, m];
           updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, m] }));
           setLive(null);
         },
       });
+      return current;
     } finally {
       controllerRef.current = null;
       setLive(null);
       setBusy(false);
       setRunConv(null);
     }
+  };
+
+  const runRef = useRef<Promise<Message[]> | null>(null);
+  const startRun = (convId: string, prior: Message[], history: Message[], newTokens: number) => {
+    const p = run(convId, prior, history, newTokens);
+    runRef.current = p;
+    return p;
   };
 
   // The last reply failed (server down, stream cut): drop it and ask again from the same point,
@@ -237,10 +255,10 @@ function Chat({ state, setState, storage, notice }: {
     const prior = active.messages.slice(0, -1);
     stickRef.current = true;
     updateConv(active.id, (c) => ({ ...c, updatedAt: Date.now(), messages: c.messages.filter((m) => m.id !== failedLast.id) }));
-    void run(active.id, prior, prior, 0);
+    void startRun(active.id, prior, prior, 0);
   };
 
-  const send = async (typed: string, attachments: Attachment[]) => {
+  const send = async (typed: string, attachments: Attachment[], target: Conversation | null = active) => {
     if (controllerRef.current) return;
     stickRef.current = true;
     const now = Date.now();
@@ -252,7 +270,7 @@ function Chat({ state, setState, storage, notice }: {
       attachmentNames: attachments.map((a) => a.name),
       createdAt: now,
     };
-    let conv = active;
+    let conv = target;
     if (!conv) {
       conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, messages: [] };
       const created = conv;
@@ -261,7 +279,28 @@ function Chat({ state, setState, storage, notice }: {
     const convId = conv.id;
     updateConv(convId, (c) => ({ ...c, title: c.title || titleFrom(typed, attachments), updatedAt: now, messages: [...c.messages, user] }));
 
-    await run(convId, conv.messages, [...conv.messages, user], estimateWireTokens([{ role: 'user', content: user.content }], info));
+    await startRun(convId, conv.messages, [...conv.messages, user], estimateWireTokens([{ role: 'user', content: user.content }], info));
+  };
+
+  // Steering a reply: the message typed while it streams stops it, keeps what was already written
+  // (saved as a stopped reply) and is sent next, so the model carries on from there.
+  const [redirecting, setRedirecting] = useState(false);
+  const redirectNow = async (typed: string, attachments: Attachment[]) => {
+    const pending = runRef.current;
+    if (!controllerRef.current || !active || runConv !== active.id || !pending || redirecting) return;
+    const conv = active;
+    setRedirecting(true);
+    stop();
+    let messages: Message[];
+    try {
+      messages = await pending;
+    } catch {
+      setRedirecting(false);
+      return;
+    }
+    // Lifted before the new run starts, so that run can be redirected in turn.
+    setRedirecting(false);
+    await send(typed, attachments, { ...conv, messages });
   };
 
   const updateSettings = (settings: Settings) => setState((s) => ({ ...s, settings }));
@@ -472,7 +511,7 @@ function Chat({ state, setState, storage, notice }: {
             {t('app.busyElsewhere')}
           </p>
         )}
-        <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} onStop={stop} inputRef={inputRef} />
+        <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} canRedirect={busy && runConv !== null && runConv === active?.id && !compacting && !redirecting} onRedirect={(tx, a) => void redirectNow(tx, a)} onStop={stop} inputRef={inputRef} />
       </main>
     </div>
   );

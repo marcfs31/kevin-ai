@@ -120,6 +120,8 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'composer.placeholderTouch': 'Mensaje',
   'composer.send': 'Enviar',
   'composer.stop': 'Detener',
+  'composer.redirect': 'Redirigir',
+  'composer.redirectHint': 'Detiene la respuesta aquí, conserva lo que ya estaba escrito y envía este mensaje a continuación.',
   'composer.attach': 'Adjuntar archivos',
   'composer.attachImage': 'Adjuntar imagen',
   'composer.drop': 'Suelta aquí los archivos para adjuntarlos',

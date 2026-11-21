@@ -124,6 +124,67 @@ describe('App', () => {
     expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Read')).toBe('≈10');
   });
 
+  describe('redirecting a reply in progress', () => {
+    it('stops it, keeps what was written, and sends the new message next', async () => {
+      let n = 0;
+      const fetchMock = mockFetch((_u, init) => (++n === 1 ? heldReply(init) : sseResponse([delta('new direction'), FINISH, DONE])));
+      renderApp();
+      typeAndSend('first');
+      await screen.findByText('partial');
+      const redirect = screen.getByRole('button', { name: 'Redirect' }) as HTMLButtonElement;
+      // NEGATIVE: nothing to send yet, so nothing to redirect with
+      expect(redirect.disabled).toBe(true);
+      fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'actually, do this instead' } });
+      expect(redirect.disabled).toBe(false);
+      fireEvent.click(redirect);
+      expect(await screen.findByText('new direction')).toBeTruthy();
+      // The cut-off reply stays on screen, marked stopped, and the model is sent it with the new message.
+      expect(screen.getByText('partial')).toBeTruthy();
+      expect(screen.getByText('Stopped.')).toBeTruthy();
+      expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(2);
+      expect(bodyOf(fetchMock, 1).messages.map((m: { role: string; content: string }) => [m.role, m.content])).toEqual([
+        ['user', 'first'],
+        ['assistant', 'partial'],
+        ['user', 'actually, do this instead'],
+      ]);
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
+      expect(saved.map((m: { role: string; status?: string }) => `${m.role}${m.status ? `:${m.status}` : ''}`)).toEqual(['user', 'assistant:stopped', 'user', 'assistant:done']);
+    });
+
+    it('works with Enter, and the box is empty and the reply running again afterwards', async () => {
+      let n = 0;
+      mockFetch((_u, init) => (++n === 1 ? heldReply(init) : n === 2 ? heldReply(init) : sseResponse([delta('third'), FINISH, DONE])));
+      renderApp();
+      typeAndSend('one');
+      await screen.findByText('partial');
+      typeAndSend('two');
+      await waitFor(() => expect(n).toBe(2));
+      expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+      // Redirect again while the second reply streams: the new one keeps both earlier messages.
+      await screen.findAllByText('partial');
+      typeAndSend('three');
+      expect(await screen.findByText('third')).toBeTruthy();
+    });
+
+    it('is not offered in a chat that is not the one being written', async () => {
+      let n = 0;
+      mockFetch((_u, init) => (++n === 1 ? sseResponse([delta('first answer'), FINISH, USAGE, DONE]) : heldReply(init)));
+      renderApp();
+      typeAndSend('one');
+      await screen.findByText('first answer');
+      fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+      typeAndSend('two');
+      await screen.findByText('partial');
+      expect(screen.getByRole('button', { name: 'Redirect' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /^one/ }));
+      await screen.findByText('first answer');
+      expect(screen.queryByRole('button', { name: 'Redirect' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull());
+    });
+  });
+
   it('keeps the chat list usable while a reply is being written', async () => {
     let n = 0;
     mockFetch((_u, init) => (++n === 1 ? sseResponse([delta('first answer'), FINISH, USAGE, DONE]) : heldReply(init)));
