@@ -36,17 +36,32 @@ export function planCompaction(messages: Message[]): Plan | null {
   return { cut, previous, span: messages.slice(start, cut) };
 }
 
-/** Tokens the next request will hold: the server's own count for the last finished reply when it
- * sent one (that count includes everything re-sent), plus an estimate of what came after it;
- * else an estimate of the whole request. */
-export function usedTokens(messages: Message[], systemPrompt: string, info: ServerInfo | null): number {
+/** What the next request will hold, split into what is re-sent (prompt) and the last reply. */
+export interface ContextUse {
+  prompt: number;
+  reply: number;
+  /** True when any part is an estimate rather than the server's own count. */
+  estimated: boolean;
+}
+
+/** The server's own count for the last finished reply when it sent one (that count includes
+ * everything re-sent), plus an estimate of what came after it; else an estimate of the whole request. */
+export function contextUse(messages: Message[], systemPrompt: string, info: ServerInfo | null): ContextUse {
   const start = lastSummaryIndex(messages) + 1;
   for (let i = messages.length - 1; i >= start; i--) {
     const m = messages[i];
-    if (m?.role === 'assistant' && m.status === 'done' && m.stats?.promptTokens != null)
-      return m.stats.promptTokens + (m.stats.completionTokens ?? 0) + estimateWireTokens(toWire('', messages.slice(i + 1)), info);
+    if (m?.role === 'assistant' && m.status === 'done' && m.stats?.promptTokens != null) {
+      const after = estimateWireTokens(toWire('', messages.slice(i + 1)), info);
+      return { prompt: m.stats.promptTokens + after, reply: m.stats.completionTokens ?? 0, estimated: after > 0 };
+    }
   }
-  return estimateWireTokens(toWire(systemPrompt, messages), info);
+  return { prompt: estimateWireTokens(toWire(systemPrompt, messages), info), reply: 0, estimated: true };
+}
+
+/** Tokens the next request will hold. */
+export function usedTokens(messages: Message[], systemPrompt: string, info: ServerInfo | null): number {
+  const u = contextUse(messages, systemPrompt, info);
+  return u.prompt + u.reply;
 }
 
 /** True when sending `newTokens` more would pass AUTO_RATIO of the context and there is something to compact. */

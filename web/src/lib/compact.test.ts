@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AUTO_RATIO, applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, transcript, usedTokens } from './compact';
+import { AUTO_RATIO, applyCompaction, contextUse, planCompaction, projectCompaction, shouldCompact, summaryRequest, transcript, usedTokens } from './compact';
 import { toWire } from './request';
 import type { AssistantMessage, Message, Stats, UserMessage } from './storage';
 
@@ -166,5 +166,29 @@ describe('projectCompaction', () => {
     expect(toWire('', out)).toHaveLength(1 + 4);
     expect(projectCompaction(m, '', 0, info(100000))).toBe(m);
     expect(projectCompaction(m, '', 0, info(null))).toBe(m);
+  });
+});
+
+describe('contextUse', () => {
+  it('splits the server count into what is re-sent and the last reply', () => {
+    const m = [user('q'), bot('a', { stats: stats({ promptTokens: 120, completionTokens: 30 }) })];
+    expect(contextUse(m, '', info(1000))).toEqual({ prompt: 120, reply: 30, estimated: false });
+  });
+
+  it('marks an estimate: something after the last counted reply, or no count at all', () => {
+    const counted = [user('q'), bot('a', { stats: stats({ promptTokens: 120, completionTokens: 30 }) }), user('x'.repeat(70))];
+    const after = contextUse(counted, '', info(1000));
+    expect(after.estimated).toBe(true);
+    expect(after.prompt).toBeGreaterThan(120);
+    expect(after.reply).toBe(30);
+    const none = contextUse([user('hello there'), bot('hi')], '', info(1000));
+    expect(none).toMatchObject({ reply: 0, estimated: true });
+    expect(none.prompt).toBeGreaterThan(0);
+  });
+
+  it('ignores a failed reply and counts only from the last summary on', () => {
+    const failed = [user('q'), bot('', { status: 'error', stats: stats({ promptTokens: 999, completionTokens: 1 }) })];
+    expect(contextUse(failed, '', info(1000)).estimated).toBe(true);
+    expect(usedTokens(failed, '', info(1000))).toBeLessThan(999);
   });
 });

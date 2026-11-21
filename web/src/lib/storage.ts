@@ -117,6 +117,8 @@ export interface Settings {
   tools: boolean;
   /** Most model calls for one message when tools are on; the last one may not call tools. */
   maxSteps: number;
+  /** Summarise older turns by itself near the context limit. Off: only the Compact button does. */
+  autoCompact: boolean;
 }
 
 export interface State {
@@ -134,6 +136,7 @@ export const DEFAULT_SETTINGS: Settings = {
   locale: 'auto',
   tools: false,
   maxSteps: 8,
+  autoCompact: true,
 };
 
 export const MAX_STEPS_LIMIT = 20;
@@ -247,6 +250,7 @@ function settings(v: unknown): Settings {
     locale: o.locale === 'en' || o.locale === 'es' ? o.locale : 'auto',
     tools: o.tools === true,
     maxSteps: typeof o.maxSteps === 'number' && Number.isInteger(o.maxSteps) && o.maxSteps >= 1 && o.maxSteps <= MAX_STEPS_LIMIT ? o.maxSteps : DEFAULT_SETTINGS.maxSteps,
+    autoCompact: typeof o.autoCompact === 'boolean' ? o.autoCompact : DEFAULT_SETTINGS.autoCompact,
   };
 }
 
