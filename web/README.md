@@ -121,8 +121,7 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   Gemma 4). Calls and results are shown in a collapsible trace; the loop is capped at 1–20 steps
   (default 8), the last step sends `tool_choice: "none"`, and Stop ends it at once. The two
   built-in tools run in the page and touch nothing outside it.
-- **MCP tools and web search (settings `toolsConfig` and `internet`; the controls come in the
-  Settings panel PR).** With `tools/chat_tools.py` running and reachable at `/tools/*`
+- **MCP tools and web search (Settings > Tools and internet).** With `tools/chat_tools.py` running and reachable at `/tools/*`
   (`LM_TOOLS_URL`), the tools of the MCP servers turned on are fetched from it (one server at a
   time) and offered as `server__tool`. Only a **budget** of definitions is sent each step
   (default about 1,500 tokens, at most 12): the built-ins, `find_tools`, and the tools that best
@@ -132,7 +131,15 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   Allow once or Always allow this tool; Deny, or Stop, refuses it and the model is told. With
   nobody to ask, such a call is refused. Tool results are marked in the system message as data,
   never instructions. Servers that reach the network, and `web_search` (a SearXNG address), are
-  offered only while the internet switch is on; it is off by default.
+  offered only while the internet switch is on; it is off by default, a badge in the header shows
+  it, and the SearXNG address can be tested from Settings. The panel lists the servers the service
+  has (state, "needs the internet", their tools with read-only / asks first and their token
+  cost, per-tool switches), offers the catalog's servers that are not added yet, sets the budget
+  (with the cost to read it at the measured prompt speed) and the approval mode, and lists the
+  tools you stopped being asked about. A service that is not running is shown quietly, with Retry.
+  `LM_TOOLS_URL` (default `http://127.0.0.1:8081`) points the dev proxy at the service, as
+  `--tools-upstream` does for `tools/chat_server.py`; an SSH tunnel to it works like the one to
+  lm-serve. The dev proxy reads this at start, so a running dev server needs a restart for `/tools`.
 - **Server state reuse.** Every earlier answer is re-sent exactly as received (no reasoning, no
   edits), because lm-serve reuses its state only then. Stopped replies are re-sent as far as
   they got; failed replies are left out, even when they streamed some text.

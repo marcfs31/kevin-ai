@@ -7,6 +7,8 @@ import react from '@vitejs/plugin-react';
 import { serveControl } from './serve-control-plugin';
 
 const upstream = process.env.LM_SERVE_URL ?? 'http://127.0.0.1:8080';
+// The tool service (tools/chat_tools.py): MCP servers and web search, behind /tools/*.
+const toolsUpstream = process.env.LM_TOOLS_URL ?? 'http://127.0.0.1:8081';
 
 // pdf.js fetches its image decoders by fixed name from `wasmUrl` (see src/lib/pdf.ts): serve
 // them at /pdfjs/ in dev and copy them to dist/pdfjs/ in the build, with their licences.
@@ -43,6 +45,7 @@ export default defineConfig({
     proxy: {
       '/v1': { target: upstream, changeOrigin: true },
       '/health': { target: upstream, changeOrigin: true },
+      '/tools': { target: toolsUpstream, changeOrigin: true },
     },
   },
   build: {
