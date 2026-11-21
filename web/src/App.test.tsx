@@ -729,6 +729,8 @@ describe('App', () => {
     const button = screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(document.getElementById('image-reason')?.textContent).toBe('Images: this model cannot read images.');
+    // The reason is for screen readers: nothing about images is written on screen.
+    expect(document.getElementById('image-reason')?.className).toBe('sr-only');
   });
 
   it('enables image upload when the server reports vision ok', async () => {
@@ -736,6 +738,9 @@ describe('App', () => {
     renderApp();
     await screen.findByText(/Context: 8,192 tokens/);
     await waitFor(() => expect((screen.getByRole('button', { name: 'Attach image' }) as HTMLButtonElement).disabled).toBe(false));
+    // Working vision needs no label: the enabled button says it.
+    expect(screen.queryByText(/Images: available/)).toBeNull();
+    expect(document.getElementById('image-reason')).toBeNull();
   });
 
   it('refuses to send what would overflow the context', async () => {

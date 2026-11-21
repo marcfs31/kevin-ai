@@ -288,8 +288,6 @@ function Chat({ state, setState, storage, notice }: {
     setServer({ kind: 'loading' });
     fetchInfo();
   };
-  // When images are off, the composer says why next to the disabled button.
-  const visionLine = info?.vision === 'ok' ? t('vision.ok') : null;
   const storageError =
     hold === 'locked'
       ? t('error.storageLocked')
@@ -468,7 +466,6 @@ function Chat({ state, setState, storage, notice }: {
             {t('app.busyElsewhere')}
           </p>
         )}
-        {visionLine && <p className="vision hint">{visionLine}</p>}
         <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} onStop={stop} inputRef={inputRef} />
       </main>
     </div>

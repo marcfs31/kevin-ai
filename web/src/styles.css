@@ -410,12 +410,6 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .warn { color: var(--warn); }
 .banner { margin: 0; padding-block: 0.6rem; padding-inline: 1rem; }
 .hint, .muted { color: var(--muted); font-size: 0.8125rem; }
-.vision {
-  margin: 0 auto;
-  padding-block: 0.45rem 0;
-  padding-inline: 0.15rem;
-  inline-size: min(calc(100% - 2.5rem), var(--measure));
-}
 
 .composer {
   flex-shrink: 0;
@@ -481,7 +475,6 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   }
   .settings { inline-size: min(calc(100% - 1.5rem), var(--measure)); }
   .fields { grid-template-columns: 1fr; }
-  .vision { inline-size: min(calc(100% - 1.5rem), var(--measure)); }
 }
 
 @media (max-width: 22rem) {
