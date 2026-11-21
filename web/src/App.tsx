@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Composer } from './components/Composer';
 import { MessageView, errorText } from './components/MessageView';
-import { TokenLine } from './components/TokenLine';
+import { ChatStats } from './components/ChatStats';
 import { ChatModelSelect } from './components/ChatModelSelect';
 import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
@@ -10,10 +10,10 @@ import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
-import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
+import { AUTO_RATIO, applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
 import { assess } from './lib/request';
-import { estimateWireTokens, sessionTotals } from './lib/tokens';
+import { estimateWireTokens } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
 import {
   backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
@@ -75,6 +75,8 @@ function Chat({ state, setState, storage, notice }: {
   const stickRef = useRef(true);
   // Busy from send to the end of the reply (and any tool or compaction step in between).
   const [busy, setBusy] = useState(false);
+  // The chat the running reply belongs to: it can be left and come back to while it runs.
+  const [runConv, setRunConv] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [compactError, setCompactError] = useState<ApiError | null>(null);
   const serverInfo = server.kind === 'ok' ? server.info : null;
@@ -140,7 +142,9 @@ function Chat({ state, setState, storage, notice }: {
     (typed: string, attachments: Attachment[]) => {
       const content = buildUserContent(typed, attachments, info?.vision === 'ok');
       const history = active?.messages ?? [];
-      const sent = projectCompaction(history, state.settings.systemPrompt, estimateWireTokens([{ role: 'user', content }], info), info);
+      const sent = state.settings.autoCompact
+        ? projectCompaction(history, state.settings.systemPrompt, estimateWireTokens([{ role: 'user', content }], info), info)
+        : history;
       return assess(state.settings, sent, typed, attachments, content, info);
     },
     [state.settings, active?.messages, info],
@@ -184,6 +188,55 @@ function Chat({ state, setState, storage, notice }: {
     }
   };
 
+  // Runs the model on `history` (ending with the user's message, or with the step to resume from)
+  // and commits what comes back into the chat. `prior` is the saved chat before the new message.
+  // With automatic compacting on and the chat near the limit, the older turns are summarised first.
+  const run = async (convId: string, prior: Message[], history: Message[], newTokens: number) => {
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setBusy(true);
+    setRunConv(convId);
+    setCompactError(null);
+    const auto = state.settings.autoCompact;
+    try {
+      if (auto && shouldCompact(prior, state.settings.systemPrompt, newTokens, info)) {
+        const plan = planCompaction(prior);
+        if (plan) history = (await compact(convId, history, plan, true, controller.signal)) ?? history;
+      }
+      await runAgent({
+        history,
+        settings: state.settings,
+        model: requestModel,
+        info,
+        signal: controller.signal,
+        stream: streamChat,
+        compact: auto ? (h, plan) => compact(convId, h, plan, true, controller.signal) : undefined,
+        onLive: (message, liveInfo) => setLive({ convId, message, info: liveInfo }),
+        onCommit: (m) => {
+          updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, m] }));
+          setLive(null);
+        },
+      });
+    } finally {
+      controllerRef.current = null;
+      setLive(null);
+      setBusy(false);
+      setRunConv(null);
+    }
+  };
+
+  // The last reply failed (server down, stream cut): drop it and ask again from the same point,
+  // so once the server is back one click carries on, tool steps already run included.
+  const failedLast = active?.messages[active.messages.length - 1];
+  const canRetry = !busy && failedLast?.role === 'assistant' && failedLast.status === 'error';
+  const retry = () => {
+    if (controllerRef.current || !active || !canRetry || failedLast?.role !== 'assistant') return;
+    const prior = active.messages.slice(0, -1);
+    stickRef.current = true;
+    updateConv(active.id, (c) => ({ ...c, updatedAt: Date.now(), messages: c.messages.filter((m) => m.id !== failedLast.id) }));
+    void run(active.id, prior, prior, 0);
+  };
+
   const send = async (typed: string, attachments: Attachment[]) => {
     if (controllerRef.current) return;
     stickRef.current = true;
@@ -205,36 +258,7 @@ function Chat({ state, setState, storage, notice }: {
     const convId = conv.id;
     updateConv(convId, (c) => ({ ...c, title: c.title || titleFrom(typed, attachments), updatedAt: now, messages: [...c.messages, user] }));
 
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    setBusy(true);
-    setCompactError(null);
-    let history = [...conv.messages, user];
-    // Near the context limit the older turns are summarised first, so this message still fits.
-    if (shouldCompact(conv.messages, state.settings.systemPrompt, estimateWireTokens([{ role: 'user', content: user.content }], info), info)) {
-      const plan = planCompaction(conv.messages);
-      if (plan) history = (await compact(convId, history, plan, true, controller.signal)) ?? history;
-    }
-    try {
-      await runAgent({
-        history,
-        settings: state.settings,
-        model: requestModel,
-        info,
-        signal: controller.signal,
-        stream: streamChat,
-        compact: (h, plan) => compact(convId, h, plan, true, controller.signal),
-        onLive: (message, liveInfo) => setLive({ convId, message, info: liveInfo }),
-        onCommit: (m) => {
-          updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, m] }));
-          setLive(null);
-        },
-      });
-    } finally {
-      controllerRef.current = null;
-      setLive(null);
-      setBusy(false);
-    }
+    await run(convId, conv.messages, [...conv.messages, user], estimateWireTokens([{ role: 'user', content: user.content }], info));
   };
 
   const updateSettings = (settings: Settings) => setState((s) => ({ ...s, settings }));
@@ -273,7 +297,6 @@ function Chat({ state, setState, storage, notice }: {
           : null;
   const canDiscard = hold === 'locked' || hold === 'unreadable' || copies.length > 0;
   const messages = active?.messages ?? [];
-  const totals = sessionTotals(messages);
   const lastSummary = lastSummaryIndex(messages);
   const canCompact = active !== null && planCompaction(active.messages) !== null;
 
@@ -331,6 +354,7 @@ function Chat({ state, setState, storage, notice }: {
           conversations={state.conversations}
           activeId={state.activeId}
           busy={busy}
+          generatingId={runConv}
           onSelect={(id) => {
             setState((s) => ({ ...s, activeId: id }));
             setSidebarOpen(false);
@@ -372,6 +396,9 @@ function Chat({ state, setState, storage, notice }: {
         {forgetFailed && (
           <p className="error banner" role="alert">
             {t('error.network')}
+            <button type="button" onClick={forgetServer}>
+              {t('server.retry')}
+            </button>
           </p>
         )}
         <div
@@ -388,7 +415,11 @@ function Chat({ state, setState, storage, notice }: {
             {messages.length === 0 && !live && <p className="empty">{t('app.empty')}</p>}
             {messages.map((m, i) => (
               <div key={m.id} className={i < lastSummary ? 'compacted' : undefined}>
-                <MessageView m={m} results={m.role === 'assistant' ? toolResults(messages, i) : undefined} />
+                <MessageView
+                  m={m}
+                  results={m.role === 'assistant' ? toolResults(messages, i) : undefined}
+                  onRetry={canRetry && i === messages.length - 1 ? retry : undefined}
+                />
               </div>
             ))}
           </div>
@@ -402,18 +433,37 @@ function Chat({ state, setState, storage, notice }: {
         {compactError && (
           <p className="error banner" role="alert">
             {t('compact.failed', { reason: errorText(t, compactError) })}
+            {canCompact && (
+              <button type="button" onClick={() => void compactNow()} disabled={busy}>
+                {t('server.retry')}
+              </button>
+            )}
           </p>
         )}
-        <div className="chat-tools">
-          {totals && <TokenLine className="session hint" labelKey="tokens.session" count={totals} />}
+        <ChatStats messages={messages} systemPrompt={state.settings.systemPrompt} autoCompact={state.settings.autoCompact} info={info} />
+        <div className="chat-tools" role="group" aria-label={t('compact.group')}>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={state.settings.autoCompact}
+              aria-describedby="compact-hint"
+              onChange={(e) => updateSettings({ ...state.settings, autoCompact: e.target.checked })}
+            />
+            {t('compact.auto')}
+          </label>
           <span className="spacer" />
           <button type="button" onClick={() => void compactNow()} disabled={busy || !canCompact} aria-describedby="compact-hint">
             {t('compact.button')}
           </button>
           <span id="compact-hint" className="sr-only">
-            {t('compact.hint')}
+            {state.settings.autoCompact ? t('compact.hintAuto', { at: Math.round(AUTO_RATIO * 100) }) : t('compact.hintManual')}
           </span>
         </div>
+        {busy && runConv !== null && runConv !== active?.id && (
+          <p className="note" role="status">
+            {t('app.busyElsewhere')}
+          </p>
+        )}
         {visionLine && <p className="vision hint">{visionLine}</p>}
         <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} onStop={stop} inputRef={inputRef} />
       </main>
