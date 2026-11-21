@@ -9,6 +9,7 @@ import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { assess, toWire } from './lib/request';
+import { isNearBottom } from './lib/scroll';
 import type { Usage } from './lib/sse';
 import {
   backupKeys, createSaver, deleteBackups, loadState, STORAGE_KEY, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
@@ -66,7 +67,8 @@ function Chat({ state, setState, storage, notice }: {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const logRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
   const busy = live !== null;
   const info = server.kind === 'ok' ? server.info : null;
   const active = state.conversations.find((c) => c.id === state.activeId) ?? null;
@@ -96,7 +98,14 @@ function Chat({ state, setState, storage, notice }: {
   }, [state, saver, hold]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView?.({ block: 'end' });
+    stickRef.current = true;
+  }, [state.activeId]);
+
+  useEffect(() => {
+    if (!stickRef.current) return;
+    const log = logRef.current;
+    if (!log) return;
+    log.scrollTop = log.scrollHeight;
   }, [live?.message.content, live?.message.reasoning, active?.messages.length]);
 
   const stop = useCallback(() => controllerRef.current?.abort(), []);
@@ -122,6 +131,7 @@ function Chat({ state, setState, storage, notice }: {
 
   const send = async (typed: string, attachments: Attachment[]) => {
     if (controllerRef.current) return;
+    stickRef.current = true;
     const now = Date.now();
     const user: UserMessage = {
       id: newId(),
@@ -316,7 +326,16 @@ function Chat({ state, setState, storage, notice }: {
             {t('error.network')}
           </p>
         )}
-        <div className="log" tabIndex={0} role="region" aria-label={t('app.transcript')}>
+        <div
+          className="log"
+          ref={logRef}
+          tabIndex={0}
+          role="region"
+          aria-label={t('app.transcript')}
+          onScroll={(e) => {
+            stickRef.current = isNearBottom(e.currentTarget);
+          }}
+        >
           <div className="log-entries" role="log" aria-busy={busy}>
             {messages.length === 0 && !live && <p className="empty">{t('app.empty')}</p>}
             {messages.map((m) => (
@@ -324,7 +343,6 @@ function Chat({ state, setState, storage, notice }: {
             ))}
           </div>
           {live && live.convId === active?.id && <MessageView m={live.message} live={live.info} />}
-          <div ref={endRef} />
         </div>
         {visionLine && <p className="vision hint">{visionLine}</p>}
         <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} onStop={stop} inputRef={inputRef} />
