@@ -1,0 +1,106 @@
+{
+  "servers": [
+    {
+      "id": "filesystem",
+      "title": "Files (scratch folder)",
+      "description": "Read, write, search and list files in the one scratch folder.",
+      "runtime": "node",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem@2.4.0",
+        "{ROOT}"
+      ],
+      "network": false,
+      "install": true,
+      "verified": false
+    },
+    {
+      "id": "memory",
+      "title": "Memory",
+      "description": "A small knowledge graph the model can write to and read back between chats.",
+      "runtime": "node",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory@2.2.1"
+      ],
+      "env": {
+        "MEMORY_FILE_PATH": "{ROOT}/memory.jsonl"
+      },
+      "network": false,
+      "install": true,
+      "verified": false
+    },
+    {
+      "id": "thinking",
+      "title": "Sequential thinking",
+      "description": "Step-by-step reasoning scratchpad.",
+      "runtime": "node",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking@2.2.0"
+      ],
+      "network": false,
+      "install": true,
+      "verified": false
+    },
+    {
+      "id": "time",
+      "title": "Time and time zones",
+      "description": "The current time and conversions between time zones.",
+      "runtime": "python",
+      "command": "uvx",
+      "args": [
+        "mcp-server-time==2026.11.18"
+      ],
+      "network": false,
+      "install": true,
+      "verified": false
+    },
+    {
+      "id": "git",
+      "title": "Git (scratch folder)",
+      "description": "Status, log, diff and commits for a repository in the scratch folder.",
+      "runtime": "python",
+      "command": "uvx",
+      "args": [
+        "mcp-server-git==2026.11.18",
+        "--repository",
+        "{ROOT}"
+      ],
+      "network": false,
+      "install": true,
+      "verified": false
+    },
+    {
+      "id": "fetch",
+      "title": "Fetch a web page",
+      "description": "Reads any URL as text. It can reach every address this machine can, including the local network: only turn it on if you accept that.",
+      "runtime": "python",
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch==2026.11.18"
+      ],
+      "network": true,
+      "install": true,
+      "verified": false
+    },
+    {
+      "id": "sqlite",
+      "title": "SQLite (scratch folder)",
+      "description": "Query and change a SQLite database in the scratch folder.",
+      "runtime": "python",
+      "command": "uvx",
+      "args": [
+        "mcp-server-sqlite==2025.4.25",
+        "--db-path",
+        "{ROOT}/chat.db"
+      ],
+      "network": false,
+      "install": true,
+      "verified": false
+    }
+  ]
+}
