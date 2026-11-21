@@ -67,7 +67,7 @@ export function SettingsPanel({ settings, onChange }: { settings: Settings; onCh
             ))}
           </select>
         </div>
-        <div className="field">
+        <div className="field field-wide">
           <label className="check">
             <input type="checkbox" checked={settings.tools} aria-describedby={`${id}-tools-hint`} onChange={(e) => set('tools', e.target.checked)} />
             {t('settings.tools')}
