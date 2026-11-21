@@ -134,7 +134,8 @@ static int bind_ple_table(LmGemma *g, char *err, size_t errlen)
 
 static size_t gemma_state_bytes(const void *arg, int ctx) { return lm_gemma_state_bytes((const LmGemmaCfg *)arg, ctx); }
 
-LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, int fast, char *err, size_t errlen)
+LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, int fast, int vision,
+                       char *err, size_t errlen)
 {
     LmGemma *g = (LmGemma *)calloc(1, sizeof *g);
     if (!g) { lm_fail(err, errlen, "out of memory"); return NULL; }
@@ -203,6 +204,7 @@ LmGemma *lm_gemma_open(const char *model_dir, const char *weights, int ctx, int 
     {   /* the per-layer embedding table is read a row per token, never resident as a whole */
         uint64_t weights = g->b.bytes - (uint64_t)g->ple_t->nbytes;
         if (g->ple_s) weights -= (uint64_t)g->ple_s->nbytes;
+        if (vision) weights += lm_bind_vision_bytes(&g->b);   /* lm_vision_open binds it later */
         if (lm_ctx_choose_here(ctx, c->max_pos, weights, gemma_state_bytes, c, &ctx, err, errlen) != 0) goto fail;
     }
     g->ctx = ctx;

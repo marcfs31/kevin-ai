@@ -28,7 +28,7 @@ static const Case CASES[] = { { NULL, 0, "bf16" }, { Q8, 0, "q8" }, { Q8, 1, "q8
 static LmModel *open_m(const Case *c, int mtp)
 {
     char err[512] = "";
-    LmOpts o = { c->weights, CTX, 0, c->fast, mtp };
+    LmOpts o = { c->weights, CTX, 0, c->fast, mtp, 0 };
     LmModel *m = lm_open(DIR, &o, err, sizeof err);
     CHECK_MSG(m != NULL, "%s: lm_open: %s", c->label, err);
     return m;
@@ -225,7 +225,7 @@ static void test_refusals(void)
 
     /* NEGATIVE: the context window must hold both verify tokens */
     char err[512] = "";
-    LmOpts small = { NULL, 4, 0, 0, 1 };
+    LmOpts small = { NULL, 4, 0, 0, 1, 0 };
     m = lm_open(DIR, &small, err, sizeof err);
     CHECK_MSG(m != NULL, "%s", err);
     if (m) {
@@ -241,7 +241,7 @@ static void test_refusals(void)
         lm_close(m);
     }
     /* a Gemma model has no head */
-    LmOpts g = { NULL, 64, 0, 0, 1 };
+    LmOpts g = { NULL, 64, 0, 0, 1, 0 };
     err[0] = 0;
     CHECK(lm_open("tests/fixtures/gemma4-tiny", &g, err, sizeof err) == NULL && strstr(err, "MTP"));
     free(rows);
@@ -282,7 +282,7 @@ static void test_q8_without_head(void)
         LmModel *m = open_m(&nohead, 0);
         CHECK(m != NULL);
         lm_close(m);
-        LmOpts o = { path, CTX, 0, 0, 1 };
+        LmOpts o = { path, CTX, 0, 0, 1, 0 };
         err[0] = 0;
         CHECK_MSG(lm_open(DIR, &o, err, sizeof err) == NULL && strstr(err, "no MTP head"), "err: %s", err);
     }

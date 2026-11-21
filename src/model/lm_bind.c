@@ -156,6 +156,16 @@ int lm_bind_open(LmBind *b, const char *path, int q8, char *err, size_t n)
     return 0;
 }
 
+uint64_t lm_bind_vision_bytes(const LmBind *b)
+{
+    static const char *const pfx[] = { "model.visual.", "model.vision_tower.", "model.embed_vision." };
+    uint64_t sum = 0;
+    for (int i = 0; i < b->st.nt; i++)
+        for (size_t k = 0; k < sizeof pfx / sizeof pfx[0]; k++)
+            if (!strncmp(b->st.t[i].name, pfx[k], strlen(pfx[k]))) { sum += (uint64_t)b->st.t[i].nbytes; break; }
+    return sum;
+}
+
 void lm_bind_free(LmBind *b)
 {
     for (int i = 0; i < b->nowned; i++) free(b->owned[i]);

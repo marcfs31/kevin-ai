@@ -7,6 +7,7 @@
 #include "core/lm_ops.h"
 #include "io/lm_image.h"
 #include "lm/lm.h"
+#include "model/lm_bind.h"
 #include "model/lm_vision.h"
 
 #define FIX "tests/fixtures/qwen35-vl-tiny"
@@ -63,7 +64,7 @@ static int encode(LmVision *v, const char *path, float **rows, int *n, int *gh, 
 static void test_block(void)
 {
     char err[512];
-    LmOpts o = { NULL, 64, 0, 0, 0 };
+    LmOpts o = { NULL, 64, 0, 0, 0, 0 };
     LmModel *m = lm_open(FIX, &o, err, sizeof err);
     LmVision *v = lm_vision_open(FIX, NULL, err, sizeof err);
     CHECK_MSG(m && v, "%s", err);
@@ -126,7 +127,7 @@ static void test_block(void)
 static void test_refusals(void)
 {
     char err[512];
-    LmOpts o = { NULL, 32, 0, 0, 0 };
+    LmOpts o = { NULL, 32, 0, 0, 0, 0 };
     float row[64] = { 0 };
     LmModel *g = lm_open("tests/fixtures/gemma4-tiny", &o, err, sizeof err);
     CHECK_MSG(g != NULL, "%s", err);
@@ -145,10 +146,80 @@ static void test_refusals(void)
     }
 }
 
+/* Text, image, text, image: the second block starts where the first left the M-RoPE text
+ * position (prefix 2, block 2x3 advances it by 2 + max(2, 3) = 5, token 7 by 1). */
+static void test_two_blocks(void)
+{
+    char err[512];
+    LmOpts o = { NULL, 64, 0, 0, 0, 1 };
+    LmModel *m = lm_open(FIX, &o, err, sizeof err);
+    LmVision *v = lm_vision_open(FIX, NULL, err, sizeof err);
+    CHECK_MSG(m && v, "%s", err);
+    if (!m || !v) { lm_close(m); lm_vision_close(v); return; }
+    float *rows = NULL;
+    int n, gh, gw;
+    CHECK(encode(v, IMG, &rows, &n, &gh, &gw) == 0);
+    const int width = lm_vision_info(v)->out_dim;
+    const int prefix[] = { 1, 2 };
+    int thw[8 * 3];
+    CHECK(lm_prefill(m, prefix, 2, NULL) == LM_OK);
+    CHECK(lm_prefill_image(m, rows, n, width, gh, gw, NULL, NULL) == LM_OK);
+    CHECK(lm_feed(m, 7, NULL) == LM_OK);
+    LmSnapshot *s = lm_snapshot(m);
+    CHECK(s != NULL);
+    float first[384], again[384];
+    CHECK(lm_prefill_image(m, rows, n, width, gh, gw, first, thw) == LM_OK);
+    CHECK(thw[0] == 8 && thw[1] == 8 && thw[2] == 8);                 /* start token */
+    CHECK(thw[3] == 9 && thw[4] == 9 && thw[5] == 9);                 /* cell (0, 0) */
+    CHECK(thw[6 * 3] == 9 && thw[6 * 3 + 1] == 10 && thw[6 * 3 + 2] == 11);   /* cell (1, 2) */
+    CHECK(thw[7 * 3] == 12 && thw[7 * 3 + 1] == 12 && thw[7 * 3 + 2] == 12); /* end token */
+    CHECK(lm_pos(m) == 2 + (n + 2) + 1 + (n + 2));
+    CHECK(lm_restore(m, s) == LM_OK);
+    CHECK(lm_prefill_image(m, rows, n, width, gh, gw, again, NULL) == LM_OK);
+    CHECK(memcmp(first, again, sizeof first) == 0);
+    lm_snapshot_free(s);
+    free(rows);
+    lm_vision_close(v);
+    lm_close(m);
+}
+
+/* LmOpts.vision counts exactly the encoder tensors of either family (the text fixtures hold
+ * small encoder stubs) and never a text tensor. */
+static void test_vision_bytes(void)
+{
+    static const char *const dirs[] = {
+        FIX, "tests/fixtures/gemma4-vl-tiny", "tests/fixtures/qwen35-tiny", "tests/fixtures/gemma4-tiny",
+    };
+    char err[512];
+    for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
+        LmBind b;
+        memset(&b, 0, sizeof b);
+        CHECK_MSG(lm_bind_open(&b, dirs[i], 0, err, sizeof err) == 0, "%s", err);
+        uint64_t enc = 0, text = 0;
+        for (int k = 0; k < b.st.nt; k++) {
+            const char *nm = b.st.t[k].name;
+            if (strstr(nm, "visual") || strstr(nm, "vision")) enc += (uint64_t)b.st.t[k].nbytes;
+            else text += (uint64_t)b.st.t[k].nbytes;
+        }
+        const uint64_t vb = lm_bind_vision_bytes(&b);
+        CHECK_MSG(vb == enc && enc > 0 && text > 0, "%s: %llu vs %llu", dirs[i], (unsigned long long)vb,
+                  (unsigned long long)enc);
+        lm_bind_free(&b);
+        LmOpts o = { NULL, 32, 0, 0, 0, 1 };
+        LmModel *m = lm_open(dirs[i], &o, err, sizeof err);
+        CHECK_MSG(m != NULL, "%s: %s", dirs[i], err);
+        lm_close(m);
+    }
+    LmOpts bad = { NULL, 32, 0, 0, 0, 2 };
+    CHECK(lm_open(FIX, &bad, err, sizeof err) == NULL && strstr(err, "vision"));
+}
+
 int main(void)
 {
     test_mrope_matches_rope();
     test_block();
+    test_two_blocks();
+    test_vision_bytes();
     test_refusals();
     return lt_finish("test_image_lm");
 }

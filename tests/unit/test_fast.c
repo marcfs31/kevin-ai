@@ -20,7 +20,7 @@ static const int TOK[NTOK] = { 5, 17, 3, 42, 9, 31, 7, 2, 11, 24 };
 static float *run(const char *dir, const char *weights, int fast, int threads, int *vocab_out)
 {
     char err[512] = "";
-    LmOpts o = { weights, 0, threads, fast, 0 };
+    LmOpts o = { weights, 0, threads, fast, 0, 0 };
     LmModel *m = lm_open(dir, &o, err, sizeof err);
     CHECK_MSG(m != NULL, "lm_open(%s, fast=%d): %s", dir, fast, err);
     if (!m) return NULL;
@@ -84,9 +84,9 @@ int main(void)
         }
         check_family(FAM[f][0], FAM[f][1]);
         /* NEGATIVE: the fast path has nothing to round on a bf16 checkpoint, and 2 is not a flag */
-        LmOpts nofile = { NULL, 0, 0, 1, 0 };
+        LmOpts nofile = { NULL, 0, 0, 1, 0, 0 };
         expect_open_fail(FAM[f][0], &nofile, "needs a q8 weights file", "fast without q8 weights");
-        LmOpts two = { probe, 0, 0, 2, 0 };
+        LmOpts two = { probe, 0, 0, 2, 0, 0 };
         expect_open_fail(FAM[f][0], &two, "q8_int8_acts must be 0 or 1", "flag value 2");
     }
     return lt_finish("test_fast");
