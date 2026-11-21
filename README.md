@@ -691,6 +691,32 @@ curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/
   -d '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":64}'
 ```
 
+### Web chat (`web/`)
+
+A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the gate are in
+[web/README.md](web/README.md); this is only how to run it locally.
+
+**Prerequisites:** Node 24 or newer (see `web/.nvmrc`), and `lm-serve` reachable on
+`127.0.0.1:8080` (or wherever you point the proxy). The page talks to `/v1` and `/health` on
+the Vite origin; Vite proxies those to `LM_SERVE_URL` (default `http://127.0.0.1:8080`).
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). The repo uses `npm` (`web/package-lock.json`);
+`ignore-scripts=true` is set in `web/.npmrc`. To proxy at an SSH tunnel or another host:
+
+```bash
+LM_SERVE_URL=http://127.0.0.1:8080 npm run dev
+```
+
+`POST /control/serve` (Settings → start a model via `scripts/start-remote-lm-serve.sh`) exists
+only on the Vite **dev** server. The production static build and `tools/chat_server.py` do not
+offer it.
+
 ### bin/lm-run
 
 Feeds token ids, writes logits, and generates by argmax. The golden gate uses it; nothing
