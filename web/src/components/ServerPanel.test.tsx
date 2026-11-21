@@ -23,4 +23,41 @@ describe('ServerPanel', () => {
     expect(alert.textContent).not.toContain('token dump');
     expect(screen.getByText(/token dump/)).toBeTruthy();
   });
+
+  it('offers the uncensored Qwen and marks only the matching button as running', () => {
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} runningModel="qwen3.5-4b-uncensored" onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B Uncensored' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('keeps plain Qwen pressed for the plain model name', () => {
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} runningModel="qwen3.5-4b" onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B Uncensored' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('sends --id qwen-uncensored when its button is confirmed', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Start Qwen3.5-4B Uncensored' }));
+    expect(confirm).toHaveBeenCalledWith('Stop the current model and start Qwen3.5-4B Uncensored?');
+    await screen.findByRole('status');
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.model).toBe('qwen-uncensored');
+  });
 });

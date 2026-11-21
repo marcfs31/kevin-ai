@@ -16,7 +16,7 @@ cd web && npm ci && npm run dev        # http://127.0.0.1:5173, /v1 and /health 
 `LM_SERVE_URL` (default `http://127.0.0.1:8080`) points the dev proxy elsewhere, for example at
 an SSH tunnel: `ssh -N -L 8080:127.0.0.1:8080 toor@192.168.1.96`.
 
-In Settings, **Start Qwen3.5-4B** / **Start Gemma 4 E4B** call `POST /control/serve` on the Vite
+In Settings, **Start Qwen3.5-4B** / **Start Qwen3.5-4B Uncensored** / **Start Gemma 4 E4B** call `POST /control/serve` on the Vite
 dev server, which runs `scripts/start-remote-lm-serve.sh`. That script SSHs to the machine that
 holds the weights (`LM_SERVE_SSH`, default `toor@192.168.1.96`), stops any existing `lm-serve`,
 starts the chosen model on `127.0.0.1:8080`, and leaves the local tunnel alone. Optional fields

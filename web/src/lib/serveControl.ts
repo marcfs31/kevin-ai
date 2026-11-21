@@ -2,7 +2,7 @@
 // Only lm-serve flags that already exist on the binary are accepted. Null/undefined omits
 // the flag so lm-serve keeps its own default.
 
-export type ServeModelId = 'qwen' | 'gemma';
+export type ServeModelId = 'qwen' | 'qwen-uncensored' | 'gemma';
 
 export interface ServeOptions {
   model: ServeModelId;
@@ -100,7 +100,7 @@ export function controlRequestAllowed(req: ControlRequest): ControlDecision {
   return { ok: true };
 }
 
-const MODELS: ServeModelId[] = ['qwen', 'gemma'];
+const MODELS: ServeModelId[] = ['qwen', 'qwen-uncensored', 'gemma'];
 
 function intOrNull(v: unknown, lo: number, hi: number): number | null | undefined {
   if (v === undefined || v === null || v === '') return null;
