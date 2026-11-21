@@ -157,15 +157,67 @@ check 'grep -q "\"delta\":{\"role\":\"assistant\"" "$tmp/body" && grep -q "\"fin
       "stream chunks: $(head -c 600 "$tmp/body")"
 check 'grep "^data: {" "$tmp/body" | sed "s/^data: //" | python3 -I -c "import json,sys; [json.loads(l) for l in sys.stdin]"' "a stream chunk is not valid JSON"
 
+# stream_options.include_usage: the last chunk before [DONE] has no choices and the usage; without
+# the option there is no usage chunk (the earlier stream check had it; this one has not)
+check '[ "$(tail -4 "$tmp/body" | head -1 | python3 -I -c "import json,sys; d=json.loads(sys.stdin.read()[6:]); u=d[\"usage\"]; print(d[\"choices\"] == [] and u[\"total_tokens\"] == u[\"prompt_tokens\"] + u[\"completion_tokens\"] and \"cached_tokens\" in u[\"prompt_tokens_details\"])")" = True ]' \
+      "the usage chunk: $(tail -c 400 "$tmp/body")"
+nreq='{"messages":[{"role":"user","content":"hi"}],"max_tokens":2,"stream":true}'
+check '[ "$(chat "$nreq")" = 200 ] && ! grep -q "\"usage\"" "$tmp/body"' "a stream without include_usage carried usage: $(tail -c 300 "$tmp/body")"
+
+# tools (OpenAI shape). The tiny random model never writes a call, so these check what the server owns:
+# validation, the tools reaching the prompt, tool_choice, the tool-role history, and the plain
+# reply (no tool_calls, finish_reason by length) when the model calls nothing.
+check '[ "$(post "$url/v1/models")" = 200 ] && [ "$(j "d[\"data\"][0][\"capabilities\"][\"tools\"][\"status\"]")" = ok ]' "models do not advertise tools: $(cat "$tmp/body")"
+tool='{"type":"function","function":{"name":"get_weather","description":"Get the weather","parameters":{"type":"object","properties":{"city":{"type":"string","description":"City name"}},"required":["city"]}}}'
+base='{"messages":[{"role":"user","content":"weather in Paris?"}],"max_tokens":3,"temperature":0'
+chat "$base}" > /dev/null
+p_plain=$(j 'd["usage"]["prompt_tokens"]')
+check '[ "$(chat "$base,\"tools\":[$tool]}")" = 200 ]' "a request with tools: $(cat "$tmp/body")"
+check '[ "$(j "d[\"usage\"][\"prompt_tokens\"] > $p_plain")" = True ]' "the tools did not reach the prompt"
+check '[ "$(j "d[\"choices\"][0][\"finish_reason\"]")" = length ] && [ "$(j "\"tool_calls\" in d[\"choices\"][0][\"message\"]")" = False ]' \
+      "a reply with no call has tool_calls or the wrong finish_reason: $(cat "$tmp/body")"
+check '[ "$(chat "$base,\"tools\":[$tool],\"tool_choice\":\"auto\"}")" = 200 ]' "tool_choice auto: $(cat "$tmp/body")"
+check '[ "$(chat "$base,\"tools\":[$tool],\"tool_choice\":\"none\"}")" = 200 ] && [ "$(j "d[\"usage\"][\"prompt_tokens\"]")" = "$p_plain" ]' \
+      "tool_choice none put the tools in the prompt: $(cat "$tmp/body")"
+expect 400 "$base,\"tools\":[$tool],\"tool_choice\":\"required\"}" "tool_choice required"
+check 'grep -q unsupported_parameter "$tmp/body"' "tool_choice required code: $(cat "$tmp/body")"
+expect 400 "$base,\"tools\":[{\"type\":\"function\"}]}" "a tool with no function"
+check 'grep -q invalid_tools "$tmp/body" && grep -q "tools\[0\]" "$tmp/body"' "the malformed tool error: $(cat "$tmp/body")"
+expect 400 "$base,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"a b\"}}]}" "a tool name with a space"
+expect 400 "$base,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"f\",\"parameters\":{\"type\":\"array\"}}}]}" "tool parameters that are not an object schema"
+expect 400 "$base,\"tools\":{\"a\":1}}" "tools that are not an array"
+# a tool with no parameters is valid
+expect 200 "$base,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"ping\"}}]}" "a tool with no parameters"
+# streaming with tools: the same plain stream
+check '[ "$(chat "$base,\"stream\":true,\"tools\":[$tool]}")" = 200 ] && [ "$(tail -2 "$tmp/body" | head -1)" = "data: [DONE]" ] && ! grep -q tool_calls "$tmp/body"' \
+      "a stream with tools and no call: $(tail -c 300 "$tmp/body")"
+
+# a conversation that holds a call and its result
+hist='{"messages":[{"role":"user","content":"weather in Paris?"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"18C sunny"}],"max_tokens":2'
+check '[ "$(chat "$hist,\"tools\":[$tool]}")" = 200 ] && [ "$(j "d[\"choices\"][0][\"message\"][\"role\"]")" = assistant ]' "tool result history: $(cat "$tmp/body")"
+check '[ "$(chat "$hist}")" = 200 ]' "tool result history without tools: $(cat "$tmp/body")"
+# the arguments may be reformatted by the client, and an empty string means no arguments
+expect 200 '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"","tool_calls":[{"id":"c","type":"function","function":{"name":"ping","arguments":""}}]},{"role":"tool","tool_call_id":"c","content":"ok"},{"role":"tool","name":"ping","content":"again"}],"max_tokens":1}' "empty arguments and a second result"
+# NEGATIVE: tool messages that answer nothing, calls that are not valid
+expect 400 '{"messages":[{"role":"user","content":"x"},{"role":"tool","tool_call_id":"c","content":"ok"}],"max_tokens":1}' "a tool message after a user message"
+check 'grep -q invalid_tool_message "$tmp/body"' "orphan tool message code: $(cat "$tmp/body")"
+expect 400 '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":null,"tool_calls":[{"id":"c","type":"function","function":{"name":"ping","arguments":"{}"}}]},{"role":"tool","tool_call_id":"other","content":"ok"}],"max_tokens":1}' "a result for an unknown call id"
+check 'grep -q invalid_tool_message "$tmp/body"' "unknown call id code: $(cat "$tmp/body")"
+expect 400 '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":null,"tool_calls":[{"id":"c","type":"function","function":{"name":"ping","arguments":"{not json"}}]},{"role":"tool","tool_call_id":"c","content":"ok"}],"max_tokens":1}' "malformed arguments JSON"
+check 'grep -q invalid_tool_call "$tmp/body" && grep -q "arguments" "$tmp/body"' "malformed arguments error: $(cat "$tmp/body")"
+expect 400 '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":null,"tool_calls":[{"id":"c","type":"function","function":{"name":"ping","arguments":"[1]"}}]},{"role":"tool","tool_call_id":"c","content":"ok"}],"max_tokens":1}' "arguments that are not an object"
+expect 400 '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":null,"tool_calls":[{"id":"c","type":"function"}]},{"role":"tool","tool_call_id":"c","content":"ok"}],"max_tokens":1}' "a tool call with no function"
+expect 400 '{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"y"},{"role":"tool","tool_call_id":"c","content":"ok"}],"max_tokens":1}' "a tool message after an assistant message with no calls"
+
 # refusals, never silently ignored; neutral values of the same parameters are fine
 expect 400 '{not json' "bad JSON"
-expect 400 '{"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}]}' "tools"
-check 'grep -q "tools is not supported" "$tmp/body"' "the tools refusal does not name the parameter"
+expect 400 '{"messages":[{"role":"user","content":"hi"}],"functions":[{"name":"f"}]}' "legacy functions"
+check 'grep -q "functions is not supported" "$tmp/body"' "the functions refusal does not name the parameter"
 expect 400 '{"messages":[{"role":"user","content":"hi"}],"stop":["x"]}' "stop strings"
 expect 200 '{"messages":[{"role":"user","content":"hi"}],"stop":null,"n":1,"tools":[],"tool_choice":"none","frequency_penalty":0,"max_tokens":1}' "neutral parameters"
 expect 400 '{"messages":[{"role":"assistant","content":"hi"}]}' "a last message not from the user"
 expect 400 '{"messages":[{"role":"user","content":"a"},{"role":"system","content":"late"},{"role":"user","content":"b"}]}' "a system message that is not first"
-expect 400 '{"messages":[{"role":"tool","content":"hi"}]}' "a tool message"
+expect 400 '{"messages":[{"role":"tool","content":"hi"}]}' "a tool message with no call before it"
 expect 400 '{"messages":[{"role":"user","content":[{"type":"image_url"}]}]}' "an image part"
 expect 200 '{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"max_tokens":1}' "text parts"
 expect 400 '{"messages":[{"role":"user","content":"hi"}],"max_tokens":0}' "max_tokens 0"

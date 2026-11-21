@@ -584,11 +584,26 @@ bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
 ```
 
 - `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (with `"stream": true` too).
-  Text chat only: tools, stop strings, `n` > 1, logprobs, penalties and JSON modes get a 400
-  instead of being ignored.
+  Stop strings, `n` > 1, logprobs, penalties, JSON modes and the legacy `functions` get a 400
+  instead of being ignored. `stream_options.include_usage` adds a last chunk with empty
+  `choices` and `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`,
+  `prompt_tokens_details.cached_tokens`).
+- **Tool calling** (OpenAI shape, Qwen3.5 and Gemma 4). `tools` is rendered the way each
+  model's own `chat_template.jinja` does it; a call the model writes comes back as
+  `message.tool_calls` (`id`, `type: "function"`, `function.name`, `function.arguments` as a
+  JSON string) with `finish_reason: "tool_calls"`, and `content` is `null` when there is no
+  text. In a stream each call is one `delta.tool_calls` entry (whole, when the model has
+  finished it), then the finish chunk. Answer with `{"role":"tool","tool_call_id":...,
+  "content":...}` messages after the assistant message that holds `tool_calls`, and send
+  that history back exactly: the state is extended, not re-fed. `tool_choice` is `"auto"`
+  (default) or `"none"` (tools stay out of the prompt); `"required"` and a named function
+  are a 400, as is a malformed tool definition (`invalid_tools`), a tool call whose
+  `arguments` is not a JSON object (`invalid_tool_call`), or a tool message that answers no
+  call (`invalid_tool_message`). A call the model wrote that does not parse is returned as
+  plain `content`, never dropped. `GET /v1/models` lists `capabilities.tools`.
 - Without `max_tokens` a reply runs until the model stops or the context fills. A reply
-  stops as soon as its client disconnects, and one cut short by a shutdown or a tool call is
-  an error (503 or 500), never a `"stop"` that looks complete.
+  stops as soon as its client disconnects, and one cut short by a shutdown is an error
+  (503), never a `"stop"` that looks complete.
 - A request has `--timeout` seconds (30) to arrive in full, so a slow client cannot hold the
   server; with a key set, the key is checked before the body is read.
 - It listens on 127.0.0.1:8080. To reach it from the network, pass `--host 0.0.0.0` and set
