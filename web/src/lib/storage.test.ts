@@ -46,6 +46,10 @@ describe('migrate', () => {
     ]);
     expect(migrate({ version: 1, settings: { tools: true, maxSteps: 99 } })?.settings).toMatchObject({ tools: true, maxSteps: 8 });
     expect(migrate({ version: 1, settings: { maxSteps: 5 } })?.settings.maxSteps).toBe(5);
+    // A chat saved before Auto compact existed keeps compacting by itself; a saved choice is kept.
+    expect(migrate({ version: 1, settings: {} })?.settings.autoCompact).toBe(true);
+    expect(migrate({ version: 1, settings: { autoCompact: false } })?.settings.autoCompact).toBe(false);
+    expect(migrate({ version: 1, settings: { autoCompact: 'no' } })?.settings.autoCompact).toBe(true);
   });
 
   it('drops broken entries and resets invalid settings', () => {
