@@ -651,6 +651,51 @@ FAKE_RUN = textwrap.dedent('''\
     def opt(name):
         return a[a.index(name) + 1] if name in a else None
     mode = os.environ.get("FAKE_MODE", "ok")
+    if opt("--image") and "--vision-rows-out" not in a:   # an image prompt through the text model
+        import json
+        import ref_vision_gemma4, ref_vision_qwen35 as rv
+        cfg = json.load(open(os.path.join(opt("--model"), "config.json")))
+        gemma = cfg["model_type"] == "gemma4"
+        vis = (ref_vision_gemma4 if gemma else rv).VisionModel.load(opt("--model"), opt("--weights"))
+        imgs = [a[i + 1] for i, x in enumerate(a) if x == "--image"]
+        model = ref.Model.load(opt("--model"), opt("--weights"))
+        start, end = (cfg["boi_token_id"], cfg["eoi_token_id"]) if gemma else (cfg["vision_start_token_id"], cfg["vision_end_token_id"])
+        state, rows, ii, run = model.new_state(), [], 0, []
+        def flush():
+            global last
+            if run:
+                for t in run:
+                    last = model.step(state, t)
+                rows.append(last)
+                run.clear()
+        for tok in opt("--tokens").split(","):
+            if tok != "img":
+                run.append(int(tok))
+                continue
+            flush()
+            rgb, w, h = rv.read_ppm(imgs[ii]); ii += 1
+            enc = vis.encode(rgb, h, w)
+            last = (model.feed_image(state, enc, start, end, cfg["text_config"]["pad_token_id"]) if gemma
+                    else model.feed_image(state, enc, h // 32, w // 32, start, end))
+            rows.append(last)
+        flush()
+        if mode == "perturb":
+            rows[1][3] += 0.05
+        ids = []
+        for _ in range(int(opt("--greedy") or 0)):
+            ids.append(ref.argmax(last))
+            last = model.step(state, ids[-1])
+        if mode == "wrongid" and ids:
+            ids[0] = (ids[0] + 1) % model.cfg.vocab
+        if mode == "mtpwrongid" and "--mtp" in a and ids:
+            ids[-1] = (ids[-1] + 1) % model.cfg.vocab
+        if opt("--logits-out"):
+            with open(opt("--logits-out"), "wb") as f:
+                for r in rows:
+                    f.write(struct.pack("<%df" % len(r), *r))
+        for i in ids:
+            print(i)
+        sys.exit(0)
     if opt("--image"):
         import json
         import ref_vision_gemma4, ref_vision_qwen35 as rv
@@ -769,6 +814,20 @@ class CheckGoldenTests(unittest.TestCase):
         self.assertIn("[gemma4]: bf16 vision 3 images, 13 rows", p.stdout)
         self.assert_fails(self.go(fake_mode="visionperturb", run_bin=self.gemma_run_bin, fixtures=GVLTINY),
                           "bf16 img_48x48.ppm: row 0 value 3")
+
+    def test_image_prompt_checks(self):
+        p = self.go(fixtures=VLTINY)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("bf16 image prompt 5 items", p.stdout)
+        self.assertIn("(also --mtp)", p.stdout)
+        p = self.go(run_bin=self.gemma_run_bin, fixtures=GVLTINY)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("q8 image prompt 5 items", p.stdout)
+        self.assertNotIn("--mtp", p.stdout)               # Gemma has no MTP head
+        # NEGATIVE: a wrong logit in an item row, a wrong greedy id, and a wrong id only under --mtp
+        self.assert_fails(self.go(fake_mode="perturb", fixtures=VLTINY), "bf16 image logits row 1")
+        self.assert_fails(self.go(fake_mode="wrongid", fixtures=VLTINY), "bf16 image greedy id 0")
+        self.assert_fails(self.go(fake_mode="mtpwrongid", fixtures=VLTINY), "bf16 image mtp greedy id")
 
     def test_wrong_vision_rows_fail(self):
         self.assert_fails(self.go(fake_mode="visionperturb", fixtures=VLTINY), "bf16 img_64x64.ppm: row 3 value 3")
