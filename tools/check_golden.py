@@ -322,11 +322,25 @@ def check_quantiser(quant_bin, model_dir, golden_q8, timeout, tmp):
                   % (off, where, len(a), len(b)))
 
 
+def check_gguf(run_bin, fixtures, timeout):
+    """A GGUF fixture (Qwen2): the same logits and greedy checks against golden.json, no q8 file
+    and no lm-quant (the weights are the file's own block-quantised bytes)."""
+    golden = os.path.join(fixtures, "golden.json")
+    need_file(golden, "golden file")
+    with open(golden) as f:
+        vocab = len(json.load(f)["logits"][0])
+    with tempfile.TemporaryDirectory() as tmp:
+        part = check_variant("gguf", run_bin, fixtures, None, golden, vocab, timeout, tmp)
+    return "check_golden OK [qwen2 gguf]: " + part
+
+
 def check(run_bin, quant_bin, fixtures, timeout):
     need_exe(run_bin, "lm-run")
     need_exe(quant_bin, "lm-quant")
     if not os.path.isdir(fixtures):
         raise Failure("fixtures directory not found: %s" % fixtures)
+    if os.path.isfile(os.path.join(fixtures, "model.gguf")):
+        return check_gguf(run_bin, fixtures, timeout)
     cfg_path = os.path.join(fixtures, "config.json")
     need_file(cfg_path, "config.json")
     try:

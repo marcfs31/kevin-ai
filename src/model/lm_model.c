@@ -45,7 +45,9 @@
 #include "model/lm_config.h"
 #include "model/lm_ctx.h"
 #include "model/lm_gemma.h"
+#include "io/lm_gguf.h"
 #include "model/lm_layers.h"
+#include "model/lm_qwen2.h"
 #include "model/lm_times.h"
 
 typedef struct {
@@ -59,6 +61,7 @@ typedef struct {
 struct LmModel {
     unsigned long id;                        /* unique per lm_open: snapshots name their model by it */
     LmGemma *gemma;                          /* non-NULL: a Gemma 4 model, every other field unused */
+    LmQwen2 *q2;                             /* non-NULL: a Qwen2 GGUF model, every other field unused */
     LmCfg    cfg;
     int      ctx, pos;
     int      rope_pos;                       /* next M-RoPE text position; equals pos until an image */
@@ -104,6 +107,7 @@ void lm_close(LmModel *m)
 {
     if (!m) return;
     if (m->gemma) { lm_gemma_close(m->gemma); free(m); return; }
+    if (m->q2) { lm_qwen2_close(m->q2); free(m); return; }
     const int L = m->cfg.layers;
     for (int i = 0; i < L && m->conv; i++) { free(m->conv[i]); free(m->S[i]); free(m->kc[i]); free(m->vc[i]); }
     free(m->conv); free(m->S); free(m->kc); free(m->vc);
@@ -214,6 +218,19 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
 #ifdef _OPENMP
     if (opts && opts->threads > 0) omp_set_num_threads(opts->threads);
 #endif
+
+    /* a GGUF file (or a directory holding one and no config.json) is a Qwen2 model */
+    {
+        char gp[4096];
+        if (lm_gguf_locate(model_dir, gp, sizeof gp)) {
+            if (weights) { lm_fail(err, errlen, "a GGUF model carries its own weights; --weights does not apply"); free(m); return NULL; }
+            if (opts && opts->mtp) { lm_fail(err, errlen, "a GGUF Qwen2 model has no MTP head; mtp is for Qwen3.5"); free(m); return NULL; }
+            m->q2 = lm_qwen2_open(gp, ctx, err, errlen);
+            if (!m->q2) { free(m); return NULL; }
+            m->ctx = lm_qwen2_n_ctx(m->q2);
+            return m;
+        }
+    }
 
     /* family dispatch on config.json model_type; anything that is not a string falls
      * through to the Qwen reader, which reports the missing or malformed field */
@@ -357,13 +374,14 @@ fail:
     return NULL;
 }
 
-int  lm_n_vocab(const LmModel *m) { return m->gemma ? lm_gemma_n_vocab(m->gemma) : m->cfg.vocab; }
-int  lm_n_ctx(const LmModel *m)   { return m->gemma ? lm_gemma_n_ctx(m->gemma) : m->ctx; }
-int  lm_pos(const LmModel *m)     { return m->gemma ? lm_gemma_pos(m->gemma) : m->pos; }
+int  lm_n_vocab(const LmModel *m) { return m->gemma ? lm_gemma_n_vocab(m->gemma) : m->q2 ? lm_qwen2_n_vocab(m->q2) : m->cfg.vocab; }
+int  lm_n_ctx(const LmModel *m)   { return m->gemma ? lm_gemma_n_ctx(m->gemma) : m->q2 ? lm_qwen2_n_ctx(m->q2) : m->ctx; }
+int  lm_pos(const LmModel *m)     { return m->gemma ? lm_gemma_pos(m->gemma) : m->q2 ? lm_qwen2_pos(m->q2) : m->pos; }
 
 void lm_reset(LmModel *m)
 {
     if (m->gemma) { lm_gemma_reset(m->gemma); return; }
+    if (m->q2) { lm_qwen2_reset(m->q2); return; }
     const LmCfg *c = &m->cfg;
     /* the KV caches are not cleared: attention reads only positions below pos, each written
      * before it is read, and clearing a large window would touch every page of it */
@@ -391,6 +409,7 @@ struct LmSnapshot {
 static void state_regions(LmModel *m, int pos, LmRegionFn fn, void *user)
 {
     if (m->gemma) { lm_gemma_state_regions(m->gemma, pos, fn, user); return; }
+    if (m->q2) { lm_qwen2_state_regions(m->q2, pos, fn, user); return; }
     const LmCfg *c = &m->cfg;
     const size_t kvd = (size_t)c->kv_heads * c->head_dim;
     for (int i = 0; i < c->layers; i++) {
@@ -428,10 +447,10 @@ LmSnapshot *lm_snapshot(const LmModel *cm)
     if (!s->data) { free(s); return NULL; }
     s->model = m->id;
     s->pos = pos;
-    s->rope_pos = m->gemma ? 0 : m->rope_pos;
-    s->last_t = m->gemma ? 0 : m->last_t;
-    s->last_h = m->gemma ? 0 : m->last_h;
-    s->last_w = m->gemma ? 0 : m->last_w;
+    s->rope_pos = m->gemma || m->q2 ? 0 : m->rope_pos;
+    s->last_t = m->gemma || m->q2 ? 0 : m->last_t;
+    s->last_h = m->gemma || m->q2 ? 0 : m->last_h;
+    s->last_w = m->gemma || m->q2 ? 0 : m->last_w;
     s->n = w.off;
     Walk save = { s->data, 0, 1 };
     state_regions(m, pos, walk, &save);
@@ -444,6 +463,7 @@ int lm_restore(LmModel *m, const LmSnapshot *s)
     Walk w = { s->data, 0, 2 };
     state_regions(m, s->pos, walk, &w);
     if (m->gemma) lm_gemma_set_pos(m->gemma, s->pos);
+    else if (m->q2) lm_qwen2_set_pos(m->q2, s->pos);
     else {
         m->pos = s->pos;
         m->rope_pos = s->rope_pos;
@@ -490,6 +510,7 @@ static void mtp_run(LmModel *m, const float *const *hid, const int *tok, int q0,
 static int feed(LmModel *m, int token, float *logits)
 {
     if (m->gemma) return lm_gemma_feed(m->gemma, token, logits);
+    if (m->q2) return lm_qwen2_feed(m->q2, token, logits);
     const LmCfg *c = &m->cfg;
     if (token < 0 || token >= c->vocab) return LM_ERR_TOKEN;
     if (m->pos >= m->ctx) return LM_ERR_CTX;
@@ -616,6 +637,7 @@ static int prefill(LmModel *m, const int *tokens, int n, float *logits)
     const int rc = batch_ok(m, tokens, n);
     if (rc != LM_OK || n == 0) return rc;
     if (m->gemma) return lm_gemma_prefill(m->gemma, tokens, n, logits);
+    if (m->q2) return lm_qwen2_prefill(m->q2, tokens, n, logits);
     m->vn = 0;
     run_chunks(m, tokens, NULL, n, NULL, logits, 0, 0);
     return LM_OK;
@@ -623,7 +645,7 @@ static int prefill(LmModel *m, const int *tokens, int n, float *logits)
 
 int lm_draft(LmModel *m, int token, float *logits)
 {
-    if (m->gemma || !m->mtp || m->pos < 1) return LM_ERR_STATE;
+    if (m->gemma || m->q2 || !m->mtp || m->pos < 1) return LM_ERR_STATE;
     if (token < 0 || token >= m->cfg.vocab) return LM_ERR_TOKEN;
     LM_TIMES_T0(t0);
     const float *hid = m->hlast;
@@ -635,7 +657,7 @@ int lm_draft(LmModel *m, int token, float *logits)
 
 int lm_verify(LmModel *m, const int *tokens, int n, float *rows)
 {
-    if (m->gemma || !m->mtp || n < 1 || n > LM_VERIFY_MAX || !rows) return LM_ERR_STATE;
+    if (m->gemma || m->q2 || !m->mtp || n < 1 || n > LM_VERIFY_MAX || !rows) return LM_ERR_STATE;
     const int rc = batch_ok(m, tokens, n);
     if (rc != LM_OK) return rc;
     LM_TIMES_T0(t0);
@@ -649,7 +671,7 @@ int lm_verify(LmModel *m, const int *tokens, int n, float *rows)
 
 int lm_accept(LmModel *m, int k)
 {
-    if (m->gemma || !m->mtp || m->vn < 1 || k < 1 || k > m->vn) return LM_ERR_STATE;
+    if (m->gemma || m->q2 || !m->mtp || m->vn < 1 || k < 1 || k > m->vn) return LM_ERR_STATE;
     const LmCfg *c = &m->cfg;
     if (k < m->vn) {
         const size_t nst = lm_linear_state_floats(&m->ld);
@@ -701,6 +723,7 @@ int lm_prefill_image(LmModel *m, const float *rows, int n, int width, int grid_h
         LM_TIMES_ADD(total, t0);
         return r;
     }
+    if (m->q2) return LM_ERR_STATE;   /* a text-only family */
     const LmCfg *c = &m->cfg;
     if (c->vis_start < 0 || c->vis_pad < 0 || c->vis_end < 0) return LM_ERR_STATE;
     if (width != c->hidden) return LM_ERR_TOKEN;
