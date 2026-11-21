@@ -125,6 +125,9 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
         <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'whiterabbitneo')} disabled={busy || starting} onClick={() => void start('whiterabbitneo')}>
           {starting && status.model === 'whiterabbitneo' ? t('serve.starting', { model: SERVE_MODEL_LABEL.whiterabbitneo }) : t('serve.startWhiteRabbitNeo')}
         </button>
+        <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'gemma-uncensored')} disabled={busy || starting} onClick={() => void start('gemma-uncensored')}>
+          {starting && status.model === 'gemma-uncensored' ? t('serve.starting', { model: SERVE_MODEL_LABEL['gemma-uncensored'] }) : t('serve.startGemmaUncensored')}
+        </button>
       </div>
       {status.kind === 'ok' && (
         <p className="hint" role="status">

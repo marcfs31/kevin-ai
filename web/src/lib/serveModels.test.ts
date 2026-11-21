@@ -57,6 +57,17 @@ describe('ctxPresetsFor', () => {
     expect(ctxPresetsFor('qwen-uncensored', 'qwen3.5-4b-uncensored', 8192)).toEqual([null, 4096, 8192]);
   });
 
+  it('keeps Gemma and Gemma uncensored apart, by their different aliases', () => {
+    expect(matchServeModel('gemma-4-e4b')).toBe('gemma');
+    expect(matchServeModel('gemma-4-e4b-uncensored')).toBe('gemma-uncensored');
+    // NEGATIVE: each name turns the other target off
+    expect(isServeModelRunning('gemma-4-e4b-uncensored', 'gemma')).toBe(false);
+    expect(isServeModelRunning('gemma-4-e4b', 'gemma-uncensored')).toBe(false);
+    expect(isServeModelRunning('qwen3.5-4b-uncensored', 'gemma-uncensored')).toBe(false);
+    expect(isServeModelRunning('gemma-4-e4b-uncensored', 'qwen-uncensored')).toBe(false);
+    expect(ctxPresetsFor('gemma-uncensored', null, null)).toEqual([null, 4096, 8192, 16384, 32768]);
+  });
+
   it('maps the llama-server WhiteRabbitNeo model and caps its window at 16k', () => {
     expect(matchServeModel('whiterabbitneo-2.5-7b')).toBe('whiterabbitneo');
     // NEGATIVE: its name has no "qwen", so the Qwen targets stay off

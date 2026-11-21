@@ -22,6 +22,16 @@ describe('parseModels', () => {
     expect(gemma).toMatchObject({ vision: 'ok', maxPixels: 1048576, pixelsPerToken: null, tokensPerImage: 280 });
   });
 
+  it('reads llama-server: the window from meta.n_ctx and vision from the input modalities', () => {
+    const gemma = parseModels({ data: [{ id: 'g', architecture: { input_modalities: ['text', 'image', 'audio'] }, meta: { n_ctx: 32768 } }] });
+    expect(gemma).toMatchObject({ contextLength: 32768, vision: 'ok' });
+    // NEGATIVE: a text-only model says so; it is not left unknown
+    expect(parseModels({ data: [{ id: 'w', architecture: { input_modalities: ['text'] }, meta: { n_ctx: 8192 } }] })).toMatchObject({ contextLength: 8192, vision: 'unavailable' });
+    // lm-serve's own fields win when both are there, and a malformed list is unknown
+    expect(parseModels({ data: [{ id: 'q', context_length: 4096, meta: { n_ctx: 99 }, capabilities: { vision: { status: 'unavailable' } }, architecture: { input_modalities: ['image'] } }] })).toMatchObject({ contextLength: 4096, vision: 'unavailable' });
+    expect(parseModels({ data: [{ id: 'x', architecture: { input_modalities: 'image' }, meta: { n_ctx: 0 } }] })).toMatchObject({ contextLength: null, vision: 'unknown' });
+  });
+
   it('keeps unavailable distinct from unknown, and refuses unknown statuses', () => {
     expect(parseModels({ data: [{ id: 'm', capabilities: { vision: { status: 'unavailable' } } }] })?.vision).toBe('unavailable');
     expect(parseModels({ data: [{ id: 'm', capabilities: { vision: { status: 'maybe' } } }] })?.vision).toBe('unknown');

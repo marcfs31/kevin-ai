@@ -75,10 +75,14 @@ function modelEntry(v: unknown): ModelEntry | null {
   if (!m) return null;
   const vision = obj(obj(m.capabilities)?.vision);
   const status = vision?.status;
+  // llama-server (WhiteRabbitNeo, Gemma uncensored) has no capabilities.vision: it lists the kinds of
+  // input the loaded model takes, and the window it was started with.
+  const inputs = obj(m.architecture)?.input_modalities;
+  const byModality = Array.isArray(inputs) ? (inputs.includes('image') ? 'ok' : 'unavailable') : 'unknown';
   return {
     id: typeof m.id === 'string' ? m.id : '',
-    contextLength: positive(m.context_length),
-    vision: status === 'ok' || status === 'unavailable' ? status : 'unknown',
+    contextLength: positive(m.context_length) ?? positive(obj(m.meta)?.n_ctx),
+    vision: status === 'ok' || status === 'unavailable' ? status : byModality,
     maxPixels: positive(vision?.max_pixels),
     pixelsPerToken: positive(vision?.pixels_per_token),
     tokensPerImage: positive(vision?.tokens_per_image),
@@ -130,7 +134,7 @@ export async function fetchServerInfo(signal?: AbortSignal): Promise<ServerInfo>
   return info;
 }
 
-/** Starts Qwen, Qwen uncensored, Gemma or WhiteRabbitNeo on the remote host via the Vite /control/serve middleware. */
+/** Starts Qwen, Qwen uncensored, Gemma, Gemma uncensored or WhiteRabbitNeo on the remote host via the Vite /control/serve middleware. */
 export async function startRemoteServe(opts: ServeOptions, signal?: AbortSignal): Promise<ServeResult> {
   const res = await send('/control/serve', {
     method: 'POST',
@@ -146,7 +150,7 @@ export async function startRemoteServe(opts: ServeOptions, signal?: AbortSignal)
 }
 
 /** Drops lm-serve's conversation, system text and prefix cache. A server without the endpoint
- * (llama-server, which runs WhiteRabbitNeo) keeps no conversation for us to drop: 404 is done, not a failure. */
+ * (llama-server, which runs WhiteRabbitNeo and Gemma uncensored) keeps no conversation for us to drop: 404 is done, not a failure. */
 export async function resetServer(signal?: AbortSignal): Promise<void> {
   const res = await send('/v1/chat/reset', { method: 'POST', signal, headers: { Accept: 'application/json' } });
   if (res.status === 404) return;

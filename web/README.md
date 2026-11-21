@@ -16,7 +16,7 @@ cd web && npm ci && npm run dev        # http://127.0.0.1:5173, /v1 and /health 
 `LM_SERVE_URL` (default `http://127.0.0.1:8080`) points the dev proxy elsewhere, for example at
 an SSH tunnel: `ssh -N -L 8080:127.0.0.1:8080 toor@192.168.1.96`.
 
-In Settings, **Start Qwen3.5-4B** / **Start Qwen3.5-4B Uncensored** / **Start Gemma 4 E4B** / **Start WhiteRabbitNeo 2.5 7B** call `POST /control/serve` on the Vite
+In Settings, **Start Qwen3.5-4B** / **Start Qwen3.5-4B Uncensored** / **Start Gemma 4 E4B** / **Start WhiteRabbitNeo 2.5 7B** / **Start Gemma 4 E4B Uncensored** call `POST /control/serve` on the Vite
 dev server, which runs `scripts/start-remote-lm-serve.sh`. That script SSHs to the machine that
 holds the weights (`LM_SERVE_SSH`, default `toor@192.168.1.96`), stops any existing `lm-serve`,
 starts the chosen model on `127.0.0.1:8080`, and leaves the local tunnel alone. Optional fields
@@ -24,13 +24,17 @@ map to lm-serve flags (`--max-tokens`, `--seed`, `--ctx`, `--threads`, `--timeou
 `--name`, `--think`, `--fast`); leave them empty for lm-serve’s own defaults. Host and port are
 not exposed — they stay `127.0.0.1:8080` for the tunnel.
 
-WhiteRabbitNeo 2.5 7B (a Qwen2.5-Coder-7B fine-tune) is a GGUF that the C engine cannot run, so
-the script starts it on llama.cpp's `llama-server` (built on the server at
-`~/opt/llama.cpp-v1.0.0`, weights `~/models/whiterabbitneo-2.5-7b/*-Q8_0.gguf`) on the same
-port. Only one model runs at a time: starting any model stops the other server first. For it,
-`--ctx` (default 8192, at most 16k in the picker), `--threads`, `--seed`, `--max-tokens`,
-`--timeout` and `--name` are translated; `--cache-mb`, `--think` and `--fast` are refused. It has
-no vision.
+WhiteRabbitNeo 2.5 7B (a Qwen2.5-Coder-7B fine-tune) and Gemma 4 E4B Uncensored are GGUFs that the
+C engine cannot run, so the script starts them on llama.cpp's `llama-server` (built on the server at
+`~/opt/llama.cpp-v1.0.0`; weights `~/models/whiterabbitneo-2.5-7b/*-Q8_0.gguf` and
+`~/models/gemma-4-e4b-uncensored/*-Q6_K_P.gguf` plus its `mmproj-*-f16.gguf` vision projector,
+passed as `--mmproj`) on the same port. Only one model runs at a time: starting any model stops the
+other server first. For them, `--ctx` (default 8192; at most 16k for WhiteRabbitNeo and 32k for Gemma
+in the picker), `--threads`, `--seed`, `--max-tokens`, `--timeout`, `--name` and `--think` /
+`--no-think` (`--reasoning on` / `off`) are translated; `--cache-mb` and `--fast` are refused.
+WhiteRabbitNeo has no vision; Gemma reads images. llama-server has no `capabilities` field, so the
+app reads the window from `meta.n_ctx` and vision from `architecture.input_modalities` in
+`/v1/models`. Gemma 4 thinks before it answers (shown under "Thinking"); `--no-think` turns that off.
 
 Production: build once, then serve `web/dist` with the standard-library proxy, which needs only
 Python 3 on the server:
