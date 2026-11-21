@@ -416,6 +416,13 @@ happens when the input already has the target size, which is what the web client
 2. Real checkpoints, once, in a throwaway Python environment outside the repo (torch +
    transformers at the commit above): encoder rows for one photo from transformers against
    the engine on the same pixel tensor; the error is recorded here.
+   **Recorded 2026-11-21** (transformers 5.24.0.dev0 at the commit above, float32, eager
+   attention, the checkpoint's own bf16 weights; the engine is `lm-run --image` on the bf16
+   checkpoint; the pixels are a generated gradient-plus-noise PPM at grid size, not a photo, so
+   this checks the maths and not resampling): Qwen3.5-4B 256x192, 48 rows of 2560: largest
+   difference 4.1e-5 of max|row| (rms 2.1e-5); Gemma 4 E4B 288x192, 24 rows of 2560: 2.8e-6
+   (rms 2.3e-6). Both are far inside the 2e-4 gate. Only the vision tower tensors were loaded
+   into torch; the text model was not run in torch. Not measured: peak RSS, and a described photo.
 3. Server: a photo described correctly by both models, timings and peak RSS recorded.
 
 ## Later
