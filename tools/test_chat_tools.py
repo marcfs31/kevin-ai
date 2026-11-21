@@ -545,6 +545,15 @@ class Search(Base):
         self.assertTrue(s.seen[0][0].startswith("/searx/search?"))
 
 
+class Tls(unittest.TestCase):
+    def test_the_context_refuses_anything_older_than_tls_1_2_and_still_verifies_certificates(self):
+        import ssl
+        ctx = chat_tools.tls_context()
+        self.assertGreaterEqual(ctx.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+
+
 class Addresses(unittest.TestCase):
     def test_never_allowed_addresses(self):
         for host in ("169.254.169.254", "0.0.0.0", "224.0.0.1", "169.254.1.1"):
