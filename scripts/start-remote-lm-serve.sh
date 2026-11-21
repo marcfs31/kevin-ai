@@ -1,22 +1,28 @@
 #!/usr/bin/env bash
-# Stop the remote lm-serve (if any) and start one for Qwen, Qwen uncensored or Gemma.
-# Extra flags are forwarded to lm-serve as-is; omit a flag to keep lm-serve's own default.
+# Stop the remote model server (if any) and start one model: Qwen, Qwen uncensored or Gemma on
+# lm-serve, or WhiteRabbitNeo 2.5 (Qwen2.5-Coder-7B, a GGUF the engine cannot run) on llama.cpp's
+# llama-server. One model at a time: the 11 GB host cannot hold two. For lm-serve, extra flags
+# are forwarded as-is; for llama-server the lm-serve flags it has an equivalent for are
+# translated and the others refused. Omit a flag to keep the server's own default.
 # The local SSH tunnel to port 8080 is left alone — only the remote process is replaced.
 set -euo pipefail
 
 usage() {
   cat <<'EOF' >&2
-usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma [lm-serve flags…]
+usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma|whiterabbitneo [flags…]
 
-  --id qwen|qwen-uncensored|gemma
-                    which checkpoint under ~/models on the remote host
-  Remaining arguments are passed to lm-serve (for example --ctx 8192 --think).
+  --id qwen|qwen-uncensored|gemma|whiterabbitneo
+                    which model under ~/models on the remote host
+  Remaining arguments are lm-serve flags (for example --ctx 8192 --think).
+  whiterabbitneo runs on llama-server and takes only --ctx (default 8192), --threads, --seed,
+  --max-tokens, --timeout and --name.
   --host and --port are always 127.0.0.1 and 8080 so the local tunnel keeps working.
 
 Environment (optional):
-  LM_SERVE_SSH          default toor@192.168.1.96
-  LM_SERVE_REMOTE_BIN   default ~/small-llm-in-c/bin/lm-serve
-  LM_SERVE_REMOTE_ROOT  default ~/models
+  LM_SERVE_SSH              default toor@192.168.1.96
+  LM_SERVE_REMOTE_BIN       default ~/small-llm-in-c/bin/lm-serve
+  LM_SERVE_REMOTE_LLAMA_BIN default ~/opt/llama.cpp-v1.0.0/build/bin/llama-server
+  LM_SERVE_REMOTE_ROOT      default ~/models
 EOF
   exit 2
 }
@@ -31,8 +37,38 @@ quote_for_remote() {
   printf '%s' "$out"
 }
 
+# lm-serve flags -> llama-server flags, into the array LLAMA_ARGS. Unknown or unsupported
+# flags are refused rather than dropped. 8 GB of Q8_0 weights leave room for an 8192 window.
+LLAMA_DEFAULT_CTX=8192
+translate_for_llama() {
+  local ctx="" name="" v
+  LLAMA_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ctx|--threads|--seed|--max-tokens|--timeout|--name)
+        [[ $# -ge 2 ]] || { echo "start-remote-lm-serve.sh: $1 needs a value" >&2; exit 2; }
+        v=$2
+        case "$1" in
+          --ctx) ctx=$v ;;
+          --threads) LLAMA_ARGS+=(-t "$v") ;;
+          --seed) LLAMA_ARGS+=(--seed "$v") ;;
+          --max-tokens) LLAMA_ARGS+=(-n "$v") ;;
+          --timeout) LLAMA_ARGS+=(--timeout "$v") ;;
+          --name) name=$v ;;
+        esac
+        shift 2
+        ;;
+      *)
+        echo "start-remote-lm-serve.sh: $1 is not supported for the llama-server model" >&2
+        exit 2
+        ;;
+    esac
+  done
+  LLAMA_ARGS+=(-c "${ctx:-$LLAMA_DEFAULT_CTX}" --alias "${name:-$DIR_NAME}" --jinja)
+}
+
 main() {
-  local ID="" DIR_NAME SSH_TARGET REMOTE_BIN REMOTE_ROOT quoted
+  local ID="" DIR_NAME RUNTIME WEIGHTS SSH_TARGET REMOTE_BIN REMOTE_ROOT quoted
   local -a EXTRA=() args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -58,15 +94,30 @@ main() {
     esac
   done
 
+  RUNTIME=lm-serve
+  WEIGHTS=model.q8.safetensors
   case "$ID" in
     qwen) DIR_NAME=qwen3.5-4b ;;
     qwen-uncensored) DIR_NAME=qwen3.5-4b-uncensored ;;
     gemma) DIR_NAME=gemma-4-e4b ;;
-    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored or gemma" >&2; usage ;;
+    whiterabbitneo)
+      DIR_NAME=whiterabbitneo-2.5-7b
+      RUNTIME=llama-server
+      WEIGHTS=WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-Q8_0.gguf
+      ;;
+    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored, gemma or whiterabbitneo" >&2; usage ;;
   esac
+  if [[ "$RUNTIME" == llama-server ]]; then
+    translate_for_llama ${EXTRA[@]+"${EXTRA[@]}"}
+    EXTRA=("${LLAMA_ARGS[@]}")
+  fi
 
   SSH_TARGET=${LM_SERVE_SSH:-toor@192.168.1.96}
-  REMOTE_BIN=${LM_SERVE_REMOTE_BIN:-'$HOME/small-llm-in-c/bin/lm-serve'}
+  if [[ "$RUNTIME" == llama-server ]]; then
+    REMOTE_BIN=${LM_SERVE_REMOTE_LLAMA_BIN:-'$HOME/opt/llama.cpp-v1.0.0/build/bin/llama-server'}
+  else
+    REMOTE_BIN=${LM_SERVE_REMOTE_BIN:-'$HOME/small-llm-in-c/bin/lm-serve'}
+  fi
   REMOTE_ROOT=${LM_SERVE_REMOTE_ROOT:-'$HOME/models'}
 
   # Values travel as positional parameters. A leading $HOME/ is expanded on the
@@ -85,44 +136,52 @@ expand_home() {
 BIN=$(expand_home "$1")
 ROOT=$(expand_home "$2")
 DIR_NAME=$3
-shift 3
+RUNTIME=$4
+WEIGHTS_NAME=$5
+shift 5
 DIR="$ROOT/$DIR_NAME"
-WEIGHTS="$DIR/model.q8.safetensors"
-LOG=${HOME}/logs/lm-serve.log
+WEIGHTS="$DIR/$WEIGHTS_NAME"
+LOG=${HOME}/logs/$RUNTIME.log
 mkdir -p "$(dirname "$LOG")"
-if [[ ! -x "$BIN" ]]; then echo "missing lm-serve at $BIN" >&2; exit 1; fi
+if [[ ! -x "$BIN" ]]; then echo "missing $RUNTIME at $BIN" >&2; exit 1; fi
 if [[ ! -d "$DIR" ]]; then echo "missing model dir $DIR" >&2; exit 1; fi
 if [[ ! -f "$WEIGHTS" ]]; then echo "missing weights $WEIGHTS" >&2; exit 1; fi
-# Stop any previous serve before starting the new one.
-if pgrep -x lm-serve >/dev/null; then
-  pkill -x lm-serve || true
-  for _ in $(seq 1 30); do
-    pgrep -x lm-serve >/dev/null || break
-    sleep 0.2
-  done
-  if pgrep -x lm-serve >/dev/null; then
-    echo "lm-serve did not stop" >&2
-    exit 1
+# Stop whichever server holds port 8080 (and its memory) before starting the new one.
+for proc in lm-serve llama-server; do
+  if pgrep -x "$proc" >/dev/null; then
+    pkill -x "$proc" || true
+    for _ in $(seq 1 50); do
+      pgrep -x "$proc" >/dev/null || break
+      sleep 0.2
+    done
+    if pgrep -x "$proc" >/dev/null; then
+      echo "$proc did not stop" >&2
+      exit 1
+    fi
   fi
+done
+if [[ "$RUNTIME" == llama-server ]]; then
+  nohup "$BIN" -m "$WEIGHTS" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
+else
+  nohup "$BIN" --model "$DIR" --weights "$WEIGHTS" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
 fi
-nohup "$BIN" --model "$DIR" --weights "$WEIGHTS" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
-# Wait until /health answers (model load can take a while).
+# Wait until /health answers (model load can take a while; llama-server answers 503 until loaded).
 ok=0
-for _ in $(seq 1 120); do
+for _ in $(seq 1 180); do
   if curl -sf --connect-timeout 1 http://127.0.0.1:8080/health >/dev/null; then
     ok=1
     break
   fi
   # If the process died, surface the log.
-  if ! pgrep -x lm-serve >/dev/null; then
-    echo "lm-serve exited before becoming healthy:" >&2
+  if ! pgrep -x "$RUNTIME" >/dev/null; then
+    echo "$RUNTIME exited before becoming healthy:" >&2
     tail -n 40 "$LOG" >&2 || true
     exit 1
   fi
   sleep 1
 done
 if [[ "$ok" -ne 1 ]]; then
-  echo "lm-serve did not become healthy in time:" >&2
+  echo "$RUNTIME did not become healthy in time:" >&2
   tail -n 40 "$LOG" >&2 || true
   exit 1
 fi
@@ -131,7 +190,7 @@ echo
 EOS
 )
 
-  args=("$REMOTE_BIN" "$REMOTE_ROOT" "$DIR_NAME")
+  args=("$REMOTE_BIN" "$REMOTE_ROOT" "$DIR_NAME" "$RUNTIME" "$WEIGHTS")
   if [[ ${#EXTRA[@]} -gt 0 ]]; then
     args+=("${EXTRA[@]}")
   fi

@@ -43,6 +43,7 @@ export const en = {
   'serve.startQwen': 'Start Qwen3.5-4B',
   'serve.startQwenUncensored': 'Start Qwen3.5-4B Uncensored',
   'serve.startGemma': 'Start Gemma 4 E4B',
+  'serve.startWhiteRabbitNeo': 'Start WhiteRabbitNeo 2.5 7B',
   'serve.confirm': 'Stop the current model and start {model}?',
   'serve.starting': 'Starting {model}…',
   'serve.started': 'Running {model}.',
