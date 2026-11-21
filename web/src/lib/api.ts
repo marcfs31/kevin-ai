@@ -6,8 +6,14 @@ import type { ServeOptions, ServeResult } from './serveControl';
 
 export type VisionStatus = 'ok' | 'unavailable' | 'unknown';
 
-export interface ServerInfo {
+export interface ServerInfo extends Omit<ModelEntry, 'id'> {
   model: string;
+  /** Every model the server lists, in its order; the fields above describe the first. */
+  models: ModelEntry[];
+}
+
+export interface ModelEntry {
+  id: string;
   contextLength: number | null;
   vision: VisionStatus;
   maxPixels: number | null;
@@ -17,9 +23,17 @@ export interface ServerInfo {
 
 export type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
 
+export interface WireToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
 export interface WireMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string | ContentPart[];
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | ContentPart[] | null;
+  tool_calls?: WireToolCall[];
+  tool_call_id?: string;
 }
 
 export interface ChatRequest {
@@ -46,21 +60,36 @@ function positive(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
 }
 
-/** Reads /v1/models data[0]. Every extension field may be absent (today's lm-serve). */
-export function parseModels(json: unknown): ServerInfo | null {
-  const data = obj(json)?.data;
-  const first = Array.isArray(data) ? obj(data[0]) : null;
-  if (!first) return null;
-  const vision = obj(obj(first.capabilities)?.vision);
+function modelEntry(v: unknown): ModelEntry | null {
+  const m = obj(v);
+  if (!m) return null;
+  const vision = obj(obj(m.capabilities)?.vision);
   const status = vision?.status;
   return {
-    model: typeof first.id === 'string' ? first.id : '',
-    contextLength: positive(first.context_length),
+    id: typeof m.id === 'string' ? m.id : '',
+    contextLength: positive(m.context_length),
     vision: status === 'ok' || status === 'unavailable' ? status : 'unknown',
     maxPixels: positive(vision?.max_pixels),
     pixelsPerToken: positive(vision?.pixels_per_token),
     tokensPerImage: positive(vision?.tokens_per_image),
   };
+}
+
+/** Reads /v1/models. Every extension field may be absent (today's lm-serve). */
+export function parseModels(json: unknown): ServerInfo | null {
+  const data = obj(json)?.data;
+  const models = Array.isArray(data) ? data.map(modelEntry).filter((e): e is ModelEntry => e !== null && e.id !== '') : [];
+  const first = Array.isArray(data) ? modelEntry(data[0]) : null;
+  if (!first) return null;
+  const { id, ...rest } = first;
+  return { ...rest, model: id, models: models.length ? models : [first] };
+}
+
+/** The server's figures for one model: the context window and vision follow the model chosen. */
+export function infoForModel(info: ServerInfo | null, id: string | null): ServerInfo | null {
+  if (!info) return null;
+  const e = info.models.find((m) => m.id === id) ?? info.models[0] ?? null;
+  return e ? { ...e, model: e.id, models: info.models } : info;
 }
 
 async function errorFrom(res: Response): Promise<ApiError> {
