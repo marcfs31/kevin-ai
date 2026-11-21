@@ -43,6 +43,10 @@ never dequantised, a budgeted expert cache) and the following files:
   reader, portable I/O macros, memory probe, bf16 helpers, matvec kernels, RMSNorm,
   causal conv and delta-rule step (rewritten from k3_kda_step), and the sampler.
 
+stb_image (https://github.com/nothings/stb, public domain / MIT, stb_image.h):
+  vendored as third_party/stb_image.h. Used only for PNG and JPEG decode in
+  src/io/lm_image.c (STBI_ONLY_JPEG, STBI_ONLY_PNG, STBI_NO_STDIO).
+
 Hugging Face transformers (https://github.com/huggingface/transformers, Apache-2.0,
 Copyright The HuggingFace Team and the Qwen team). The Python oracles under tools/ are
 dependency-free ports of src/transformers/models/qwen3_5/modeling_qwen3_5.py (and, in

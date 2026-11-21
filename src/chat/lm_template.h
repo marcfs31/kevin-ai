@@ -8,9 +8,10 @@
  *   parser  a streaming parser for the generated ids: reasoning vs answer, stop ids, and
  *           unsupported constructs surfaced (never silently dropped).
  *
- * Out of scope (text-only chat): tool definitions in the prompt, tool-call / tool-response
- * messages, images and video. A model that emits a tool call is reported as unsupported
- * by the parser; a conversation cannot contain one. */
+ * Tool definitions and tool-call / tool-response messages stay out of scope. Images are
+ * optional: lm_template_set_vision installs start/pad/end ids so a user message's image
+ * parts become start + N pads + end in the rendered prompt (system messages may not
+ * contain images). */
 #ifndef LM_TEMPLATE_H
 #define LM_TEMPLATE_H
 
@@ -27,9 +28,25 @@ void lm_ids_free(LmIds *v);                             /* leaves an empty vecto
 /* ---- messages ---------------------------------------------------------------- */
 typedef enum { LM_ROLE_SYSTEM, LM_ROLE_USER, LM_ROLE_ASSISTANT } LmRole;
 
+enum { LM_PART_TEXT = 0, LM_PART_IMAGE = 1 };
+
+/* One content part of a user message. Image parts carry already-encoded vision rows
+ * (lm_vision_encode) and a SHA-256 hex of the source image bytes for conversation reuse. */
+typedef struct {
+    int kind;                 /* LM_PART_TEXT or LM_PART_IMAGE */
+    const char *text;         /* LM_PART_TEXT */
+    const float *rows;        /* LM_PART_IMAGE: n_rows * width floats */
+    int n_rows;
+    int width;
+    int grid_h, grid_w;
+    char sha_hex[65];         /* lowercase hex + NUL; required for image parts */
+} LmMsgPart;
+
 typedef struct {
     LmRole role;
-    const char *content;   /* the message text; for an assistant message, the answer */
+    const char *content;   /* the message text; for an assistant message, the answer.
+                            * For a multimodal user message this is also the fingerprint
+                            * used by lm_chat_sync (text plus image SHAs). */
     const char *reasoning; /* assistant only; NULL = none (the template's reasoning_content) */
     /* Assistant messages produced by this program carry the exact ids the model generated
      * (stop id excluded) and whether the generation prompt had thinking on. The
@@ -38,7 +55,19 @@ typedef struct {
     const int *gen_ids;
     int n_gen_ids;
     int gen_thinking;
+    /* Optional multimodal content (user messages). NULL / 0 = text-only via content. */
+    const LmMsgPart *parts;
+    int n_parts;
 } LmMsg;
+
+/* Where an image block sits in the rendered id stream: ids[id_start .. id_start+n_ids)
+ * are start + n_rows pads + end; img_index is the order of image parts across the
+ * conversation (0-based). */
+typedef struct {
+    int id_start;
+    int n_ids;
+    int img_index;
+} LmImgSpan;
 
 typedef struct {
     int enable_thinking;   /* generation prompt opens a think block (1) or closes an empty one (0) */
@@ -50,6 +79,9 @@ typedef struct {
      *     the previous one and nothing is re-fed. Deviates from the model's template for
      *     those turns (it would have dropped the think block). */
     int verbatim_history;
+    /* Optional: render appends one LmImgSpan per image part (realloc). Caller frees *spans. */
+    LmImgSpan **spans;
+    int *n_spans;
 } LmRenderOpts;
 
 /* ---- streaming parser ---------------------------------------------------------- */
@@ -84,7 +116,8 @@ struct LmTemplate {
     const char *name;
     /* Render msgs[0..n) plus the generation prompt into out (appended after clearing it).
      * Returns 0, or -1 with a message in err: no messages, a system message that is not
-     * first, no user message, or allocation failure. */
+     * first, no user message, a system message with images, vision unset for an image
+     * part, or allocation failure. */
     int (*render)(const LmTemplate *t, const LmMsg *msgs, int n, const LmRenderOpts *opts,
                   LmIds *out, char *err, size_t errlen);
     /* thinking: the generation prompt opened a think block, so the first generated tokens
@@ -94,6 +127,10 @@ struct LmTemplate {
     void (*destroy)(LmTemplate *t);
     void *impl;
 };
+
+/* Install the vision special ids used when rendering image parts. start/pad/end of -1
+ * clear vision (image parts then fail at render). */
+void lm_template_set_vision(LmTemplate *t, int start, int pad, int end);
 
 /* Qwen3.5 (the template of the model's chat_template.jinja, text-only). eos_ids are extra
  * stop ids from config.json (eos_token_id may be one id or several); <|im_end|> is always

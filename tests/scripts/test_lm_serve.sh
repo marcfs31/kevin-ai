@@ -93,16 +93,30 @@ expect() {
 }
 
 start
-check '[ "$(curl -s "$url/health")" = "{\"status\":\"ok\",\"model\":\"tiny\"}" ]' "/health: $(curl -s "$url/health")"
+check '[ "$(post "$url/health")" = 200 ] && [ "$(j "d[\"status\"]")" = ok ] && [ "$(j "d[\"model\"]")" = tiny ]' \
+      "/health: $(cat "$tmp/body")"
+check '[ "$(j "d[\"capabilities\"][\"vision\"][\"status\"] in (\"ok\",\"unavailable\")")" = True ]' \
+      "/health vision status: $(cat "$tmp/body")"
 check '[ "$(post "$url/v1/models")" = 200 ] && [ "$(j "d[\"data\"][0][\"id\"]")" = tiny ]' "/v1/models: $(cat "$tmp/body")"
+check '[ "$(j "\"context_length\" in d[\"data\"][0] and d[\"data\"][0][\"context_length\"] > 0")" = True ]' \
+      "/v1/models context_length: $(cat "$tmp/body")"
+check '[ "$(j "d[\"data\"][0][\"capabilities\"][\"vision\"][\"status\"] in (\"ok\",\"unavailable\") and \"max_pixels\" in d[\"data\"][0][\"capabilities\"][\"vision\"]")" = True ]' \
+      "/v1/models vision capabilities: $(cat "$tmp/body")"
 
 # a plain completion: an answer, finish_reason length at max_tokens, usage counts
 req='{"model":"tiny","messages":[{"role":"user","content":"hi"}],"max_tokens":5,"temperature":0}'
 check '[ "$(chat "$req")" = 200 ]' "chat completion status: $(cat "$tmp/body")"
 check '[ "$(j "d[\"object\"] == \"chat.completion\" and d[\"choices\"][0][\"finish_reason\"] == \"length\" and d[\"usage\"][\"completion_tokens\"] == 5")" = True ]' \
       "completion shape: $(cat "$tmp/body")"
+check '[ "$(j "d[\"usage\"][\"prompt_tokens_details\"][\"cached_tokens\"] == 0")" = True ]' \
+      "usage cached_tokens: $(cat "$tmp/body")"
 answer=$(j 'json.dumps(d["choices"][0]["message"]["content"])')
 p1=$(j 'd["usage"]["prompt_tokens"]')
+
+# bad image_url (http, not a data URL): 400 with image_unsupported or image_invalid
+expect 400 '{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/x.png"}}]}],"max_tokens":1}' \
+      "remote image_url"
+check 'grep -Eq "image_unsupported|image_invalid" "$tmp/body"' "remote image_url error code: $(cat "$tmp/body")"
 
 # temperature 0 is reproducible
 chat "$req" > /dev/null
@@ -159,8 +173,8 @@ expect 400 '{"messages":[{"role":"user","content":"hi"}],"temperature":-1}' "a n
 expect 400 '{"messages":[]}' "no messages"
 check '[ "$(code "$url/v1/chat/completions")" = 405 ]' "GET on chat completions"
 check '[ "$(code "$url/nope")" = 404 ]' "unknown path"
-head -c 4194400 /dev/zero | tr '\0' a > "$tmp/big"
-check '[ "$(post --data-binary @"$tmp/big" "$url/v1/chat/completions")" = 413 ]' "a body over 4 MiB accepted"
+head -c $((24 * 1024 * 1024 + 100)) /dev/zero | tr '\0' a > "$tmp/big"
+check '[ "$(post --data-binary @"$tmp/big" "$url/v1/chat/completions")" = 413 ]' "a body over 24 MiB accepted"
 # the log carries counts, never the text
 check '! grep -q "be brief\|edited" "$tmp/serve.err"' "message text in the log"
 stop
@@ -202,7 +216,7 @@ check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 60\r\n
 check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: -1\r\n\r\n\"")" = 400 ]' "a negative Content-Length was accepted"
 check '[ "$(raw "b\"GET /health HTTP/1.1\r\nX: \" + b\"a\" * 20000 + b\"\r\n\r\n\"")" = 431 ]' "a 20 KB header was accepted"
 # a client that sends the body without waiting still gets the 413, not a connection reset
-check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 4194400\r\n\r\n\" + b\"a\" * 4194400")" = 413 ]' "an oversized body sent at once did not get a 413"
+check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25165924\r\n\r\n\" + b\"a\" * 1024")" = 413 ]' "an oversized body sent at once did not get a 413"
 # a request that does not arrive in time is a 408; a slow client does not hold the server
 check '[ "$(raw "b\"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 10\r\n\r\n{}\"")" = 408 ]' "an incomplete body did not time out with 408"
 python3 -I - "${url#http://}" <<'PY' &
