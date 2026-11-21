@@ -190,6 +190,19 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .model-picker-section { display: flex; flex-direction: column; gap: 0.4rem; }
 .model-picker-section h3 { margin: 0; font-size: 0.75rem; font-weight: 650; color: var(--muted); }
 .model-picker-choices { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.model-picker-choices button.has-uncensored-warn,
+.serve-actions button.has-uncensored-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.model-warn {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warn);
+  flex: none;
+}
+.model-warn-icon { display: block; }
 .model-picker-choices button[aria-pressed='true'],
 .model-picker-choices button[aria-checked='true'] {
   background: var(--surface-2);

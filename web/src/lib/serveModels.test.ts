@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ctxPresetsFor, formatCtxPreset, isServeModelRunning, matchServeModel } from './serveModels';
+import { ctxPresetsFor, formatCtxPreset, isServeModelRunning, isUncensoredServeModel, matchServeModel } from './serveModels';
 
 describe('formatCtxPreset', () => {
   it('formats ladder sizes as k labels', () => {
@@ -79,5 +79,14 @@ describe('ctxPresetsFor', () => {
   it('includes a running ctx value that is not on the ladder', () => {
     const presets = ctxPresetsFor('qwen', 'qwen3.5-4b', 10000);
     expect(presets).toEqual([null, 4096, 8192, 10000]);
+  });
+});
+describe('isUncensoredServeModel', () => {
+  it('is true only for the uncensored start targets', () => {
+    expect(isUncensoredServeModel('qwen-uncensored')).toBe(true);
+    expect(isUncensoredServeModel('gemma-uncensored')).toBe(true);
+    expect(isUncensoredServeModel('qwen')).toBe(false);
+    expect(isUncensoredServeModel('gemma')).toBe(false);
+    expect(isUncensoredServeModel('whiterabbitneo')).toBe(false);
   });
 });

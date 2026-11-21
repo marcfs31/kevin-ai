@@ -17,6 +17,11 @@ export const SERVE_MODEL_LABEL: Record<ServeModelId, string> = {
   'gemma-uncensored': 'Gemma 4 E4B Uncensored',
 };
 
+/** Uncensored start targets (fewer safety filters than the stock checkpoints). */
+export function isUncensoredServeModel(id: ServeModelId): boolean {
+  return id === 'qwen-uncensored' || id === 'gemma-uncensored';
+}
+
 /** Upper bound used when /v1/models has not reported context_length for this target. */
 export const SERVE_MODEL_MAX_CTX: Record<ServeModelId, number> = {
   qwen: 131072,

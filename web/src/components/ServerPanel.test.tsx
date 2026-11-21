@@ -30,7 +30,7 @@ describe('ServerPanel', () => {
         <ServerPanel busy={false} runningModel="qwen3.5-4b-uncensored" onStarted={() => {}} />
       </I18nProvider>,
     );
-    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B Uncensored' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /Start Qwen3\.5-4B Uncensored/ }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('false');
     expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
   });
@@ -42,7 +42,7 @@ describe('ServerPanel', () => {
       </I18nProvider>,
     );
     expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B Uncensored' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: /Start Qwen3\.5-4B Uncensored/ }).getAttribute('aria-pressed')).toBe('false');
   });
 
   it('sends --id qwen-uncensored when its button is confirmed', async () => {
@@ -54,7 +54,7 @@ describe('ServerPanel', () => {
       </I18nProvider>,
     );
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Start Qwen3.5-4B Uncensored' }));
+    fireEvent.click(screen.getByRole('button', { name: /Start Qwen3\.5-4B Uncensored/ }));
     expect(confirm).toHaveBeenCalledWith('Stop the current model and start Qwen3.5-4B Uncensored?');
     await screen.findByRole('status');
     const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
@@ -69,10 +69,10 @@ describe('ServerPanel', () => {
         <ServerPanel busy={false} runningModel="gemma-4-e4b-uncensored" onStarted={() => {}} />
       </I18nProvider>,
     );
-    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B Uncensored' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /Start Gemma 4 E4B Uncensored/ }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Start Gemma 4 E4B Uncensored' }));
+    fireEvent.click(screen.getByRole('button', { name: /Start Gemma 4 E4B Uncensored/ }));
     await screen.findByRole('status');
     const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
     expect(body.model).toBe('gemma-uncensored');
