@@ -50,7 +50,7 @@ stb_image (https://github.com/nothings/stb, public domain / MIT, stb_image.h):
   MODIFICATIONS IN THIS PROJECT:
 
     stb_image.h  Cast w2*h2 and x*img_n multiplies to size_t before the product
-                 (JPEG progressive coeff memset; PNG 16-bit sample count) so the
+                 (JPEG progressive coeff memset; PNG depth-8 memcpy size and 16-bit sample counts) so the
                  widen-after-multiply form CodeQL flags cannot truncate.
 
 Hugging Face transformers (https://github.com/huggingface/transformers, Apache-2.0,
