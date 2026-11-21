@@ -16,6 +16,9 @@ interface Props {
   imagePreset: number;
   assessDraft: (text: string, attachments: Attachment[]) => Assessment;
   onSend: (text: string, attachments: Attachment[]) => void;
+  /** True while the reply streaming in this chat can be steered: a message typed now stops it and goes next. */
+  canRedirect: boolean;
+  onRedirect: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
 }
@@ -45,7 +48,7 @@ async function readAttachment(file: File, info: ServerInfo | null, preset: numbe
   return { id: newId(), kind: 'text', name: file.name, text: checkText(file.name, text) };
 }
 
-export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop, inputRef }: Props) {
+export function Composer({ busy, info, imagePreset, assessDraft, onSend, canRedirect, onRedirect, onStop, inputRef }: Props) {
   const { t, duration, megabytes } = useI18n();
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -80,8 +83,9 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
   };
 
   const send = () => {
-    if (busy || empty || blocked) return;
-    onSend(text, attachments);
+    if (empty || blocked || (busy && !canRedirect)) return;
+    if (busy) onRedirect(text, attachments);
+    else onSend(text, attachments);
     setText('');
     setAttachments([]);
     setErrors([]);
@@ -226,9 +230,21 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
         )}
         <span className="spacer" />
         {busy ? (
-          <button type="button" className="danger" onClick={onStop}>
-            {t('composer.stop')}
-          </button>
+          <>
+            {canRedirect && (
+              <button type="submit" className="primary" disabled={empty || blocked} aria-describedby="redirect-hint">
+                {t('composer.redirect')}
+              </button>
+            )}
+            {canRedirect && (
+              <span id="redirect-hint" className="sr-only">
+                {t('composer.redirectHint')}
+              </span>
+            )}
+            <button type="button" className="danger" onClick={onStop}>
+              {t('composer.stop')}
+            </button>
+          </>
         ) : (
           <button type="submit" className="primary" disabled={empty || blocked}>
             {t('composer.send')}

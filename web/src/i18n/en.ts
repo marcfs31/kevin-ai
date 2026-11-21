@@ -117,6 +117,8 @@ export const en = {
   'composer.placeholderTouch': 'Message',
   'composer.send': 'Send',
   'composer.stop': 'Stop',
+  'composer.redirect': 'Redirect',
+  'composer.redirectHint': 'Stops the reply here, keeps what was already written, and sends this message next.',
   'composer.attach': 'Attach files',
   'composer.attachImage': 'Attach image',
   'composer.drop': 'Drop files here to attach them',
