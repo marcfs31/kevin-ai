@@ -111,7 +111,6 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'tools.notRun': 'No ejecutada',
   'tools.stepLimit': 'Detenido en el límite de {n} pasos; las llamadas anteriores no se ejecutaron.',
 
-  'vision.ok': 'Imágenes: disponibles',
   'vision.unavailable': 'Imágenes: este modelo no puede leer imágenes.',
   'vision.unknown': 'Imágenes: desactivadas, porque este servidor no indica si puede leerlas.',
 

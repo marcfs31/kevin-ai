@@ -108,7 +108,6 @@ export const en = {
   'tools.notRun': 'Not run',
   'tools.stepLimit': 'Stopped at the limit of {n} steps; the tool calls above were not run.',
 
-  'vision.ok': 'Images: available',
   'vision.unavailable': 'Images: this model cannot read images.',
   'vision.unknown': 'Images: off, because this server does not say whether it can read them.',
 

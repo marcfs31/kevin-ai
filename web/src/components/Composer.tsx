@@ -220,7 +220,7 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, onStop,
           {t('composer.attachImage')}
         </button>
         {!visionOk && (
-          <span id="image-reason" className="hint">
+          <span id="image-reason" className="sr-only">
             {visionReason}
           </span>
         )}
