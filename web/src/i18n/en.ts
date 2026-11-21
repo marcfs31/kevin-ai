@@ -77,6 +77,10 @@ export const en = {
   'picker.ctxSize': '{label}',
   'picker.start': 'Start',
 
+  'chatModel.label': 'Model for this chat',
+  'chatModel.option': '{model} · {n} tokens of context',
+  'chatModel.optionNoContext': '{model} · context size not reported',
+
   'vision.ok': 'Images: available',
   'vision.unavailable': 'Images: this model cannot read images.',
   'vision.unknown': 'Images: off, because this server does not say whether it can read them.',

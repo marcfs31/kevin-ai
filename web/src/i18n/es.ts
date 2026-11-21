@@ -79,6 +79,10 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'picker.ctxSize': '{label}',
   'picker.start': 'Arrancar',
 
+  'chatModel.label': 'Modelo de este chat',
+  'chatModel.option': '{model} · {n} tokens de contexto',
+  'chatModel.optionNoContext': '{model} · tamaño de contexto no indicado',
+
   'vision.ok': 'Imágenes: disponibles',
   'vision.unavailable': 'Imágenes: este modelo no puede leer imágenes.',
   'vision.unknown': 'Imágenes: desactivadas, porque este servidor no indica si puede leerlas.',

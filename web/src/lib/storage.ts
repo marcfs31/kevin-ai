@@ -51,6 +51,8 @@ export interface Conversation {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** The model this conversation is sent to; null = the server's first. */
+  model: string | null;
   messages: Message[];
 }
 
@@ -151,7 +153,8 @@ function conversation(v: unknown): Conversation | null {
   const o = obj(v);
   if (!o || typeof o.id !== 'string') return null;
   const messages = Array.isArray(o.messages) ? o.messages.map(message).filter((m): m is Message => m !== null) : [];
-  return { id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), messages };
+  const model = typeof o.model === 'string' && o.model ? o.model : null;
+  return { id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), model, messages };
 }
 
 function settings(v: unknown): Settings {

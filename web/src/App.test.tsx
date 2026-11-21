@@ -82,6 +82,70 @@ describe('App', () => {
     expect(screen.getByLabelText('Tokens usados por esta respuesta').textContent).toBe('Leídos 12 · escritos 3 tokens');
   });
 
+  describe('model picker', () => {
+    const twoModels = () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: 'qwen3.5-4b', context_length: 8192 },
+            { id: 'whiterabbitneo-2.5-qwen2.5-coder-7b', context_length: 32768 },
+          ],
+        }),
+        { status: 200 },
+      );
+
+    it('lists every model with its context length and sends the chosen one, per conversation', async () => {
+      const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]), twoModels);
+      renderApp();
+      const select = (await screen.findByLabelText('Model for this chat')) as HTMLSelectElement;
+      expect([...select.options].map((o) => o.textContent)).toEqual([
+        'qwen3.5-4b · 8,192 tokens of context',
+        'whiterabbitneo-2.5-qwen2.5-coder-7b · 32,768 tokens of context',
+      ]);
+      expect(select.value).toBe('qwen3.5-4b');
+      expect(screen.getByText('Context: 8,192 tokens')).toBeTruthy();
+
+      fireEvent.change(select, { target: { value: 'whiterabbitneo-2.5-qwen2.5-coder-7b' } });
+      expect(screen.getByText('Context: 32,768 tokens')).toBeTruthy();
+      typeAndSend('one');
+      await screen.findByText('ok');
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+      expect(bodyOf(fetchMock, 0).model).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b');
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].model).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b');
+
+      // The choice belongs to this conversation: a new chat starts on the pick for new chats.
+      fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+      fireEvent.change(await screen.findByLabelText('Model for this chat'), { target: { value: 'qwen3.5-4b' } });
+      typeAndSend('two');
+      await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(2));
+      expect(bodyOf(fetchMock, 1).model).toBe('qwen3.5-4b');
+      fireEvent.click(screen.getByRole('button', { name: /^one/ }));
+      await waitFor(() => expect((screen.getByLabelText('Model for this chat') as HTMLSelectElement).value).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b'));
+    });
+
+    it('shows no picker and sends no model for a server that lists one model', async () => {
+      const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      expect(screen.queryByLabelText('Model for this chat')).toBeNull();
+      typeAndSend('hi');
+      await screen.findByText('ok');
+      expect(bodyOf(fetchMock, 0)).not.toHaveProperty('model');
+    });
+
+    it('is in Spanish and is disabled while a reply streams', async () => {
+      mockFetch((_url, init) => heldReply(init), twoModels);
+      renderApp(['es-ES']);
+      const select = (await screen.findByLabelText('Modelo de este chat')) as HTMLSelectElement;
+      expect(select.options[1]?.textContent).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b · 32.768 tokens de contexto');
+      const box = screen.getByLabelText('Mensaje');
+      fireEvent.change(box, { target: { value: 'hola' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await screen.findByText('partial');
+      expect(select.disabled).toBe(true);
+    });
+  });
+
   it('re-sends the previous answer exactly as received', async () => {
     const fetchMock = mockFetch(() => sseResponse([delta('A *b*\n\n'), delta('`c`'), FINISH, DONE]));
     renderApp();
