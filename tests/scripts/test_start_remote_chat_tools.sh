@@ -28,6 +28,8 @@ for bad in "--port" "--port abc" "--port 80" "--port 70000" "--frobnicate"; do
   out=$(run "${words[@]}")
   check '[[ "$out" != *"BatchMode"* ]]' "$bad should be refused before ssh, got: $out"
 done
+# the update must come before the check for the service file, or a first --update could never work
+check '[ "$(grep -n "pull --ff-only" "$script" | head -1 | cut -d: -f1)" -lt "$(grep -n "missing \$REPO/tools/chat_tools.py" "$script" | head -1 | cut -d: -f1)" ]' "git pull should run before the chat_tools.py check"
 # the remote script keeps the old service from surviving and never uses sudo
 check 'grep -q "pkill -f" "$script" && ! grep -q "sudo" "$script"' "the script should replace the running service without sudo"
 
