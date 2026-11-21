@@ -144,6 +144,26 @@ Measured on the target machine (2026-11-21, 4 threads, llama.cpp v1.0.0 CPU buil
 | a 64x64 test image | read correctly (a red, green and blue gradient was described as such), through the web chat |
 | thinking | on by default, so an answer can take minutes at this speed; `--no-think` skips it (an image answer in 9 s) |
 
+## Chat tools on the model server (MCP and web search)
+
+`tools/chat_tools.py` is a small stdlib-only service that runs MCP servers for the chat and does an
+optional web search (see the module docstring and `web/README.md` for what it does and refuses).
+It runs on the machine that runs the model, next to it, on 127.0.0.1:8081:
+
+```bash
+scripts/install-tool-runtimes.sh                 # on the server: Node 24.22.1 and uv 0.13.5 into ~/opt, sha256-checked
+scripts/start-remote-chat-tools.sh --update      # from the Mac: pull the repo there and (re)start the service
+ssh -N -L 8081:127.0.0.1:8081 toor@192.168.1.96  # a second forward, next to the one for the model
+```
+
+The chat's dev proxy (`LM_TOOLS_URL`, default `http://127.0.0.1:8081`) or `tools/chat_server.py
+--tools-upstream` forwards `/tools/*` to it. Servers are listed in `~/.config/lm-chat/mcp.json` on the
+server or added from the catalog in Settings; a catalog entry downloads its npm or PyPI package
+(pinned version, install scripts off) the first time it starts, which needs the internet switch.
+The service starts a server when it is first used, stops it after five idle minutes, runs at most
+three at once and none while less than 700 MiB of memory is available. The files tool may only
+touch `~/chat-files`.
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
