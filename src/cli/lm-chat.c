@@ -203,7 +203,7 @@ int main(int argc, char **argv)
     LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-chat: %s\n", err); lm_tok_close(tok); return 1; }
 
-    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0 };
+    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0, 0 };
     LmModel *m = lm_open(model, &lo, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-chat: %s\n", err); lm_template_free(tpl); lm_tok_close(tok); return 1; }
 

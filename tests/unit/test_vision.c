@@ -80,10 +80,10 @@ static void check_variant(const char *fix, const char *weights, const char *gold
     const LmVisionInfo *in = lm_vision_info(v);
     if (!strcmp(fix, FIX)) {
         CHECK(in->family == LM_VISION_QWEN && in->unit == 32 && in->out_dim == 64);
-        CHECK(in->image_token == 248056 && in->start_token == 248053 && in->end_token == 248054);
+        CHECK(in->image_token == 382 && in->start_token == 380 && in->end_token == 381 && in->slot_token == 382);
     } else {
         CHECK(in->family == LM_VISION_GEMMA && in->unit == 48 && in->out_dim == 64);
-        CHECK(in->image_token == 258880 && in->start_token == 255999 && in->end_token == 258882);
+        CHECK(in->image_token == 382 && in->start_token == 380 && in->end_token == 381 && in->slot_token == 0);
     }
     jval *imgs = json_get(g, "images");
     CHECK(imgs && imgs->t == J_ARR && imgs->len == 3);

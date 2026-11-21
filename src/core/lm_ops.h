@@ -60,6 +60,13 @@ void lm_l2norm(float *y, const float *x, int n);
  * rot_dim pass through. Returns -1 on a bad shape (rot_dim odd or out of range). */
 int lm_rope(float *x, int n_heads, int head_dim, int rot_dim, int pos, float theta);
 
+/* Qwen3.5's interleaved multimodal RoPE: lm_rope where frequency i takes its position from
+ * pos[axis(i)] (t, h, w): axis 1 if i % 3 == 1 && i < 3*sec_h, axis 2 if i % 3 == 2 &&
+ * i < 3*sec_w, else 0 (Qwen3_5TextRotaryEmbedding.recomposition_frequencies; sec_h, sec_w are
+ * mrope_section[1], [2]). With three equal positions it is BIT-IDENTICAL to lm_rope, which is
+ * this function with sec_h = sec_w = 0. Returns -1 on a bad shape or a negative section. */
+int lm_mrope(float *x, int n_heads, int head_dim, int rot_dim, const int pos[3], int sec_h, int sec_w, float theta);
+
 /* ---- linear attention (Gated DeltaNet) ---- */
 
 /* One causal depthwise conv1d step + SiLU. w is [channels][k] (the checkpoint's

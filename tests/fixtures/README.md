@@ -111,8 +111,18 @@ About 1.8 MB. Gate: `check_golden.py ... --fixtures tests/fixtures/qwen35-vl-tin
 Vision dimensions: depth 2, hidden 32, 2 heads (`head_dim` 16), intermediate 64, patch 16, merge 2,
 temporal 2, 16 position embeddings (a 4x4 table, so every image interpolates it), out 64 (the text
 hidden size). Seed `VISION_SEED` 1. Margins asserted by the generator: no two rows of an image equal;
-q8 and bf16 rows differ by at least 92x the gate tolerance (3x is required). No text goldens yet
-(phase 2 adds image-conditioned logits).
+q8 and bf16 rows differ by at least 92x the gate tolerance (3x is required).
+
+The placeholder ids sit inside the tiny vocabulary: start 380, end 381, image 382 (Gemma: `boi`,
+`eoi`, `image_token_id`; its `pad_token_id` 0 is the per-layer table slot). `golden_image_{bf16,q8}.json`
+(`{"prompt":[{"tokens"}|{"image"}...],"rows","greedy":{"n","out"}}`) is a prompt of text, image,
+text, image, text (Qwen: `img_64x96.ppm` then `img_32x32.ppm`, so the first grid is 2x3 and not
+square): one logits row per item and 6 greedy ids, from `ref_qwen35.Model.feed_image` /
+`ref_gemma4.Model.feed_image` with the encoder rows of the same weights. Gate check 6. Margins asserted
+by the generator: top-1/top-2 gap above 5e-2 at every row and greedy step; the first picture inverted,
+and (Qwen) consecutive instead of M-RoPE positions or (Gemma) the pad embedding in the per-layer
+projection, each move the logits by more than 3x the tolerance; q8 and bf16 logits differ by more
+than 3x. Prompt seeds `IMAGE_SEEDS` (Qwen 5, Gemma 8: the first that meet the margins).
 
 ## `gemma4-vl-tiny/`
 

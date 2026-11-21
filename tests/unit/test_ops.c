@@ -126,6 +126,29 @@ static void test_rope(void)
     /* bad shapes */
     CHECK(lm_rope(x, 1, 8, 3, 1, 100.0f) == -1);
     CHECK(lm_rope(x, 1, 8, 10, 1, 100.0f) == -1);
+
+    /* lm_mrope: equal positions are BIT-IDENTICAL to lm_rope, whatever the sections */
+    float a[64], b[64];
+    for (int i = 0; i < 64; i++) a[i] = b[i] = (float)sin(i * 0.7) * 3.0f;
+    const int same[3] = { 1234, 1234, 1234 };
+    CHECK(lm_rope(a, 2, 32, 16, 1234, 1e7f) == 0);
+    CHECK(lm_mrope(b, 2, 32, 16, same, 2, 1, 1e7f) == 0);
+    CHECK(!memcmp(a, b, sizeof a));
+    /* sections [., 2, 1] over 4 frequencies: i=0 t, i=1 h (1 < 6), i=2 w (2 < 3), i=3 t */
+    const int thw[3] = { 5, 11, 17 };
+    const int axis_of[4] = { 0, 1, 2, 0 };
+    float m[8] = { 1, 1, 1, 1, 0, 0, 0, 0 };
+    CHECK(lm_mrope(m, 1, 8, 8, thw, 2, 1, 100.0f) == 0);
+    for (int i = 0; i < 4; i++) {
+        const double ang = thw[axis_of[i]] * pow(100.0, -2.0 * i / 8.0);
+        CHECK_NEAR(m[i], cos(ang), 1e-6);
+        CHECK_NEAR(m[i + 4], sin(ang), 1e-6);
+    }
+    /* NEGATIVE: with no sections every frequency takes t */
+    float n[8] = { 1, 1, 1, 1, 0, 0, 0, 0 };
+    lm_mrope(n, 1, 8, 8, thw, 0, 0, 100.0f);
+    CHECK(fabs((double)n[1] - m[1]) > 1e-3 && fabs((double)n[2] - m[2]) > 1e-3 && n[3] == m[3]);
+    CHECK(lm_mrope(n, 1, 8, 8, thw, -1, 0, 100.0f) == -1);
 }
 
 static void test_conv1d(void)

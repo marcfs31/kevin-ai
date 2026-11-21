@@ -352,18 +352,21 @@ class Model:
         ctx = attention_context(queries, kv["k"], kv["v"], pos, c.window if lt == SLIDING else None)
         return matvec(w.get(p + "o_proj.weight"), ctx)
 
-    def step(self, state, token, stats=None):
+    def step(self, state, token, stats=None, row=None, proj=None):
         """Feed one token; returns the vocab logits row (after the softcap). Mutates `state`.
 
         `stats`, if a dict, receives "max_precap" = max(|logit| before the softcap) over all calls.
+        `row`: an image row that REPLACES the scaled token embedding (unscaled, as
+        Gemma4Model.forward); `token` is then the pad id, which only picks the per-layer table row.
+        `proj`: the vector the per-layer projection reads instead of the embedding (an ablation).
         """
         c, w = self.cfg, self.w
         embed = w.get(PREFIX + "embed_tokens.weight")
         if not 0 <= token < c.vocab:
             raise ValueError("token id %d out of range" % token)
         pos = state["pos"]
-        h = [v * c.embed_scale for v in embed[token]]
-        ple = self.per_layer_inputs(token, h)
+        h = [v * c.embed_scale for v in embed[token]] if row is None else list(row)
+        ple = self.per_layer_inputs(token, h if proj is None else proj)
         for i in range(c.layers):
             p = "%slayers.%d." % (PREFIX, i)
             n1 = rmsnorm(h, w.get(p + "input_layernorm.weight"), c.eps)
@@ -383,6 +386,17 @@ class Model:
         if stats is not None:
             stats["max_precap"] = max(stats.get("max_precap", 0.0), max(abs(v) for v in raw))
         return softcap(raw, c.cap)
+
+    def feed_image(self, state, rows, start, end, pad, pad_projection=False):
+        """The start token, one row per soft token, the end token (Gemma4Model.forward): positions
+        stay sequential. pad_projection=True is an ABLATION (the per-layer projection reads the
+        scaled pad embedding instead of the row). Returns the logits after the end token."""
+        self.step(state, start)
+        embed = self.w.get(PREFIX + "embed_tokens.weight")
+        padv = [v * self.cfg.embed_scale for v in embed[pad]]
+        for r in rows:
+            self.step(state, pad, row=r, proj=padv if pad_projection else None)
+        return self.step(state, end)
 
     def forward(self, tokens, stats=None):
         state = self.new_state()

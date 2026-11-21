@@ -96,12 +96,25 @@ def rope_inv_freq(rot_dim, theta):
     return [theta ** (-(2.0 * i) / rot_dim) for i in range(rot_dim // 2)]
 
 
-def rope_apply(x, pos, rot_dim, theta):
-    """Rotate-half RoPE on the first rot_dim entries of one head vector; the rest pass through."""
+def section_axis(k, section):
+    """Which position (0 = t, 1 = h, 2 = w) rotary frequency k uses:
+    Qwen3_5TextRotaryEmbedding.recomposition_frequencies, interleaved."""
+    if k % 3 == 1 and k < section[1] * 3:
+        return 1
+    if k % 3 == 2 and k < section[2] * 3:
+        return 2
+    return 0
+
+
+def rope_apply(x, pos, rot_dim, theta, section=None):
+    """Rotate-half RoPE on the first rot_dim entries of one head vector; the rest pass through.
+    pos is an int, or a (t, h, w) tuple with `section` (mrope_section): frequency k then takes
+    pos[section_axis(k, section)]."""
     half = rot_dim // 2
     out = list(x)
     for i, f in enumerate(rope_inv_freq(rot_dim, theta)):
-        c, s = math.cos(pos * f), math.sin(pos * f)
+        p = pos[section_axis(i, section)] if isinstance(pos, tuple) else pos
+        c, s = math.cos(p * f), math.sin(p * f)
         a, b = x[i], x[i + half]
         out[i] = a * c - b * s
         out[i + half] = b * c + a * s
@@ -186,6 +199,9 @@ class Config:
             rp = t["rope_parameters"]
             self.theta = float(rp["rope_theta"])
             self.partial = float(rp.get("partial_rotary_factor", 1.0))
+            self.mrope = [int(v) for v in rp["mrope_section"]]
+            if rp.get("mrope_interleaved") is not True or len(self.mrope) != 3:
+                raise ValueError("mrope_interleaved must be true with a 3-entry mrope_section")
             rope_type = rp.get("rope_type", "default")
             self.lk_heads = t["linear_num_key_heads"]
             self.lv_heads = t["linear_num_value_heads"]
@@ -211,6 +227,8 @@ class Config:
         self.rot = int(self.head_dim * self.partial)
         if self.rot % 2:
             raise ValueError("rotary dim must be even")
+        if sum(self.mrope) != self.rot // 2:
+            raise ValueError("mrope_section must sum to rot/2")
         self.key_dim = self.lk_heads * self.lk_dim
         self.value_dim = self.lv_heads * self.lv_dim
         self.conv_dim = 2 * self.key_dim + self.value_dim
@@ -337,7 +355,7 @@ class Model:
                 })
             else:
                 st_.append({"k": [], "v": []})
-        return {"layers": st_, "pos": 0}
+        return {"layers": st_, "pos": 0, "rope": 0}
 
     def _mlp(self, p, x):
         g = matvec(self.w.get(p + "gate_proj.weight"), x)
@@ -354,10 +372,10 @@ class Model:
         queries, gate = [], []
         for h in range(c.heads):
             seg = qg[h * 2 * hd:(h + 1) * 2 * hd]
-            queries.append(rope_apply(rmsnorm_zero_centred(seg[:hd], qn, c.eps), pos, c.rot, c.theta))
+            queries.append(rope_apply(rmsnorm_zero_centred(seg[:hd], qn, c.eps), pos, c.rot, c.theta, c.mrope))
             gate.extend(seg[hd:])
         ls["k"].append([rope_apply(rmsnorm_zero_centred(k[h * hd:(h + 1) * hd], kn, c.eps),
-                                   pos, c.rot, c.theta) for h in range(c.kv_heads)])
+                                   pos, c.rot, c.theta, c.mrope) for h in range(c.kv_heads)])
         ls["v"].append([v[h * hd:(h + 1) * hd] for h in range(c.kv_heads)])
         group = c.heads // c.kv_heads
         scale = hd ** -0.5
@@ -389,25 +407,30 @@ class Model:
             y.extend(rmsnorm_gated(o[h * dv:(h + 1) * dv], z[h * dv:(h + 1) * dv], nw, c.eps))
         return matvec(w.get(p + "out_proj.weight"), y)
 
-    def step(self, state, token):
-        """Feed one token; returns the vocab logits row. Mutates `state`."""
-        return self.step_h(state, token)[0]
+    def step(self, state, token, emb=None, rp=None):
+        """Feed one token; returns the vocab logits row. Mutates `state`.
+        emb: an input embedding replacing the lookup (an image row); rp: its (t, h, w) RoPE position
+        (default: the running state["rope"], which then advances by one)."""
+        return self.step_h(state, token, emb, rp)[0]
 
-    def step_h(self, state, token):
+    def step_h(self, state, token, emb=None, rp=None):
         """step, also returning the final normed hidden state (the MTP head's input)."""
         c, w = self.cfg, self.w
         embed = w.get(PREFIX + "embed_tokens.weight")
         if not 0 <= token < c.vocab:
             raise ValueError("token id %d out of range" % token)
-        h = list(embed[token])
+        h = list(embed[token]) if emb is None else list(emb)
         pos = state["pos"]
+        if rp is None:
+            rp = (state["rope"],) * 3
+            state["rope"] += 1
         for i, lt in enumerate(c.layer_types):
             p = "%slayers.%d." % (PREFIX, i)
             n1 = rmsnorm_zero_centred(h, w.get(p + "input_layernorm.weight"), c.eps)
             if lt == "linear_attention":
                 m = self._linear_attn(p + "linear_attn.", n1, state["layers"][i])
             else:
-                m = self._full_attn(p + "self_attn.", n1, state["layers"][i], pos)
+                m = self._full_attn(p + "self_attn.", n1, state["layers"][i], rp)
             h = [a + b for a, b in zip(h, m)]
             n2 = rmsnorm_zero_centred(h, w.get(p + "post_attention_layernorm.weight"), c.eps)
             h = [a + b for a, b in zip(h, self._mlp(p + "mlp.", n2))]
@@ -415,6 +438,19 @@ class Model:
         h = rmsnorm_zero_centred(h, w.get(PREFIX + "norm.weight"), c.eps)
         head = embed if c.tied else w.get("lm_head.weight")
         return matvec(head, h), h
+
+    def feed_image(self, state, rows, lh, lw, start, end, mrope=True):
+        """The start token, one row per merged-grid cell (row-major over lh x lw), the end token:
+        Qwen3_5Model.get_rope_index. The rows sit at (p, p + i, p + j), p the position after the
+        start token, and the next token at p + max(lh, lw). mrope=False is an ABLATION (the rows
+        take consecutive positions, as text would). Returns the logits after the end token."""
+        self.step(state, start)
+        p = state["rope"]
+        for k, row in enumerate(rows):
+            i, j = divmod(k, lw)
+            self.step(state, 0, emb=row, rp=(p, p + i, p + j) if mrope else (p + k,) * 3)
+        state["rope"] = p + (max(lh, lw) if mrope else len(rows))
+        return self.step(state, end)
 
     def mtp_step(self, ms, h, token, pos):
         """The MTP head at position pos: h = final normed hidden at pos, token = the id at pos+1.

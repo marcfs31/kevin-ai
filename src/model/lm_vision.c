@@ -80,6 +80,7 @@ static int qwen_config(LmVision *v, jval *root, char *err, size_t n)
         req_int(root, "image_token_id", &v->info.image_token, err, n) ||
         req_int(root, "vision_start_token_id", &v->info.start_token, err, n) ||
         req_int(root, "vision_end_token_id", &v->info.end_token, err, n)) return -1;
+    v->info.slot_token = v->info.image_token;
     jval *act = json_get(vc, "hidden_act");
     if (!act || act->t != J_STR || strcmp(act->str, "gelu_pytorch_tanh"))
         return lm_fail(err, n, "vision_config.hidden_act must be \"gelu_pytorch_tanh\"");
@@ -132,7 +133,8 @@ static int gemma_config(LmVision *v, jval *root, char *err, size_t n)
         req_int(tc, "hidden_size", &v->info.out_dim, err, n) ||
         req_int(root, "image_token_id", &v->info.image_token, err, n) ||
         req_int(root, "boi_token_id", &v->info.start_token, err, n) ||
-        req_int(root, "eoi_token_id", &v->info.end_token, err, n)) return -1;
+        req_int(root, "eoi_token_id", &v->info.end_token, err, n) ||
+        req_int(tc, "pad_token_id", &v->info.slot_token, err, n)) return -1;
     jval *act = json_get(vc, "hidden_activation");
     if (!act || act->t != J_STR || strcmp(act->str, "gelu_pytorch_tanh"))
         return lm_fail(err, n, "vision_config.hidden_activation must be \"gelu_pytorch_tanh\"");

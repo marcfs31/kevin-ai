@@ -20,6 +20,9 @@ typedef struct {
     int unit;                /* image height and width must be positive multiples of this */
     int image_token;         /* the placeholder id each output row replaces */
     int start_token, end_token;   /* the ids around the placeholders */
+    int slot_token;          /* the id the text model sees at a placeholder position: Gemma's
+                                text_config.pad_token_id (its per-layer table lookup), Qwen's
+                                image_token */
 } LmVisionInfo;
 
 typedef struct LmVision LmVision;

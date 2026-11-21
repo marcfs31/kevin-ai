@@ -495,7 +495,7 @@ static void layers_batch(LmGemma *g, int from, int to, int T, int pos0)
     }
 }
 
-int lm_gemma_prefill(LmGemma *g, const int *tokens, int n, float *logits)
+int lm_gemma_prefill(LmGemma *g, const int *tokens, int n, const float *rows, float *logits)
 {
     const LmGemmaCfg *c = &g->cfg;
     const int H = c->hidden, P = c->ple_dim, LP = c->layers * P;
@@ -505,8 +505,12 @@ int lm_gemma_prefill(LmGemma *g, const int *tokens, int n, float *logits)
         last_T = T;
         for (int t = 0; t < T; t++) {
             float *h = g->bh + (size_t)t * H;
-            lm_mat_row(&g->embed, tokens[s + t], h);
-            for (int j = 0; j < H; j++) h[j] *= c->embed_scale;
+            if (rows) {   /* an image row: the encoder's output as it is, not scaled (Gemma4Model.forward) */
+                memcpy(h, rows + (size_t)(s + t) * H, (size_t)H * sizeof(float));
+            } else {
+                lm_mat_row(&g->embed, tokens[s + t], h);
+                for (int j = 0; j < H; j++) h[j] *= c->embed_scale;
+            }
         }
         lm_mat_mul_batch(&g->ple_model, g->bple_ctx, g->bh, T);
         for (int t = 0; t < T; t++) {

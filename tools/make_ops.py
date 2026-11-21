@@ -145,7 +145,9 @@ def mini_cfg(hidden, inter, heads, kv_heads, head_dim, partial, theta, lk, lv, l
         "hidden_size": hidden, "intermediate_size": inter, "num_hidden_layers": 1,
         "layer_types": [layer_type], "vocab_size": 8, "rms_norm_eps": EPS,
         "num_attention_heads": heads, "num_key_value_heads": kv_heads, "head_dim": head_dim,
-        "rope_parameters": {"rope_type": "default", "rope_theta": theta, "partial_rotary_factor": partial},
+        "rope_parameters": {"rope_type": "default", "rope_theta": theta, "partial_rotary_factor": partial,
+                            "mrope_interleaved": True,   # temporal-only sections: plain RoPE, as the op cases use
+                            "mrope_section": [int(head_dim * partial) // 2, 0, 0]},
         "linear_num_key_heads": lk, "linear_num_value_heads": lv, "linear_key_head_dim": lkd,
         "linear_value_head_dim": lvd, "linear_conv_kernel_dim": conv_k, "hidden_act": "silu",
         "attn_output_gate": True}})

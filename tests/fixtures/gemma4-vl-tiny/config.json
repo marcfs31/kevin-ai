@@ -44,16 +44,16 @@
     },
     "audio_token_id": 258881,
     "boa_token_id": 256000,
-    "boi_token_id": 255999,
+    "boi_token_id": 380,
     "dtype": "bfloat16",
     "eoa_token_id": 258883,
     "eoa_token_index": 258883,
-    "eoi_token_id": 258882,
+    "eoi_token_id": 381,
     "eos_token_id": [
         1,
         106
     ],
-    "image_token_id": 258880,
+    "image_token_id": 382,
     "initializer_range": 0.02,
     "model_type": "gemma4",
     "text_config": {

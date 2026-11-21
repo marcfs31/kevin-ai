@@ -30,6 +30,8 @@ import fixture_cmp
 import make_tiny
 import make_tiny_gemma4
 import quant_ref
+import ref_gemma4
+import ref_qwen35
 import ref_vision_gemma4 as rg
 import ref_vision_qwen35 as rv
 import safetensors as st
@@ -41,6 +43,8 @@ DEPTH, VHIDDEN, VHEADS, VINTER, N_POS = 2, 32, 2, 64, 16
 PATCH, MERGE, TEMPORAL = 16, 2, 2
 IMAGES = (("img_64x64.ppm", 64, 64), ("img_64x96.ppm", 64, 96), ("img_32x32.ppm", 32, 32))
 V = rv.V
+# the placeholder ids sit inside the tiny vocabulary (384) so the text model can be fed them
+START_ID, END_ID, IMG_ID = 380, 381, 382
 # Gemma: 2 layers, hidden 32, 2 query heads over 1 KV head (head_dim 16), pooling 3, a 16-entry
 # position table per axis (the widest image is 9 patches)
 G_LAYERS, G_HIDDEN, G_HEADS, G_KV, G_HD, G_INTER, G_POS, G_POOL = 2, 32, 2, 1, 16, 64, 16, 3
@@ -65,6 +69,7 @@ def config():
         "spatial_merge_size": MERGE,
         "temporal_patch_size": TEMPORAL,
     }
+    c.update({"image_token_id": IMG_ID, "vision_start_token_id": START_ID, "vision_end_token_id": END_ID})
     return c
 
 
@@ -103,6 +108,7 @@ def gemma_config():
                "num_attention_heads": G_HEADS, "num_hidden_layers": G_LAYERS, "num_key_value_heads": G_KV,
                "pooling_kernel_size": G_POOL, "position_embedding_size": G_POS})
     c["vision_config"] = vc
+    c.update({"image_token_id": IMG_ID, "boi_token_id": START_ID, "eoi_token_id": END_ID})
     return c
 
 
@@ -148,6 +154,65 @@ def ppm(rng, h, w):
     return b"P6\n%d %d\n255\n" % (w, h) + bytes(px)
 
 
+# The image golden: a prompt of text, image, text, image, text (docs/PLAN.md, Phase 3 gates).
+IMAGE_SEEDS = {"qwen35": 5, "gemma4": 8}   # prompt tokens; the first seeds that meet the margins
+MIN_GAP = 5e-2
+N_IMAGE_GREEDY = 6
+PAD_ID = 0
+PROMPT_IMAGES = {"qwen35": ("img_64x96.ppm", "img_32x32.ppm"), "gemma4": ("img_96x144.ppm", "img_48x48.ppm")}
+PROMPT_SHAPE = (5, 4, 3)   # text tokens before, between and after the two images
+
+
+def prompt_items(family):
+    rng = random.Random(IMAGE_SEEDS[family])
+    txt = [[rng.randrange(START_ID) for _ in range(n)] for n in PROMPT_SHAPE]
+    a, b = PROMPT_IMAGES[family]
+    return [("t", txt[0]), ("i", a), ("t", txt[1]), ("i", b), ("t", txt[2])]
+
+
+def image_run(family, tm, vis, d, items, ablate=None):
+    """-> (one logits row per item, greedy ids). ablate: None, "image" (the first picture inverted),
+    "mrope" (Qwen: consecutive positions for the rows), "proj" (Gemma: the pad embedding feeds the
+    per-layer projection instead of the row)."""
+    state, rows, seen = tm.new_state(), [], 0
+    for kind, val in items:
+        if kind == "t":
+            for t in val:
+                last = tm.step(state, t)
+        else:
+            rgb, pw, ph = rv.read_ppm(os.path.join(d, val))
+            if ablate == "image" and seen == 0:
+                rgb = bytes(255 - v for v in rgb)
+            seen += 1
+            enc = vis.encode(rgb, ph, pw)
+            if family == "qwen35":
+                last = tm.feed_image(state, enc, ph // 32, pw // 32, START_ID, END_ID, mrope=ablate != "mrope")
+            else:
+                last = tm.feed_image(state, enc, START_ID, END_ID, PAD_ID, pad_projection=ablate == "proj")
+        rows.append(last)
+    ids, steps = [], []
+    for _ in range(N_IMAGE_GREEDY):
+        nxt = ref_qwen35.argmax(last)
+        ids.append(nxt)
+        steps.append(last)
+        last = tm.step(state, nxt)
+    return rows, ids, steps
+
+
+def image_golden(family, d, items, label, tm, vis, ablations):
+    rows, ids, steps = image_run(family, tm, vis, d, items)
+    gaps = [ref_qwen35.top_gap(r) for r in rows + steps]
+    if min(gaps) <= MIN_GAP:
+        raise MarginError("%s image prompt: top-1/top-2 gap %.3g <= %g" % (label, min(gaps), MIN_GAP))
+    top = max(abs(v) for r in rows for v in r)
+    for ab in ablations:
+        other, _, _ = image_run(family, tm, vis, d, items, ablate=ab)
+        bite = max(abs(a - b) for r1, r2 in zip(rows, other) for a, b in zip(r1, r2)) / (GATE_REL_TOL * top)
+        if bite <= 3:
+            raise MarginError("%s image prompt: ablation %s moves the logits by only %.3g x tolerance" % (label, ab, bite))
+    return rows, ids
+
+
 class MarginError(Exception):
     pass
 
@@ -179,7 +244,7 @@ def build(seed, family="qwen35"):
              "model.safetensors": st.serialize(tensors, metadata={"format": "pt"})}
     for name, h, w in images:
         files[name] = ppm(rng, h, w)
-    golden = {"bf16": [], "q8": []}
+    golden = {"bf16": [], "q8": []}   # plus image_bf16, image_q8 (the text-image prompt)
     info = {"seed": seed}
     with tempfile.TemporaryDirectory() as d:
         for name, data in files.items():
@@ -190,6 +255,19 @@ def build(seed, family="qwen35"):
         bf = oracle.VisionModel.load(d)
         q8 = oracle.VisionModel.load(d, os.path.join(d, "model.q8.safetensors"))
         worst = None
+        tmod = (ref_qwen35 if family == "qwen35" else ref_gemma4).Model
+        tb, tq = tmod.load(d), tmod.load(d, os.path.join(d, "model.q8.safetensors"))
+        items = prompt_items(family)
+        abl = ("image", "mrope") if family == "qwen35" else ("image", "proj")
+        rb_img, ids_b = image_golden(family, d, items, "bf16", tb, bf, abl)
+        rq_img, ids_q = image_golden(family, d, items, "q8", tq, q8, abl)
+        top_i = max(abs(v) for r in rb_img for v in r)
+        diff_i = max(abs(a - b) for r1, r2 in zip(rb_img, rq_img) for a, b in zip(r1, r2))
+        if diff_i <= 3 * GATE_REL_TOL * top_i:
+            raise MarginError("q8 image logits are too close to bf16 (%.3g)" % (diff_i / (GATE_REL_TOL * top_i)))
+        for label, rws, ids in (("bf16", rb_img, ids_b), ("q8", rq_img, ids_q)):
+            spec = [{"tokens": v} if k == "t" else {"image": v} for k, v in items]
+            golden["image_" + label] = {"prompt": spec, "rows": rnd(rws), "greedy": {"n": N_IMAGE_GREEDY, "out": ids}}
         for name, h, w in images:
             rgb, pw, ph = rv.read_ppm(os.path.join(d, name))
             rb, rq = bf.encode(rgb, ph, pw), q8.encode(rgb, ph, pw)
@@ -217,6 +295,8 @@ def build(seed, family="qwen35"):
     for label in ("bf16", "q8"):
         files["golden_vision_%s.json" % label] = make_tiny.jdump(
             {"images": golden[label]}, separators=(",", ":"))
+    for label in ("bf16", "q8"):
+        files["golden_image_%s.json" % label] = make_tiny.jdump(golden["image_" + label], separators=(",", ":"))
     info["min_q8_vs_bf16_x_tol"] = worst
     return files, info
 

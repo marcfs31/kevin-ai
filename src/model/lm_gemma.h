@@ -45,9 +45,12 @@ size_t   lm_gemma_state_bytes(const LmGemmaCfg *c, int ctx);
  * token in position order. The layers that only read the shared KV caches hold no state, so they
  * run only for the last token and only when logits are asked for. The caller (lm_prefill) has
  * validated the ids and that they fit. logits (may be NULL): after the last token only.
+ * rows (may be NULL): [n][hidden] embeddings that REPLACE the scaled token embedding (image rows,
+ * unscaled); tokens still give the per-layer table row (the pad id at an image position) and the
+ * projection source is the replaced embedding, as Gemma4Model.forward.
  * Returns LM_OK, or LM_ERR_IO if a per-layer table row cannot be read (the chunk in progress is
  * then not applied, as with lm_gemma_feed, but earlier chunks are). */
-int      lm_gemma_prefill(LmGemma *g, const int *tokens, int n, float *logits);
+int      lm_gemma_prefill(LmGemma *g, const int *tokens, int n, const float *rows, float *logits);
 
 /* The state regions at position pos, in a fixed order: for every cache-owning layer its K and
  * V rows in use (min(pos, slots) of them; a ring once it wrapped is all of its slots). With

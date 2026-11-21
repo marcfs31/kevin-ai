@@ -269,14 +269,7 @@ def mrope_positions(items, merge=2):
     return out
 
 
-def section_axis(k, section):
-    """Which position (0 = t, 1 = h, 2 = w) rotary frequency k uses:
-    Qwen3_5TextRotaryEmbedding.recomposition_frequencies, interleaved."""
-    if k % 3 == 1 and k < section[1] * 3:
-        return 1
-    if k % 3 == 2 and k < section[2] * 3:
-        return 2
-    return 0
+section_axis = ref.section_axis   # moved to ref_qwen35 (the text model's RoPE owns it)
 
 
 def read_ppm(path):

@@ -32,12 +32,20 @@ void lm_l2norm(float *y, const float *x, int n)
 
 int lm_rope(float *x, int n_heads, int head_dim, int rot_dim, int pos, float theta)
 {
-    if (rot_dim < 0 || (rot_dim & 1) || rot_dim > head_dim || n_heads < 0 || head_dim < 0) return -1;
+    const int p[3] = { pos, pos, pos };
+    return lm_mrope(x, n_heads, head_dim, rot_dim, p, 0, 0, theta);
+}
+
+int lm_mrope(float *x, int n_heads, int head_dim, int rot_dim, const int pos[3], int sec_h, int sec_w, float theta)
+{
+    if (rot_dim < 0 || (rot_dim & 1) || rot_dim > head_dim || n_heads < 0 || head_dim < 0 || sec_h < 0 || sec_w < 0)
+        return -1;
     const int half = rot_dim / 2;
     for (int i = 0; i < half; i++) {
+        const int axis = (i % 3 == 1 && i < 3 * sec_h) ? 1 : (i % 3 == 2 && i < 3 * sec_w) ? 2 : 0;
         /* double: the angle reaches pos * 1 radians at i = 0, where float loses digits */
         const double inv_freq = pow((double)theta, -2.0 * (double)i / (double)rot_dim);
-        const double ang = (double)pos * inv_freq;
+        const double ang = (double)pos[axis] * inv_freq;
         const float c = (float)cos(ang), s = (float)sin(ang);
         for (int h = 0; h < n_heads; h++) {
             float *hv = x + (size_t)h * head_dim;

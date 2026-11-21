@@ -23,8 +23,10 @@ enum {
     LM_ERR_CTX   = 1, /* context window full; nothing was fed */
     LM_ERR_TOKEN = 2, /* token id outside [0, vocab) */
     LM_ERR_IO    = 3, /* a weight read failed; the model state is no longer valid */
-    LM_ERR_STATE = 4  /* the call does not apply now (no MTP head, nothing fed, no lm_verify
-                         to accept); nothing changed */
+    LM_ERR_STATE = 4, /* the call does not apply now (no MTP head, nothing fed, no lm_verify
+                         to accept, no image encoder); nothing changed */
+    LM_ERR_IMAGE = 5  /* the image cannot be encoded: null pixels, a side that is not a positive
+                         multiple of the encoder's unit, too large, or out of memory; nothing fed */
 };
 
 typedef struct {
@@ -43,6 +45,10 @@ typedef struct {
                             weights; q8 files from an lm-quant older than the head lack it) for
                             lm_draft / lm_verify / lm_accept. Every fed token then also runs the
                             head's one layer to keep its cache. lm_open fails if there is none */
+    int vision;          /* 1 = also open the image encoder (lm_prefill_image). Its weights come
+                            from the same place as the text model's. A model without usable vision
+                            weights (a q8 file from an older lm-quant, a text-only fixture) still
+                            opens: lm_vision_status then says why. 0 = text only, the default */
 } LmOpts;
 
 /* model_dir holds config.json in the Hugging Face layout. Every architecture number
@@ -59,6 +65,22 @@ int  lm_pos(const LmModel *m);      /* tokens fed since the last reset */
  * attention state cannot be rewound, so there is no truncate: a caller whose new
  * prompt does not extend what was fed resets and re-prefills. */
 void lm_reset(LmModel *m);
+
+/* ---- images (LmOpts.vision) ----
+ * lm_vision_status: NULL when images can be fed, else a message saying why not (not requested,
+ * or what is missing from the weights). lm_image_tokens: the rows an h x w RGB8 image encodes
+ * to, or -1 when images are unavailable or the size is not accepted (the encoder's unit is a
+ * multiple the caller resizes to; there is no resampling here). */
+const char *lm_vision_status(const LmModel *m);
+int  lm_image_tokens(const LmModel *m, int h, int w);
+
+/* Feed one image: the start token, the image's rows, the end token. rgb is [h][w][3] row-major.
+ * logits (may be NULL) is the next-token distribution after the end token. The image takes
+ * lm_image_tokens(h, w) + 2 cache positions, checked BEFORE encoding. Returns LM_OK; LM_ERR_STATE
+ * (no encoder: see lm_vision_status), LM_ERR_IMAGE or LM_ERR_CTX with nothing fed; LM_ERR_IO as
+ * lm_prefill. The model state then equals feeding the same token sequence with the rows in place
+ * of the placeholders, and a snapshot taken after it restores exactly. */
+int  lm_prefill_image(LmModel *m, const uint8_t *rgb, int h, int w, float *logits);
 
 /* Append one token at the next position and run all layers. If logits is non-NULL it
  * receives lm_n_vocab() floats for the next-token distribution; NULL skips the final

@@ -19,6 +19,7 @@ typedef struct {
     int    heads, kv_heads, head_dim;
     float  theta;
     int    rot;                   /* rotary dims per head = (int)(head_dim * partial_rotary_factor) */
+    int    sec_h, sec_w;          /* mrope_section[1], [2] (interleaved M-RoPE; [t,h,w] sums to rot/2) */
     int    lk_heads, lv_heads, lk_dim, lv_dim, conv_k;
     int    tied;                  /* tie_word_embeddings */
     int    max_pos;               /* max_position_embeddings */

@@ -129,6 +129,7 @@ int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
     c->eps = (float)eps;
     c->rot = (int)((double)c->head_dim * partial);
 
+
     jval *lt = json_get(t, "layer_types");
     if (!lt) { lm_fail(err, errlen, "config.json is missing \"layer_types\""); goto out; }
     if (lt->t != J_ARR || lt->len != c->layers) {
@@ -150,6 +151,27 @@ int lm_config_load(const char *path, LmCfg *c, char *err, size_t errlen)
     if (c->rot < 2 || (c->rot & 1) || c->rot > c->head_dim) {
         lm_fail(err, errlen, "rotary dimension %d (head_dim * partial_rotary_factor) must be even and in [2, head_dim]", c->rot);
         goto out;
+    }
+    jval *ml = json_get(rp, "mrope_interleaved");
+    if (!ml || ml->t != J_BOOL || !ml->boolean) {
+        lm_fail(err, errlen, "rope_parameters.mrope_interleaved must be true (the only supported M-RoPE layout)");
+        goto out;
+    }
+    jval *ms = json_get(rp, "mrope_section");
+    if (!ms || ms->t != J_ARR || ms->len != 3 || ms->kids[0]->t != J_NUM || ms->kids[1]->t != J_NUM ||
+        ms->kids[2]->t != J_NUM) {
+        lm_fail(err, errlen, "config.json is missing rope_parameters.mrope_section (3 numbers)");
+        goto out;
+    }
+    {
+        const double st = ms->kids[0]->num, sh = ms->kids[1]->num, sw = ms->kids[2]->num;
+        if (st < 0 || sh < 0 || sw < 0 || st != (int)st || sh != (int)sh || sw != (int)sw ||
+            (int)st + (int)sh + (int)sw != c->rot / 2) {
+            lm_fail(err, errlen, "rope_parameters.mrope_section must be 3 non-negative integers summing to rot/2 (%d)", c->rot / 2);
+            goto out;
+        }
+        c->sec_h = (int)sh;
+        c->sec_w = (int)sw;
     }
     c->key_dim = c->lk_heads * c->lk_dim;
     c->value_dim = c->lv_heads * c->lv_dim;
