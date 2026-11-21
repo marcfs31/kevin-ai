@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DONE, FINISH, USAGE, delta, sseResponse } from '../test/helpers';
-import { ApiError, parseModels, requestBody, streamChat } from './api';
+import { ApiError, infoForModel, parseModels, requestBody, streamChat } from './api';
 import type { StreamEvent } from './sse';
 
 describe('parseModels', () => {
   it('treats a server without capabilities as vision unknown', () => {
     expect(parseModels({ data: [{ id: 'm' }] })).toEqual({
       model: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null,
+      models: [{ id: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null }],
     });
   });
 
@@ -25,6 +26,29 @@ describe('parseModels', () => {
     expect(parseModels({ data: [{ id: 'm', capabilities: { vision: { status: 'unavailable' } } }] })?.vision).toBe('unavailable');
     expect(parseModels({ data: [{ id: 'm', capabilities: { vision: { status: 'maybe' } } }] })?.vision).toBe('unknown');
     expect(parseModels({ data: [] })).toBeNull();
+  });
+});
+
+describe('model list', () => {
+  const two = parseModels({
+    data: [
+      { id: 'qwen', context_length: 8192, capabilities: { vision: { status: 'ok', tokens_per_image: 280 } } },
+      { id: 'rabbit', context_length: 32768 },
+      { id: '' },
+      'junk',
+    ],
+  });
+
+  it('keeps every named model with its own context length and vision', () => {
+    expect(two?.models.map((m) => [m.id, m.contextLength, m.vision])).toEqual([['qwen', 8192, 'ok'], ['rabbit', 32768, 'unknown']]);
+    expect(two).toMatchObject({ model: 'qwen', contextLength: 8192 });
+  });
+
+  it('answers with the chosen model’s figures, and the first model for an unknown choice', () => {
+    expect(infoForModel(two, 'rabbit')).toMatchObject({ model: 'rabbit', contextLength: 32768, vision: 'unknown', tokensPerImage: null });
+    expect(infoForModel(two, 'gone')).toMatchObject({ model: 'qwen', contextLength: 8192 });
+    expect(infoForModel(two, null)?.model).toBe('qwen');
+    expect(infoForModel(null, 'rabbit')).toBeNull();
   });
 });
 

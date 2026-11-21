@@ -10,7 +10,7 @@ import { assess, requestBytes, toWire } from './request';
 import { DEFAULT_SETTINGS, type Message } from './storage';
 
 const info = (over: Partial<ServerInfo> = {}): ServerInfo => ({
-  model: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null, ...over,
+  model: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null, models: [], ...over,
 });
 const pdf = (pages: Array<string | null>, range: string, image = true): Extract<Attachment, { kind: 'pdf' }> => ({
   id: 'p', kind: 'pdf', name: 'doc.pdf', range,
