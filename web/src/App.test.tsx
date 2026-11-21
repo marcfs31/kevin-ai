@@ -30,6 +30,9 @@ function heldReply(init: RequestInit | undefined) {
   return new Response(stream, { status: 200 });
 }
 
+/** The number in the box with this label inside a list of boxes. */
+const boxValue = (list: HTMLElement, label: string) => within(list).getByText(label).nextElementSibling?.textContent;
+
 describe('App', () => {
   it('sends with Enter, streams the reply and shows its statistics', async () => {
     const fetchMock = mockFetch(() => sseResponse([delta('Hello'), delta(' **world**'), FINISH, USAGE, DONE]));
@@ -63,10 +66,14 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await screen.findByText('Stopped.');
     // A stopped reply is still counted, as an estimate.
-    expect((await screen.findByLabelText('Tokens used in this chat')).textContent).toBe('This chat: read ≈10 · written ≈1 tokens · ≈ means estimated');
+    const totals = await screen.findByLabelText('Totals for this chat');
+    expect(boxValue(totals, 'Read')).toBe('≈10');
+    expect(boxValue(totals, 'Written')).toBe('≈1');
+    expect(screen.getByLabelText('This chat').textContent).toContain('≈ means estimated');
 
     typeAndSend('again');
-    await waitFor(() => expect(screen.getByLabelText('Tokens used in this chat').textContent).toContain('read ≈40 · written ≈6'));
+    await waitFor(() => expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Read')).toBe('≈40'));
+    expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Written')).toBe('≈6');
     // Real usage replaces the estimate for that reply; the chat total stays marked while one estimate remains.
     const replies = screen.getAllByLabelText('Tokens used by this reply');
     expect(replies[replies.length - 1]?.textContent).toBe('Read 30 · written 5 tokens');
@@ -78,8 +85,105 @@ describe('App', () => {
     const box = screen.getByLabelText('Mensaje');
     fireEvent.change(box, { target: { value: 'hola' } });
     fireEvent.keyDown(box, { key: 'Enter' });
-    expect((await screen.findByLabelText('Tokens usados en este chat')).textContent).toBe('Este chat: leídos 12 · escritos 3 tokens');
+    const totals = await screen.findByLabelText('Totales de este chat');
+    expect(boxValue(totals, 'Leídos')).toBe('12');
+    expect(boxValue(totals, 'Escritos')).toBe('3');
+    expect(screen.getByLabelText('Este chat').textContent).not.toContain('≈');
     expect(screen.getByLabelText('Tokens usados por esta respuesta').textContent).toBe('Leídos 12 · escritos 3 tokens');
+  });
+
+  it('shows the context as one bar of boxes with their numbers', async () => {
+    mockFetch(() => sseResponse([delta('Hola'), FINISH, USAGE, DONE]), () => modelsResponse({ context_length: 100 }));
+    renderApp();
+    await screen.findByText('Context: 100 tokens');
+    expect(screen.queryByLabelText('This chat')).toBeNull();
+    typeAndSend('hi');
+    const bar = await screen.findByRole('img', { name: 'Context: prompt 12 tokens, last reply 3, free 85 of 100 (15% full)' });
+    expect(within(bar).getByText('Prompt').nextElementSibling?.textContent).toBe('12');
+    expect(within(bar).getByText('Last reply').nextElementSibling?.textContent).toBe('3');
+    expect(within(bar).getByText('Free').nextElementSibling?.textContent).toBe('85');
+    expect(screen.getByLabelText('This chat').textContent).toContain('15% of 100 tokens');
+  });
+
+  it('keeps the chat list usable while a reply is being written', async () => {
+    let n = 0;
+    mockFetch((_u, init) => (++n === 1 ? sseResponse([delta('first answer'), FINISH, USAGE, DONE]) : heldReply(init)));
+    renderApp();
+    typeAndSend('one');
+    await screen.findByText('first answer');
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    typeAndSend('two');
+    await screen.findByText('partial');
+    // The reply to "two" is running: starting and switching chats are open, deleting waits.
+    expect((screen.getByRole('button', { name: 'New chat' }) as HTMLButtonElement).disabled).toBe(false);
+    const first = screen.getByRole('button', { name: /^one/ }) as HTMLButtonElement;
+    expect(first.disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Delete “one”' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Delete all' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(first);
+    expect(await screen.findByText('first answer')).toBeTruthy();
+    expect(screen.getByText('A reply is being written in another chat. You can read this one; sending waits until it ends.')).toBeTruthy();
+    expect(screen.queryByText('partial')).toBeNull();
+    // The running chat says so in the list, and its reply is still there when you come back.
+    const second = screen.getByRole('button', { name: /^two/ });
+    expect(second.textContent).toContain('writing…');
+    fireEvent.click(second);
+    expect(await screen.findByText('partial')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText('Stopped.');
+  });
+
+  describe('retry', () => {
+    it('offers Retry on a failed reply and asks again from the same point once the server is back', async () => {
+      let n = 0;
+      const fetchMock = mockFetch(() => {
+        if (++n === 1) throw new TypeError('Failed to fetch');
+        return sseResponse([delta('back again'), FINISH, USAGE, DONE]);
+      });
+      renderApp();
+      typeAndSend('hello');
+      expect(await screen.findByText('Could not reach the server.')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(await screen.findByText('back again')).toBeTruthy();
+      expect(screen.queryByText('Could not reach the server.')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+      expect(bodyOf(fetchMock, 1).messages).toEqual(bodyOf(fetchMock, 0).messages);
+      // The failed attempt was replaced, not kept next to the answer.
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages).toHaveLength(2);
+    });
+
+    it('fails again with Retry still there when the server is still down', async () => {
+      mockFetch(() => {
+        throw new TypeError('Failed to fetch');
+      });
+      renderApp();
+      typeAndSend('hello');
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(screen.getAllByText('Could not reach the server.')).toHaveLength(1));
+      expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
+    });
+
+    it('is not offered for a reply the user stopped, nor while a reply is running, nor on an older failure', async () => {
+      let n = 0;
+      mockFetch((_u, init) => {
+        n += 1;
+        if (n === 1) throw new TypeError('Failed to fetch');
+        return n === 2 ? sseResponse([delta('ok'), FINISH, DONE]) : heldReply(init);
+      });
+      renderApp();
+      typeAndSend('one');
+      await screen.findByRole('button', { name: 'Retry' });
+      typeAndSend('two');
+      await screen.findByText('ok');
+      // "one" failed earlier, but only the last message of the chat gets the button.
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+      typeAndSend('three');
+      await screen.findByText('partial');
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await screen.findByText('Stopped.');
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    });
   });
 
   describe('model picker', () => {
@@ -236,8 +340,37 @@ describe('App', () => {
       typeAndSend('x');
       expect(await screen.findByText('sure')).toBeTruthy();
       expect(screen.getByText('The chat was not compacted: The model wrote no summary.')).toBeTruthy();
+      // A failed compaction can be retried from its message.
+      expect(within(screen.getByText(/The chat was not compacted/)).getByRole('button', { name: 'Retry' })).toBeTruthy();
       expect(screen.queryByText(/Compacted:/)).toBeNull();
       expect(bodyOf(fetchMock, 1).messages).toHaveLength(9);
+    });
+
+    it('does not compact by itself when Auto compact is off, but the button still does, and the choice is kept', async () => {
+      seed(4);
+      const fetchMock = mockFetch(
+        (_u, init) => reply(init, 'sure'),
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      const auto = screen.getByRole('checkbox', { name: 'Auto compact' }) as HTMLInputElement;
+      expect(auto.checked).toBe(true);
+      expect(document.getElementById('compact-hint')?.textContent).toContain('reaches 80% of the context');
+      fireEvent.click(auto);
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.autoCompact).toBe(false);
+      expect(document.getElementById('compact-hint')?.textContent).toMatch(/^Manual: nothing is summarised/);
+      // Past 80% of the window the automatic mode would summarise first; here the chat is sent whole.
+      typeAndSend('x');
+      expect(await screen.findByText('sure')).toBeTruthy();
+      const chats = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
+      expect(chats).toHaveLength(1);
+      expect(isSummary(chats[0]?.[1])).toBe(false);
+      expect(bodyOf(fetchMock, 0).messages).toHaveLength(9);
+      expect(screen.queryByText(/Compacted:/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Compact chat' }));
+      expect(await screen.findByText('Compacted: 6 earlier messages replaced by a summary')).toBeTruthy();
+      expect(screen.getByText('Compacted: 6 earlier messages replaced by a summary').closest('details')?.textContent).toContain('Made with the Compact button.');
     });
 
     it('stopping while it summarises leaves the chat as it was', async () => {

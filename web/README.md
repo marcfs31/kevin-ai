@@ -70,10 +70,22 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
 - **Token counter.** While a reply streams: tokens read (prompt) and written, with `≈` and a note
   while they are estimates (prompt by characters / 3.5 plus images at the server's size, written
   by streamed chunks). Real `usage` from `stream_options.include_usage` replaces them when it
-  arrives. The final figures stay under each reply and a chat total sums every reply (marked
-  estimated while any reply lacks usage).
-- **Compacting.** When the next request would fill 80 % of the context (the server's own count
-  of the last reply, else an estimate), or with the Compact button, the older turns are
+  arrives. The final figures stay under each reply.
+- **This chat.** Above the composer: the context window as one bar of coloured boxes (prompt that
+  is re-sent, last reply, free) with their numbers and a dashed mark where auto compact starts,
+  then boxes with the chat's totals (tokens read and written, turns, mean tokens per second and,
+  once compacted, how often). Figures are marked `≈` while any is estimated. The names and
+  numbers are always written out, so colour is never the only cue.
+- **The chat list stays open during a reply.** You can start or open another chat while one is
+  being written (it is marked "writing…" and keeps streaming); sending waits until it ends.
+  Deleting waits too, because it resets the server's cache.
+- **Retry.** A reply that failed (server down, stream cut) shows Retry. It drops the failed
+  attempt and asks again from the same point, tool steps already run included, so once the
+  server is back one click carries on. A failed compaction and a failed cache reset have Retry too.
+- **Compacting.** Auto compact (a checkbox above the composer, on by default, saved with the
+  settings) summarises by itself when the next request would fill 80 % of the context (the
+  server's own count of the last reply, else an estimate). With it off, only the Compact chat
+  button does, and a message is sent as it is unless it overflows the window. Either way the older turns are
   summarised by the model into one summary message and the last two turns stay verbatim. The
   summary goes in the system message; the old messages stay saved and on screen, marked
   compacted. Images in the summarised turns become a text note, and a stopped or failed partial

@@ -35,7 +35,7 @@ function LiveStatus({ live }: { live: LiveInfo }) {
     const id = setInterval(() => setNow(performance.now()), 250);
     return () => clearInterval(id);
   }, []);
-  const counter = <TokenLine className="live" labelKey="tokens.reply" count={liveCount(live.usage, live.promptEstimate, live.chunks)} />;
+  const counter = <TokenLine className="live" count={liveCount(live.usage, live.promptEstimate, live.chunks)} />;
   if (live.firstAt === null)
     return (
       <>
@@ -70,12 +70,12 @@ function StatsLine({ stats }: { stats: Stats }) {
           {parts.join(' · ')}
         </p>
       )}
-      {count && <TokenLine className="stats" labelKey="tokens.reply" count={count} />}
+      {count && <TokenLine className="stats" count={count} />}
     </>
   );
 }
 
-function Assistant({ m, live, results }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[] }) {
+function Assistant({ m, live, results, onRetry }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[]; onRetry?: () => void }) {
   const { t } = useI18n();
   return (
     <article className="msg assistant" aria-label={t('message.assistant')}>
@@ -97,6 +97,14 @@ function Assistant({ m, live, results }: { m: AssistantMessage; live: LiveInfo |
       {m.error && (
         <p className="error" role="alert">
           {errorText(t, { status: m.error.status, code: m.error.code, serverMessage: m.error.message })}
+        </p>
+      )}
+      {m.error && onRetry && (
+        <p className="retry">
+          <button type="button" onClick={onRetry}>
+            {t('message.retry')}
+          </button>
+          <span className="hint">{t('message.retryHint')}</span>
         </p>
       )}
       {!live && (
@@ -182,8 +190,9 @@ function Summary({ m }: { m: SummaryMessage }) {
   );
 }
 
-export function MessageView({ m, live = null, results = [] }: { m: Message; live?: LiveInfo | null; results?: ToolMessage[] }) {
-  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} />;
+/** onRetry is passed only for the last message of the chat, when it failed and nothing is running. */
+export function MessageView({ m, live = null, results = [], onRetry }: { m: Message; live?: LiveInfo | null; results?: ToolMessage[]; onRetry?: () => void }) {
+  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} onRetry={onRetry} />;
   if (m.role === 'summary') return <Summary m={m} />;
   // A tool result is shown inside the reply that asked for it.
   if (m.role === 'tool') return null;

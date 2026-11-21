@@ -5,7 +5,10 @@ import type { Conversation } from '../lib/storage';
 interface Props {
   conversations: Conversation[];
   activeId: string | null;
+  /** A reply, tool step or summary is running. Only deleting waits for it: that resets the server's cache. */
   busy: boolean;
+  /** The chat the running reply belongs to; it can be left and come back to. */
+  generatingId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
   onRename: (id: string, title: string) => void;
@@ -13,7 +16,7 @@ interface Props {
   onDeleteAll: () => void;
 }
 
-export function Sidebar({ conversations, activeId, busy, onSelect, onNew, onRename, onDelete, onDeleteAll }: Props) {
+export function Sidebar({ conversations, activeId, busy, generatingId, onSelect, onNew, onRename, onDelete, onDeleteAll }: Props) {
   const { t, tp, date } = useI18n();
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -39,7 +42,7 @@ export function Sidebar({ conversations, activeId, busy, onSelect, onNew, onRena
 
   return (
     <nav className="sidebar" aria-label={t('sidebar.label')}>
-      <button type="button" className="primary" onClick={onNew} disabled={busy}>
+      <button type="button" className="primary" onClick={onNew}>
         {t('sidebar.new')}
       </button>
       {sorted.length === 0 ? (
@@ -68,9 +71,9 @@ export function Sidebar({ conversations, activeId, busy, onSelect, onNew, onRena
                       className="conv"
                       aria-current={c.id === activeId ? 'page' : undefined}
                       onClick={() => onSelect(c.id)}
-                      disabled={busy}
                     >
                       <span className="conv-title">{title}</span>
+                      {c.id === generatingId && <span className="conv-live">{t('sidebar.generating')}</span>}
                       <span className="conv-date">{date(c.updatedAt)}</span>
                     </button>
                     <div className="conv-actions">

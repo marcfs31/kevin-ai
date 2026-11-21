@@ -529,3 +529,29 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .trace-name { font-weight: 600; margin: 0.2rem 0; }
 .trace pre { margin: 0.2rem 0 0.5rem; padding: 0.4rem 0.6rem; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 6px; }
 .check { display: flex; align-items: center; gap: 0.5rem; }
+
+/* This chat: the context window as one bar of coloured boxes, and the totals as boxes under it. */
+.chat-stats { display: flex; flex-direction: column; gap: 0.35rem; }
+.chat-stats, .chat-tools { margin-inline: auto; inline-size: min(calc(100% - 2.5rem), var(--measure)); }
+.ctx-wrap { position: relative; }
+.ctx-bar, .chat-boxes { display: flex; flex-wrap: wrap; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ctx-bar { border-radius: 6px; overflow: hidden; }
+.ctx-bar.near { outline: 2px solid var(--warn); outline-offset: 1px; }
+.seg, .box { display: flex; flex-direction: column; justify-content: center; min-inline-size: max-content; padding: 0.3rem 0.6rem; line-height: 1.2; }
+.seg { flex-basis: 0; }
+.box { border-radius: 6px; flex: 0 0 auto; }
+.box-label { font-size: 0.6875rem; letter-spacing: 0.02em; }
+.box-value { font-size: 0.9375rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.seg-prompt, .box-prompt { background: var(--accent); color: var(--accent-text); }
+.seg-reply, .box-reply { background: var(--ok); color: var(--paper); }
+.seg-free { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.box-plain { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.ctx-mark { position: absolute; inset-block: -3px; inline-size: 0; border-inline-start: 2px dashed var(--text); pointer-events: none; }
+.ctx-caption { margin: 0; }
+.conv-live { display: block; font-size: 0.75rem; color: var(--muted); font-style: italic; }
+.retry { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0.4rem 0 0; }
+.banner button { margin-inline-start: 0.5rem; }
+@media (prefers-reduced-motion: no-preference) {
+  .seg { transition: flex-grow 0.3s ease; }
+}
+.main > .note { margin-inline: auto; inline-size: min(calc(100% - 2.5rem), var(--measure)); }
