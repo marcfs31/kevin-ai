@@ -5,14 +5,14 @@ export const SERVE_MODEL_OPTIONS: { id: ServeModelId; label: string }[] = [
   { id: 'qwen', label: 'Qwen3.5-4B' },
   { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored' },
   { id: 'gemma', label: 'Gemma 4 E4B' },
-  { id: 'whiterabbitneo', label: 'WhiteRabbitNeo 2.5 Coder 7B' },
+  { id: 'whiterabbitneo', label: 'WhiteRabbitNeo 2.5 7B' },
 ];
 
 export const SERVE_MODEL_LABEL: Record<ServeModelId, string> = {
   qwen: 'Qwen3.5-4B',
   'qwen-uncensored': 'Qwen3.5-4B Uncensored',
   gemma: 'Gemma 4 E4B',
-  whiterabbitneo: 'WhiteRabbitNeo 2.5 Coder 7B',
+  whiterabbitneo: 'WhiteRabbitNeo 2.5 7B',
 };
 
 /** Upper bound used when /v1/models has not reported context_length for this target. */
@@ -20,7 +20,8 @@ export const SERVE_MODEL_MAX_CTX: Record<ServeModelId, number> = {
   qwen: 131072,
   'qwen-uncensored': 131072,
   gemma: 131072,
-  whiterabbitneo: 32768,
+  // llama-server allocates the whole window up front; 8 GB of Q8_0 weights leave room for 16k.
+  whiterabbitneo: 16384,
 };
 
 const CTX_LADDER = [4096, 8192, 16384, 32768, 65536, 131072] as const;

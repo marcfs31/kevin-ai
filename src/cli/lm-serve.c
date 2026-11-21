@@ -10,10 +10,24 @@
  *   GET  /health               {"status":"ok"} once the model is loaded (no key needed)
  *   GET  /v1/models            the one model, as id --name (default: DIR's last component)
  *   POST /v1/chat/completions  messages, stream, max_tokens / max_completion_tokens,
- *                              temperature, top_p, top_k, seed, stream_options.include_usage
+ *                              temperature, top_p, top_k, seed, stream_options.include_usage,
+ *                              tools, tool_choice ("auto" or "none")
  *
- * Text and image chat: tools, stop strings, n > 1, logprobs, penalties and JSON modes are
- * refused with 400 rather than ignored. Message content may be a string or an array of
+ * Text, image and tool chat: stop strings, n > 1, logprobs, penalties, JSON modes and the
+ * legacy functions / function_call are refused with 400 rather than ignored.
+ *
+ * Tools (OpenAI shape). "tools" is rendered where the model's own chat template puts it
+ * (Qwen3.5 and Gemma 4); a call the model writes comes back as message.tool_calls
+ * (id, type "function", function.name, function.arguments as a JSON string) with
+ * finish_reason "tool_calls", in a stream as one delta.tool_calls entry per call, whole,
+ * when the call is complete. Send the results back as {"role":"tool","tool_call_id":...,
+ * "content":...} messages after the assistant message that holds tool_calls. A tool
+ * definition that is not well formed is 400 invalid_tools; a call the model wrote that does
+ * not parse is returned as plain content, never dropped. tool_choice "none" keeps the tools
+ * out of the prompt; "required" and a named function are refused. stream_options
+ * .include_usage adds a last chunk with empty choices and usage (prompt_tokens,
+ * completion_tokens, total_tokens, prompt_tokens_details.cached_tokens).
+ * Message content may be a string or an array of
  * {"type":"text","text":...} and {"type":"image_url","image_url":{"url":"data:image/..."}}
  * parts (PNG/JPEG data URLs only; at most 8 images). The answer is "content"; a think block,
  * when --think is on, comes back as "reasoning_content". Without max_tokens a reply runs
@@ -56,6 +70,7 @@
 #include "chat/lm_chat.h"
 #include "chat/lm_profile.h"
 #include "chat/lm_template.h"
+#include "chat/lm_toolfmt.h"
 #include "io/lm_image.h"
 #include "io/lm_sha256.h"
 #include "json.h"
@@ -67,7 +82,7 @@
 #define MSG_NOSIGNAL 0 /* macOS: SIGPIPE is ignored process-wide instead */
 #endif
 
-enum { MAX_HEAD = 16 * 1024, MAX_BODY = 24 * 1024 * 1024, MAX_IMAGES = 8 };
+enum { MAX_HEAD = 16 * 1024, MAX_BODY = 24 * 1024 * 1024, MAX_IMAGES = 8, MAX_TOOLS = 32, MAX_TOOL_CALLS = 32 };
 
 static volatile sig_atomic_t g_stop = 0;
 static long g_log_max = 1 << 20; /* stderr, when it is a file, is cut back to this */
@@ -438,6 +453,31 @@ static void sink(void *user, LmOutKind kind, const char *s, size_t n)
     sse_send(r, &b);
 }
 
+static void call_id(const Reply *r, int index, char *out, size_t n)
+{
+    snprintf(out, n, "call_%ld_%lu_%d", r->created, r->srv->requests, index);
+}
+
+/* A tool call the model finished writing. A stream carries it whole, as one delta. */
+static void on_call(void *user, int index, const LmToolCall *call)
+{
+    Reply *r = (Reply *)user;
+    if (!r->stream || r->conn->broken) return;
+    sse_start(r);
+    char id[64];
+    call_id(r, index, id, sizeof id);
+    Buf b = { 0 };
+    chunk_head(&b, r);
+    buf_fmt(&b, ",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":%d,\"id\":", index);
+    buf_jstr(&b, id);
+    buf_str(&b, ",\"type\":\"function\",\"function\":{\"name\":");
+    buf_jstr(&b, call->name);
+    buf_str(&b, ",\"arguments\":");
+    buf_jstr(&b, call->arguments);
+    buf_str(&b, "}}]},\"finish_reason\":null}]}");
+    sse_send(r, &b);
+}
+
 static Reply *g_reply; /* the reply in progress, for cancellation */
 static int cancelled(void *user)
 {
@@ -454,6 +494,10 @@ typedef struct {
     int n_parts;
     int n_images;
     char *err_code;      /* malloc'd OpenAI-style code, or NULL */
+    LmToolCall *calls;   /* assistant: the tool_calls it carries, arguments canonical */
+    char **call_ids;     /* their ids ("" when the client sent none) */
+    int n_calls;
+    char *tool_name;     /* tool: the function the result belongs to */
 } ParsedMsg;
 
 static void parsed_free(ParsedMsg *p)
@@ -466,6 +510,10 @@ static void parsed_free(ParsedMsg *p)
         }
         free(p->parts);
     }
+    for (int i = 0; i < p->n_calls; i++) { lm_toolcall_free(&p->calls[i]); free(p->call_ids[i]); }
+    free(p->calls);
+    free(p->call_ids);
+    free(p->tool_name);
     free(p->fingerprint);
     free(p->err_code);
     memset(p, 0, sizeof *p);
@@ -655,11 +703,10 @@ static int is_int(const jval *v, double lo, double hi)
 /* a parameter this server cannot honour must be absent or neutral: refuse, never ignore */
 static const char *unsupported(jval *req)
 {
-    static const char *const keys[] = { "tools", "functions", "tool_choice", "function_call", "logit_bias", "stop" };
+    static const char *const keys[] = { "functions", "function_call", "logit_bias", "stop" };
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) {
         jval *v = json_get(req, keys[i]);
         if (!v || v->t == J_NULL || ((v->t == J_ARR || v->t == J_OBJ) && v->len == 0)) continue;
-        if (!strcmp(keys[i], "tool_choice") && v->t == J_STR && !strcmp(v->str, "none")) continue;
         return keys[i];
     }
     jval *v;
@@ -672,6 +719,104 @@ static const char *unsupported(jval *req)
         if (!t || t->t != J_STR || strcmp(t->str, "text")) return "response_format";
     }
     return NULL;
+}
+
+/* a function name the two chat formats can carry: no markup or separators */
+static int tool_name_ok(const char *n)
+{
+    size_t len = strlen(n);
+    if (len == 0 || len > 64) return 0;
+    for (; *n; n++) {
+        const unsigned char c = (unsigned char)*n;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.'))
+            return 0;
+    }
+    return 1;
+}
+
+/* the request's "tools": 0, or -1 with the reason in err (400 invalid_tools) */
+static int check_tools(const jval *tools, char *err, size_t errlen)
+{
+    if (tools->t != J_ARR) { snprintf(err, errlen, "tools must be an array"); return -1; }
+    if (tools->len > MAX_TOOLS) { snprintf(err, errlen, "at most %d tools per request", MAX_TOOLS); return -1; }
+    for (int i = 0; i < tools->len; i++) {
+        jval *t = tools->kids[i], *ty = json_get(t, "type"), *fn = json_get(t, "function");
+        if (!t || t->t != J_OBJ || !ty || ty->t != J_STR || strcmp(ty->str, "function") || !fn || fn->t != J_OBJ) {
+            snprintf(err, errlen, "tools[%d] must be {\"type\":\"function\",\"function\":{...}}", i);
+            return -1;
+        }
+        jval *nm = json_get(fn, "name"), *ds = json_get(fn, "description"), *pr = json_get(fn, "parameters");
+        if (!nm || nm->t != J_STR || !tool_name_ok(nm->str)) {
+            snprintf(err, errlen, "tools[%d].function.name must be 1-64 characters of letters, digits, _ - .", i);
+            return -1;
+        }
+        if (ds && ds->t != J_NULL && ds->t != J_STR) { snprintf(err, errlen, "tools[%d].function.description must be a string", i); return -1; }
+        if (pr && pr->t != J_NULL) {
+            jval *pt = json_get(pr, "type"), *pp = json_get(pr, "properties"), *rq = json_get(pr, "required");
+            if (pr->t != J_OBJ || (pt && (pt->t != J_STR || strcmp(pt->str, "object"))) ||
+                (pp && pp->t != J_OBJ) || (rq && rq->t != J_ARR)) {
+                snprintf(err, errlen, "tools[%d].function.parameters must be a JSON schema object of type \"object\"", i);
+                return -1;
+            }
+            for (int k = 0; rq && k < rq->len; k++)
+                if (rq->kids[k]->t != J_STR) { snprintf(err, errlen, "tools[%d].function.parameters.required must list strings", i); return -1; }
+            for (int k = 0; pp && k < pp->len; k++)
+                if (pp->kids[k]->t != J_OBJ) { snprintf(err, errlen, "tools[%d].function.parameters.properties.%.64s must be an object", i, pp->keys[k]); return -1; }
+        }
+    }
+    return 0;
+}
+
+/* An assistant message's "tool_calls" into p. 0, or -1 with the reason in err
+ * (400 invalid_tool_call). Arguments are canonical compact JSON, so a client that
+ * reformats them still matches the call the chat made. */
+static int parse_tool_calls(const jval *tc, int msg_i, ParsedMsg *p, char *err, size_t errlen)
+{
+    if (!tc || tc->t == J_NULL) return 0;
+    if (tc->t != J_ARR || tc->len > MAX_TOOL_CALLS) {
+        snprintf(err, errlen, "messages[%d].tool_calls must be an array of at most %d calls", msg_i, MAX_TOOL_CALLS);
+        return -1;
+    }
+    if (tc->len == 0) return 0;
+    p->calls = (LmToolCall *)calloc((size_t)tc->len, sizeof *p->calls);
+    p->call_ids = (char **)calloc((size_t)tc->len, sizeof *p->call_ids);
+    if (!p->calls || !p->call_ids) { snprintf(err, errlen, "out of memory"); return -1; }
+    for (int k = 0; k < tc->len; k++) {
+        jval *c = tc->kids[k], *fn = json_get(c, "function"), *id = json_get(c, "id");
+        jval *nm = fn ? json_get(fn, "name") : NULL, *ar = fn ? json_get(fn, "arguments") : NULL;
+        if (!c || c->t != J_OBJ || !fn || fn->t != J_OBJ || !nm || nm->t != J_STR || !tool_name_ok(nm->str)) {
+            snprintf(err, errlen, "messages[%d].tool_calls[%d] must be {\"id\":...,\"type\":\"function\",\"function\":{\"name\":...,\"arguments\":\"{...}\"}}", msg_i, k);
+            return -1;
+        }
+        jval *args = NULL;
+        if (!ar || ar->t == J_NULL) args = NULL;
+        else if (ar->t == J_STR) {
+            const char *t = ar->str;
+            while (*t == ' ' || *t == '\t' || *t == '\n' || *t == '\r') t++;
+            if (*t) {
+                args = json_parse(ar->str, NULL);
+                if (!args || args->t != J_OBJ) {
+                    json_free_tree(args);
+                    snprintf(err, errlen, "messages[%d].tool_calls[%d].function.arguments is not a JSON object", msg_i, k);
+                    return -1;
+                }
+            }
+        } else if (ar->t != J_OBJ) {
+            snprintf(err, errlen, "messages[%d].tool_calls[%d].function.arguments must be a JSON object string", msg_i, k);
+            return -1;
+        }
+        LmSb d = { 0 };
+        if (args) lm_json_dump(&d, args, 0);
+        else if (ar && ar->t == J_OBJ) lm_json_dump(&d, ar, 0);
+        else lm_sb_str(&d, "{}");
+        json_free_tree(args);
+        p->calls[k].name = strdup(nm->str);
+        p->calls[k].arguments = d.oom ? NULL : d.s;
+        p->call_ids[k] = strdup(id && id->t == J_STR ? id->str : "");
+        p->n_calls = k + 1;
+        if (!p->calls[k].name || !p->calls[k].arguments || !p->call_ids[k]) { snprintf(err, errlen, "out of memory"); return -1; }
+    }
+    return 0;
 }
 
 typedef struct { int status, n_prompt, n_cached, n_prefill, n_gen, reprefill; double prefill_s, decode_s; } Log;
@@ -707,12 +852,42 @@ static void chat_completions(Server *s, Conn *c, Log *log)
         if (!strcmp(role->str, "system") || !strcmp(role->str, "developer")) msgs[i].role = LM_ROLE_SYSTEM;
         else if (!strcmp(role->str, "user")) msgs[i].role = LM_ROLE_USER;
         else if (!strcmp(role->str, "assistant")) msgs[i].role = LM_ROLE_ASSISTANT;
+        else if (!strcmp(role->str, "tool")) msgs[i].role = LM_ROLE_TOOL;
         else { respond_error(c, log->status = 400, NULL, "messages[%d]: role \"%.64s\" is not supported", i, role->str); goto out; }
         const int allow_img = msgs[i].role == LM_ROLE_USER;
         if (parse_msg_content(s, json_get(m, "content"), i, allow_img, &parsed[i], err, sizeof err)) {
             respond_error(c, log->status = 400, parsed[i].err_code, "%s", err);
             goto out;
         }
+        if (msgs[i].role == LM_ROLE_ASSISTANT && parse_tool_calls(json_get(m, "tool_calls"), i, &parsed[i], err, sizeof err)) {
+            respond_error(c, log->status = 400, "invalid_tool_call", "%s", err);
+            goto out;
+        }
+        if (msgs[i].role == LM_ROLE_TOOL) {
+            /* a result belongs to a call the assistant message before it made; its name is what
+             * Gemma's format carries, so the id must resolve */
+            const ParsedMsg *pv = i > 0 ? &parsed[i - 1] : NULL;
+            const int after_calls = i > 0 && ((msgs[i - 1].role == LM_ROLE_ASSISTANT && pv->n_calls > 0) || msgs[i - 1].role == LM_ROLE_TOOL);
+            jval *tid = json_get(m, "tool_call_id"), *tn = json_get(m, "name");
+            const char *name = NULL;
+            for (int j = i - 1; j >= 0 && !name && tid && tid->t == J_STR; j--) {
+                if (msgs[j].role == LM_ROLE_USER) break;
+                for (int k = 0; k < parsed[j].n_calls; k++)
+                    if (parsed[j].call_ids[k][0] && !strcmp(parsed[j].call_ids[k], tid->str)) name = parsed[j].calls[k].name;
+            }
+            if (!name && tn && tn->t == J_STR && tool_name_ok(tn->str)) name = tn->str;
+            if (!after_calls || !name) {
+                respond_error(c, log->status = 400, "invalid_tool_message",
+                              !after_calls ? "messages[%d]: a tool message must follow the assistant message whose tool_calls it answers"
+                                           : "messages[%d]: tool_call_id does not match a tool call of the assistant message before it",
+                              i);
+                goto out;
+            }
+            if (!(parsed[i].tool_name = strdup(name))) { respond_error(c, log->status = 500, NULL, "out of memory"); goto out; }
+            msgs[i].tool_name = parsed[i].tool_name;
+        }
+        msgs[i].calls = parsed[i].calls;
+        msgs[i].n_calls = parsed[i].n_calls;
         total_images += parsed[i].n_images;
         if (total_images > MAX_IMAGES) {
             respond_error(c, log->status = 400, "too_many_images", "at most %d images per request", MAX_IMAGES);
@@ -724,7 +899,26 @@ static void chat_completions(Server *s, Conn *c, Log *log)
             msgs[i].n_parts = parsed[i].n_parts;
         }
     }
-    if (msgs[nm - 1].role != LM_ROLE_USER) { respond_error(c, log->status = 400, NULL, "the last message must be from the user"); goto out; }
+    if (msgs[nm - 1].role != LM_ROLE_USER && msgs[nm - 1].role != LM_ROLE_TOOL) {
+        respond_error(c, log->status = 400, NULL, "the last message must be from the user or a tool");
+        goto out;
+    }
+    const int ends_with_tool = msgs[nm - 1].role == LM_ROLE_TOOL;
+
+    /* tools: validated whatever tool_choice says; "none" keeps them out of the prompt */
+    const jval *tools = NULL;
+    if ((v = json_get(req, "tools")) && v->t != J_NULL && !(v->t == J_ARR && v->len == 0)) {
+        if (check_tools(v, err, sizeof err)) { respond_error(c, log->status = 400, "invalid_tools", "%s", err); goto out; }
+        tools = v;
+    }
+    if ((v = json_get(req, "tool_choice")) && v->t != J_NULL) {
+        if (v->t != J_STR || (strcmp(v->str, "auto") && strcmp(v->str, "none"))) {
+            respond_error(c, log->status = 400, "unsupported_parameter", "tool_choice must be \"auto\" or \"none\" (\"required\" and a named function are not supported by this server)");
+            goto out;
+        }
+        if (!strcmp(v->str, "none")) tools = NULL;
+    }
+    if (ends_with_tool && parsed[nm - 1].n_images) { respond_error(c, log->status = 400, NULL, "a tool message cannot hold images"); goto out; }
 
     int max_tokens = s->max_tokens;
     if (!(v = json_get(req, "max_completion_tokens")) || v->t == J_NULL) v = json_get(req, "max_tokens");
@@ -759,7 +953,7 @@ static void chat_completions(Server *s, Conn *c, Log *log)
     if ((v = json_get(req, "stream_options")) && v->t == J_OBJ && (v = json_get(v, "include_usage")) && v->t == J_BOOL)
         usage_in_stream = v->boolean;
 
-    if (lm_chat_sync(s->chat, msgs, nm - 1, err, sizeof err)) { respond_error(c, log->status = 400, NULL, "%s", err); goto out; }
+    if (lm_chat_sync(s->chat, msgs, ends_with_tool ? nm : nm - 1, err, sizeof err)) { respond_error(c, log->status = 400, NULL, "%s", err); goto out; }
     lm_chat_set_sampling(s->chat, temperature, top_p, top_k, seed);
 
     Reply r;
@@ -769,14 +963,18 @@ static void chat_completions(Server *s, Conn *c, Log *log)
     r.stream = stream;
     r.created = (long)time(NULL);
     snprintf(r.id, sizeof r.id, "chatcmpl-%ld-%lu", r.created, s->requests);
-    LmTurnOpts to = { max_tokens, sink, &r, cancelled, NULL };
+    LmTurnOpts to = { max_tokens, sink, &r, cancelled, NULL, on_call };
     LmTurn t;
     g_reply = &r;
+    lm_chat_set_tools(s->chat, tools);
     int rc;
-    if (parsed[nm - 1].n_parts > 0)
+    if (ends_with_tool)
+        rc = lm_chat_continue(s->chat, &to, &t, err, sizeof err);
+    else if (parsed[nm - 1].n_parts > 0)
         rc = lm_chat_turn_parts(s->chat, parsed[nm - 1].parts, parsed[nm - 1].n_parts, &to, &t, err, sizeof err);
     else
         rc = lm_chat_turn(s->chat, msgs[nm - 1].content, &to, &t, err, sizeof err);
+    lm_chat_set_tools(s->chat, NULL);
     g_reply = NULL;
     log->n_prompt = t.n_prompt;
     log->n_prefill = t.n_prefill;
@@ -803,6 +1001,7 @@ static void chat_completions(Server *s, Conn *c, Log *log)
     }
     if (fail && !r.started) { respond_error(c, log->status = fail_status, code, "%s", fail); goto out; }
     log->status = fail ? fail_status : 200;
+    const char *finish = t.stop == LM_STOP_EOS ? (t.n_calls > 0 ? "tool_calls" : "stop") : "length";
     if (stream) {
         sse_start(&r);
         Buf b = { 0 };
@@ -811,8 +1010,7 @@ static void chat_completions(Server *s, Conn *c, Log *log)
             error_json(&b, "server_error", code, fail);
         } else {
             chunk_head(&b, &r);
-            buf_fmt(&b, ",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"%s\"}]}",
-                    t.stop == LM_STOP_EOS ? "stop" : "length");
+            buf_fmt(&b, ",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"%s\"}]}", finish);
         }
         sse_send(&r, &b);
         if (usage_in_stream && !fail) {
@@ -831,9 +1029,26 @@ static void chat_completions(Server *s, Conn *c, Log *log)
         buf_fmt(&b, ",\"object\":\"chat.completion\",\"created\":%ld,\"model\":", r.created);
         buf_jstr(&b, s->name);
         buf_str(&b, ",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":");
-        buf_jstr(&b, t.answer ? t.answer : "");
+        if (t.n_calls > 0 && !(t.answer && t.answer[0])) buf_str(&b, "null");
+        else buf_jstr(&b, t.answer ? t.answer : "");
         if (t.reasoning && t.reasoning[0]) { buf_str(&b, ",\"reasoning_content\":"); buf_jstr(&b, t.reasoning); }
-        buf_fmt(&b, "},\"finish_reason\":\"%s\"}],", t.stop == LM_STOP_EOS ? "stop" : "length");
+        if (t.n_calls > 0) {
+            buf_str(&b, ",\"tool_calls\":[");
+            for (int k = 0; k < t.n_calls; k++) {
+                char id[64];
+                call_id(&r, k, id, sizeof id);
+                if (k) buf_str(&b, ",");
+                buf_str(&b, "{\"id\":");
+                buf_jstr(&b, id);
+                buf_str(&b, ",\"type\":\"function\",\"function\":{\"name\":");
+                buf_jstr(&b, t.calls[k].name);
+                buf_str(&b, ",\"arguments\":");
+                buf_jstr(&b, t.calls[k].arguments);
+                buf_str(&b, "}}");
+            }
+            buf_str(&b, "]");
+        }
+        buf_fmt(&b, "},\"finish_reason\":\"%s\"}],", finish);
         usage_json(&b, &t);
         buf_str(&b, "}");
         if (b.oom) respond_error(c, log->status = 500, NULL, "out of memory");
@@ -863,7 +1078,7 @@ static void handle(Server *s, Conn *c, int timeout_s)
             Buf b = { 0 };
             buf_str(&b, "{\"status\":\"ok\",\"model\":");
             buf_jstr(&b, s->name);
-            buf_fmt(&b, ",\"context_length\":%d,\"capabilities\":{\"vision\":{\"status\":\"%s\",\"max_pixels\":%d",
+            buf_fmt(&b, ",\"context_length\":%d,\"capabilities\":{\"tools\":{\"status\":\"ok\"},\"vision\":{\"status\":\"%s\",\"max_pixels\":%d",
                     s->n_ctx, s->vision ? "ok" : "unavailable", s->image_max_pixels);
             if (s->vision && lm_vision_info(s->vision)->family == LM_VISION_QWEN)
                 buf_str(&b, ",\"pixels_per_token\":1024");
@@ -885,7 +1100,7 @@ static void handle(Server *s, Conn *c, int timeout_s)
             buf_str(&b, "{\"object\":\"list\",\"data\":[{\"id\":");
             buf_jstr(&b, s->name);
             buf_fmt(&b, ",\"object\":\"model\",\"created\":0,\"owned_by\":\"local\",\"context_length\":%d,"
-                        "\"capabilities\":{\"vision\":{\"status\":\"%s\",\"max_pixels\":%d",
+                        "\"capabilities\":{\"tools\":{\"status\":\"ok\"},\"vision\":{\"status\":\"%s\",\"max_pixels\":%d",
                     s->n_ctx, s->vision ? "ok" : "unavailable", s->image_max_pixels);
             if (s->vision && lm_vision_info(s->vision)->family == LM_VISION_QWEN)
                 buf_str(&b, ",\"pixels_per_token\":1024");
@@ -1077,7 +1292,7 @@ int main(int argc, char **argv)
     if (!tok) { fprintf(stderr, "lm-serve: %s\n", err); return 1; }
     LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-serve: %s\n", err); lm_tok_close(tok); return 1; }
-    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0 };
+    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0, 1 };
     LmModel *m = lm_open(model, &lo, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-serve: %s\n", err); lm_template_free(tpl); lm_tok_close(tok); return 1; }
 

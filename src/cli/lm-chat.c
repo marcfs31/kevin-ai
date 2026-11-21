@@ -184,7 +184,7 @@ static int run_turn(Session *s, const char *text)
 {
     char err[512] = "";
     LmTurn t;
-    LmTurnOpts to = { s->max_tokens, sink, &s->out, cancelled, NULL };
+    LmTurnOpts to = { s->max_tokens, sink, &s->out, cancelled, NULL, NULL };
     s->out.in_reasoning = 0;
     s->out.wrote_answer = 0;
     g_cancel = 0;
@@ -312,7 +312,7 @@ int main(int argc, char **argv)
     LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-chat: %s\n", err); lm_tok_close(tok); return 1; }
 
-    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0 };
+    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0, n_images > 0 };
     LmModel *m = lm_open(model, &lo, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-chat: %s\n", err); lm_template_free(tpl); lm_tok_close(tok); return 1; }
 

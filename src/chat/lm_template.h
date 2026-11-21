@@ -8,8 +8,11 @@
  *   parser  a streaming parser for the generated ids: reasoning vs answer, stop ids, and
  *           unsupported constructs surfaced (never silently dropped).
  *
- * Tool definitions and tool-call / tool-response messages stay out of scope. Images are
- * optional: lm_template_set_vision installs start/pad/end ids so a user message's image
+ * Tools: LmRenderOpts.tools (the request's OpenAI "tools" array) is rendered where the
+ * model's own template puts it (Qwen: a system block; Gemma: <|tool> declarations in the
+ * system turn), an assistant message's calls and the tool messages after it are rendered as
+ * the template does, and parse_call turns a generated call back into a name and arguments.
+ * Images are optional: lm_template_set_vision installs start/pad/end ids so a user message's image
  * parts become start + N pads + end in the rendered prompt (system messages may not
  * contain images). */
 #ifndef LM_TEMPLATE_H
@@ -17,6 +20,7 @@
 
 #include <stddef.h>
 
+#include "json.h"
 #include "tokenizer/lm_tok.h"
 
 /* ---- growable id vector ------------------------------------------------------- */
@@ -26,7 +30,16 @@ int  lm_ids_append(LmIds *v, const int *ids, int n);    /* 0, or -1 */
 void lm_ids_free(LmIds *v);                             /* leaves an empty vector */
 
 /* ---- messages ---------------------------------------------------------------- */
-typedef enum { LM_ROLE_SYSTEM, LM_ROLE_USER, LM_ROLE_ASSISTANT } LmRole;
+typedef enum { LM_ROLE_SYSTEM, LM_ROLE_USER, LM_ROLE_ASSISTANT, LM_ROLE_TOOL } LmRole;
+
+/* One function call of an assistant message. arguments is a JSON object text. */
+typedef struct {
+    const char *name;
+    const char *arguments;
+} LmToolCall;
+
+/* Free the strings of a call made by parse_call (or by the chat). */
+void lm_toolcall_free(LmToolCall *c);
 
 enum { LM_PART_TEXT = 0, LM_PART_IMAGE = 1 };
 
@@ -58,6 +71,11 @@ typedef struct {
     /* Optional multimodal content (user messages). NULL / 0 = text-only via content. */
     const LmMsgPart *parts;
     int n_parts;
+    /* Assistant: the function calls it made (content is the text around them). Tool: the
+     * result of one call, as content, and the name of the function that was called. */
+    const LmToolCall *calls;
+    int n_calls;
+    const char *tool_name;
 } LmMsg;
 
 /* Where an image block sits in the rendered id stream: ids[id_start .. id_start+n_ids)
@@ -82,6 +100,9 @@ typedef struct {
     /* Optional: render appends one LmImgSpan per image part (realloc). Caller frees *spans. */
     LmImgSpan **spans;
     int *n_spans;
+    /* The request's tools: a JSON array of {"type":"function","function":{name,description,
+     * parameters}}, or NULL. Borrowed for the call. */
+    const jval *tools;
 } LmRenderOpts;
 
 /* ---- streaming parser ---------------------------------------------------------- */
@@ -90,7 +111,10 @@ typedef enum { LM_OUT_REASONING, LM_OUT_ANSWER, LM_OUT_TOOLCALL } LmOutKind;
 /* Receives complete UTF-8 text, never a split character. Leading and trailing whitespace
  * of each reasoning / answer stream is withheld (the template trims both), so what a
  * sink sees concatenates to the trimmed text. For LM_OUT_TOOLCALL the text is the notice
- * "tool calls are not supported", sent once per call; the call's body is not forwarded. */
+ * "tool calls are not supported", sent once per call, and the call's body is not forwarded;
+ * with LmParser.collect_calls set it is instead the body of each complete call (or of one cut
+ * short at the end of the stream), for LmTemplate.parse_call. In a Gemma body the <|"|>
+ * delimiter is the byte '\x01'. */
 typedef void (*LmSink)(void *user, LmOutKind kind, const char *s, size_t n);
 
 enum {
@@ -108,6 +132,10 @@ struct LmParser {
     /* Valid at any time. */
     int thinking_open; /* inside a think block that has not been closed */
     int tool_calls;    /* number of tool calls attempted */
+    /* Set by the caller before the first feed. 0: the first complete tool call ends the
+     * output (LM_PARSE_STOP_AFTER) and only a notice is reported. 1: every call is reported
+     * whole and generation goes on until a stop id, so a reply can hold several calls. */
+    int collect_calls;
 };
 
 /* ---- the template ------------------------------------------------------------ */
@@ -124,6 +152,11 @@ struct LmTemplate {
      * are reasoning. */
     LmParser *(*parser_new)(const LmTemplate *t, int thinking);
     int  (*is_stop)(const LmTemplate *t, int id);
+    /* The body of a generated tool call (see LmSink) -> name + arguments (a compact JSON
+     * object), both malloc'd (lm_toolcall_free). 0, or -1 with a message in err when the
+     * body is not a well-formed call. tools gives the declared parameter types (may be NULL). */
+    int  (*parse_call)(const LmTemplate *t, const char *raw, const jval *tools, LmToolCall *out,
+                       char *err, size_t errlen);
     void (*destroy)(LmTemplate *t);
     void *impl;
 };

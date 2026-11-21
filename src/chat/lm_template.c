@@ -13,6 +13,8 @@
  * segments Hugging Face would produce for a well-formed conversation. */
 #include "chat/lm_template.h"
 
+#include "chat/lm_toolfmt.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,7 +110,7 @@ static const char *sl_rfind(Sl s, const char *needle)
 
 typedef struct {
     const LmTok *tok;
-    int im_start, im_end, think, think_end, tool_call, tool_call_end;
+    int im_start, im_end, think, think_end, tool_call, tool_call_end, tool_resp, tool_resp_end;
     int vis_start, vis_pad, vis_end; /* -1 = vision unset */
     int stop[MAX_STOP];
     int n_stop;
@@ -154,7 +156,23 @@ static void b_text_n(Bld *b, const char *s, size_t n)
 }
 
 static void b_text(Bld *b, const char *s) { b_text_n(b, s, strlen(s)); }
+static void b_special(Bld *b, int id);
 static void b_sl(Bld *b, Sl s) { b_text_n(b, s.p, s.n); }
+
+/* Fixed template text that names the model's own markers: each literal <tool_call> and
+ * </tool_call> becomes its id, as the Hugging Face tokenizer does with the jinja's output. */
+static void b_marked_calls(Bld *b, int open_id, int close_id, const char *s)
+{
+    for (;;) {
+        const char *o = strstr(s, "<tool_call>"), *c = strstr(s, "</tool_call>");
+        const char *at = !o ? c : !c ? o : (o < c ? o : c);
+        if (!at) break;
+        b_text_n(b, s, (size_t)(at - s));
+        if (at == o) { b_special(b, open_id); s = at + 11; }
+        else { b_special(b, close_id); s = at + 12; }
+    }
+    b_text(b, s);
+}
 
 static void b_flush(Bld *b)
 {
@@ -264,10 +282,40 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
 
     Bld b = { q->tok, out, NULL, 0, 0, 0 };
     int img_i = 0;
+    const int has_tools = opts && opts->tools && opts->tools->t == J_ARR && opts->tools->len > 0;
+    if (has_tools) {
+        b_special(&b, q->im_start);
+        b_text(&b, "system\n# Tools\n\nYou have access to the following functions:\n\n<tools>");
+        for (int k = 0; k < opts->tools->len; k++) {
+            LmSb d = { 0 };
+            lm_json_dump(&d, opts->tools->kids[k], 1);
+            b_text(&b, "\n");
+            if (d.oom) b.oom = 1; else b_text_n(&b, d.s, d.n);
+            lm_sb_free(&d);
+        }
+        b_text(&b, "\n</tools>");
+        b_marked_calls(&b, q->tool_call, q->tool_call_end,
+                       "\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n"
+                       "<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n"
+                       "</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\n"
+                       "that can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\n"
+                       "Reminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> "
+                       "block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be "
+                       "specified\n- You may provide optional reasoning for your function call in natural language BEFORE "
+                       "the function call, but NOT after\n- If there is no function call available, answer the question "
+                       "like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>");
+        if (msgs[0].role == LM_ROLE_SYSTEM) {
+            Sl sc = sl_trim(sl_of(msgs[0].content));
+            if (sc.n) { b_text(&b, "\n\n"); b_sl(&b, sc); }
+        }
+        b_special(&b, q->im_end);
+        b_text(&b, "\n");
+    }
     for (int i = 0; i < n; i++) {
         const LmMsg *m = &msgs[i];
         Sl content = sl_trim(sl_of(m->content));
         if (m->role == LM_ROLE_SYSTEM) {
+            if (has_tools) continue;
             b_special(&b, q->im_start);
             b_text(&b, "system\n");
             b_sl(&b, content);
@@ -282,7 +330,7 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
             }
             b_special(&b, q->im_end);
             b_text(&b, "\n");
-        } else {
+        } else if (m->role == LM_ROLE_ASSISTANT) {
             if (opts->verbatim_history && m->gen_ids) {
                 b_assistant_open(&b, q, m->gen_thinking);
                 b_flush(&b);
@@ -321,9 +369,52 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
                     b_text(&b, "assistant\n");
                     b_sl(&b, content);
                 }
+                for (int k = 0; k < m->n_calls; k++) {
+                    jval *args = json_parse(m->calls[k].arguments ? m->calls[k].arguments : "{}", NULL);
+                    if (!args || args->t != J_OBJ) {
+                        json_free_tree(args);
+                        free(b.txt);
+                        FAIL("a tool call's arguments must be a JSON object");
+                    }
+                    if (k == 0) { if (content.n) b_text(&b, "\n\n"); }
+                    else b_text(&b, "\n");
+                    b_special(&b, q->tool_call);
+                    b_text(&b, "\n<function=");
+                    b_text(&b, m->calls[k].name);
+                    b_text(&b, ">\n");
+                    for (int a = 0; a < args->len; a++) {
+                        LmSb v = { 0 };
+                        lm_qwen_arg_text(&v, args->kids[a]);
+                        b_text(&b, "<parameter=");
+                        b_text(&b, args->keys[a]);
+                        b_text(&b, ">\n");
+                        if (v.oom) b.oom = 1; else b_text_n(&b, v.s, v.n);
+                        lm_sb_free(&v);
+                        b_text(&b, "\n</parameter>\n");
+                    }
+                    b_text(&b, "</function>\n");
+                    b_special(&b, q->tool_call_end);
+                    json_free_tree(args);
+                }
             }
             b_special(&b, q->im_end);
             b_text(&b, "\n");
+        } else {
+            /* a tool message: consecutive ones share one user turn of <tool_response> blocks */
+            if (i == 0 || msgs[i - 1].role != LM_ROLE_TOOL) {
+                b_special(&b, q->im_start);
+                b_text(&b, "user");
+            }
+            b_text(&b, "\n");
+            b_special(&b, q->tool_resp);
+            b_text(&b, "\n");
+            b_sl(&b, content);
+            b_text(&b, "\n");
+            b_special(&b, q->tool_resp_end);
+            if (i == n - 1 || msgs[i + 1].role != LM_ROLE_TOOL) {
+                b_special(&b, q->im_end);
+                b_text(&b, "\n");
+            }
         }
     }
     b_assistant_open(&b, q, opts->enable_thinking);
@@ -355,6 +446,7 @@ typedef struct {
     /* Gemma: the text after the think-open id up to the first newline names the channel
      * ("thought") and is not reasoning. */
     int channel_header;
+    int quote; /* Gemma <|"|>: kept as LM_QS inside a collected tool call; -1 = none */
 } PFmt;
 
 typedef struct {
@@ -364,6 +456,8 @@ typedef struct {
     int state;
     LmUtf8 u;
     Strm reason, answer;
+    char *tb;        /* the tool call being collected (LmParser.collect_calls) */
+    size_t tn, tcap;
 } QParser;
 
 static int is_ws_byte(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'; }
@@ -400,6 +494,28 @@ static void strm_push(Strm *s, LmOutKind kind, const char *in, size_t n, LmSink 
     free(out);
 }
 
+static void tb_add(QParser *p, const char *s, size_t n)
+{
+    if (p->tn + n + 1 > p->tcap) {
+        size_t cap = p->tcap ? p->tcap : 256;
+        while (cap < p->tn + n + 1) cap *= 2;
+        char *q = (char *)realloc(p->tb, cap);
+        if (!q) return;
+        p->tb = q;
+        p->tcap = cap;
+    }
+    memcpy(p->tb + p->tn, s, n);
+    p->tn += n;
+    p->tb[p->tn] = 0;
+}
+
+/* hand the collected call body to the sink */
+static void tb_emit(QParser *p, LmSink sink, void *user)
+{
+    if (p->tn && sink) sink(user, LM_OUT_TOOLCALL, p->tb, p->tn);
+    p->tn = 0;
+}
+
 static void route(QParser *p, const char *bytes, size_t n, LmSink sink, void *user)
 {
     if (p->hdr_pending) {
@@ -412,7 +528,8 @@ static void route(QParser *p, const char *bytes, size_t n, LmSink sink, void *us
     if (!n) return;
     if (p->state == ST_THINK) strm_push(&p->reason, LM_OUT_REASONING, bytes, n, sink, user);
     else if (p->state == ST_ANSWER) strm_push(&p->answer, LM_OUT_ANSWER, bytes, n, sink, user);
-    /* ST_TOOL: the body of an unsupported tool call is not forwarded */
+    else if (p->state == ST_TOOL && p->base.collect_calls) tb_add(p, bytes, n);
+    /* ST_TOOL otherwise: the body of an unsupported tool call is not forwarded */
 }
 
 static void flush_utf8(QParser *p, LmSink sink, void *user)
@@ -452,15 +569,26 @@ static int qp_feed(LmParser *base, int id, LmSink sink, void *user)
         flush_utf8(p, sink, user);
         if (p->state != ST_TOOL) {
             enter(p, ST_TOOL);
+            p->tn = 0;
             p->base.tool_calls++;
             static const char note[] = "tool calls are not supported";
-            if (sink) sink(user, LM_OUT_TOOLCALL, note, sizeof note - 1);
+            if (sink && !p->base.collect_calls) sink(user, LM_OUT_TOOLCALL, note, sizeof note - 1);
         }
         return LM_PARSE_CONT;
     }
     if (id == q->tool_call_end) {
         flush_utf8(p, sink, user);
-        return p->state == ST_TOOL ? LM_PARSE_STOP_AFTER : LM_PARSE_CONT;
+        if (p->state != ST_TOOL) return LM_PARSE_CONT;
+        if (!p->base.collect_calls) return LM_PARSE_STOP_AFTER;
+        tb_emit(p, sink, user);
+        enter(p, ST_ANSWER);
+        return LM_PARSE_CONT;
+    }
+    if (q->quote >= 0 && id == q->quote && p->state == ST_TOOL && p->base.collect_calls) {
+        flush_utf8(p, sink, user);
+        const char qs = LM_QS;
+        tb_add(p, &qs, 1);
+        return LM_PARSE_CONT;
     }
     if (lm_tok_is_special(q->tok, id)) return LM_PARSE_CONT; /* control token: no text */
     char piece[LM_TOK_PIECE_MAX];
@@ -476,7 +604,9 @@ static int qp_feed(LmParser *base, int id, LmSink sink, void *user)
 
 static void qp_finish(LmParser *base, LmSink sink, void *user)
 {
-    flush_utf8((QParser *)base, sink, user);
+    QParser *p = (QParser *)base;
+    flush_utf8(p, sink, user);
+    if (p->state == ST_TOOL && p->base.collect_calls) tb_emit(p, sink, user); /* a call cut short */
 }
 
 static void qp_destroy(LmParser *base)
@@ -485,6 +615,7 @@ static void qp_destroy(LmParser *base)
     if (!p) return;
     free(p->reason.held);
     free(p->answer.held);
+    free(p->tb);
     free(p);
 }
 
@@ -504,7 +635,7 @@ static LmParser *parser_new(const PFmt *f, int start_in_think)
 static LmParser *q_parser_new(const LmTemplate *t, int thinking)
 {
     const Qwen *q = (const Qwen *)t->impl;
-    PFmt f = { q->tok, q->think, q->think_end, q->tool_call, q->tool_call_end, { 0 }, q->n_stop, 0 };
+    PFmt f = { q->tok, q->think, q->think_end, q->tool_call, q->tool_call_end, { 0 }, q->n_stop, 0, -1 };
     memcpy(f.stop, q->stop, sizeof f.stop);
     return parser_new(&f, thinking); /* the Qwen generation prompt itself opens the block */
 }
@@ -519,6 +650,20 @@ static int q_is_stop(const LmTemplate *t, int id)
 static void q_destroy(LmTemplate *t)
 {
     free(t->impl);
+}
+
+static int q_parse_call(const LmTemplate *t, const char *raw, const jval *tools, LmToolCall *out,
+                        char *err, size_t errlen)
+{
+    (void)t;
+    return lm_qwen_parse_call(raw, tools, out, err, errlen);
+}
+
+void lm_toolcall_free(LmToolCall *c)
+{
+    free((void *)c->name);
+    free((void *)c->arguments);
+    c->name = c->arguments = NULL;
 }
 
 LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen)
@@ -537,7 +682,9 @@ LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, 
         lm_tok_require(tok, "<think>", &q->think, err, errlen) ||
         lm_tok_require(tok, "</think>", &q->think_end, err, errlen) ||
         lm_tok_require(tok, "<tool_call>", &q->tool_call, err, errlen) ||
-        lm_tok_require(tok, "</tool_call>", &q->tool_call_end, err, errlen)) {
+        lm_tok_require(tok, "</tool_call>", &q->tool_call_end, err, errlen) ||
+        lm_tok_require(tok, "<tool_response>", &q->tool_resp, err, errlen) ||
+        lm_tok_require(tok, "</tool_response>", &q->tool_resp_end, err, errlen)) {
         free(q); free(t);
         return NULL;
     }
@@ -551,6 +698,7 @@ LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, 
     t->render = q_render;
     t->parser_new = q_parser_new;
     t->is_stop = q_is_stop;
+    t->parse_call = q_parse_call;
     t->destroy = q_destroy;
     t->impl = q;
     return t;
@@ -645,6 +793,7 @@ LmTemplate *lm_template_chatml(const LmTok *tok, const int *eos_ids, int n_eos, 
 typedef struct {
     const LmTok *tok;
     int bos, turn, turn_end, think, channel, channel_end, tool_call, tool_call_end;
+    int tool_open, tool_close, tool_resp, tool_resp_end, quote;
     int vis_start, vis_pad, vis_end; /* -1 = vision unset */
     int stop[MAX_STOP];
     int n_stop;
@@ -676,6 +825,56 @@ static char *strip_thinking(Sl s, size_t *outn)
     return res;
 }
 
+/* text whose LM_QS bytes stand for the <|"|> control token */
+static void b_qs(Bld *b, int quote, const char *s, size_t n)
+{
+    size_t run = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] != LM_QS) continue;
+        b_text_n(b, s + run, i - run);
+        b_special(b, quote);
+        run = i + 1;
+    }
+    b_text_n(b, s + run, n - run);
+}
+
+/* the <|tool_response> ... <tool_response|> block of one tool message (format_tool_response_block) */
+static void g_tool_response(Bld *b, const Gemma *g, const LmMsg *tm)
+{
+    LmSb d = { 0 };
+    jval v = { J_STR, 0, 0, (char *)(tm->content ? tm->content : ""), NULL, NULL, 0 };
+    lm_sb_str(&d, "response:");
+    lm_sb_user(&d, tm->tool_name && tm->tool_name[0] ? tm->tool_name : "unknown");
+    lm_sb_str(&d, "{value:");
+    lm_gemma_argument(&d, &v, 0);
+    lm_sb_str(&d, "}");
+    b_special(b, g->tool_resp);
+    if (d.oom) b->oom = 1; else b_qs(b, g->quote, d.s, d.n);
+    lm_sb_free(&d);
+    b_special(b, g->tool_resp_end);
+}
+
+/* <|tool_call>call:NAME{key:value,...}<tool_call|>, keys sorted */
+static int g_tool_call(Bld *b, const Gemma *g, const LmToolCall *c, char *err, size_t errlen)
+{
+    jval *args = json_parse(c->arguments ? c->arguments : "{}", NULL);
+    if (!args || args->t != J_OBJ) {
+        json_free_tree(args);
+        if (err && errlen) snprintf(err, errlen, "a tool call's arguments must be a JSON object");
+        return -1;
+    }
+    LmSb d = { 0 };
+    lm_sb_str(&d, "call:");
+    lm_sb_user(&d, c->name);
+    lm_gemma_argument(&d, args, 0); /* writes {k:v,...} with its own braces */
+    json_free_tree(args);
+    b_special(b, g->tool_call);
+    if (d.oom) b->oom = 1; else b_qs(b, g->quote, d.s, d.n);
+    lm_sb_free(&d);
+    b_special(b, g->tool_call_end);
+    return 0;
+}
+
 static int g_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRenderOpts *opts,
                     LmIds *out, char *err, size_t errlen)
 {
@@ -704,48 +903,97 @@ static int g_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
     Bld b = { g->tok, out, NULL, 0, 0, 0 };
     int first_sys = msgs[0].role == LM_ROLE_SYSTEM;
     int img_i = 0;
+    const int has_tools = opts && opts->tools && opts->tools->t == J_ARR && opts->tools->len > 0;
     b_special(&b, g->bos);
-    if (opts->enable_thinking || first_sys) {
+    if (opts->enable_thinking || has_tools || first_sys) {
         b_special(&b, g->turn);
         b_text(&b, "system\n");
         if (opts->enable_thinking) { b_special(&b, g->think); b_text(&b, "\n"); }
         if (first_sys) b_sl(&b, sl_trim(sl_of(msgs[0].content)));
+        if (has_tools) {
+            for (int k = 0; k < opts->tools->len; k++) {
+                LmSb d = { 0 };
+                lm_gemma_declaration(&d, opts->tools->kids[k]);
+                b_special(&b, g->tool_open);
+                if (d.oom) b.oom = 1; else b_qs(&b, g->quote, d.s, d.n);
+                lm_sb_free(&d);
+                b_special(&b, g->tool_close);
+            }
+        }
         b_special(&b, g->turn_end);
         b_text(&b, "\n");
     }
+    int open_call = 0;  /* the last model turn ended in a tool call: the answer continues it */
+    int prev_role = -1; /* role of the previous message that is not a tool result */
     for (int i = first_sys ? 1 : 0; i < n; i++) {
         const LmMsg *m = &msgs[i];
-        int model = m->role == LM_ROLE_ASSISTANT;
-        b_special(&b, g->turn);
-        b_text(&b, model ? "model\n" : "user\n");
+        if (m->role == LM_ROLE_TOOL) continue; /* rendered with the assistant message that made the call */
+        const int model = m->role == LM_ROLE_ASSISTANT;
+        const int has_calls = model && m->n_calls > 0;
+        if (!(model && prev_role == LM_ROLE_ASSISTANT)) {
+            b_special(&b, g->turn);
+            b_text(&b, model ? "model\n" : "user\n");
+        }
+        open_call = 0;
         if (!model) {
             if (emit_user_content(&b, m, g->vis_start, g->vis_pad, g->vis_end, opts, &img_i, err, errlen)) {
                 free(b.txt);
                 return -1;
             }
-        } else if (opts->verbatim_history && m->gen_ids) {
-            b_flush(&b);
-            if (!b.oom && lm_ids_append(out, m->gen_ids, m->n_gen_ids)) b.oom = 1;
+            b_special(&b, g->turn_end);
+            b_text(&b, "\n");
         } else {
-            /* reasoning is rendered only for a model turn after the last user message */
-            if (m->reasoning && m->reasoning[0] && i > last_user) {
-                b_special(&b, g->channel);
-                b_text(&b, "thought\n");
-                b_text(&b, m->reasoning);
-                b_text(&b, "\n");
-                b_special(&b, g->channel_end);
+            const int verbatim = opts->verbatim_history && m->gen_ids;
+            if (verbatim) {
+                b_flush(&b);
+                if (!b.oom && lm_ids_append(out, m->gen_ids, m->n_gen_ids)) b.oom = 1;
+            } else {
+                /* reasoning is rendered only for a model turn after the last user message */
+                if (m->reasoning && m->reasoning[0] && i > last_user) {
+                    b_special(&b, g->channel);
+                    b_text(&b, "thought\n");
+                    b_text(&b, m->reasoning);
+                    b_text(&b, "\n");
+                    b_special(&b, g->channel_end);
+                }
+                for (int k = 0; k < m->n_calls && !b.oom; k++) {
+                    if (g_tool_call(&b, g, &m->calls[k], err, errlen)) { free(b.txt); return -1; }
+                }
             }
-            size_t cn = 0;
-            char *c = strip_thinking(sl_of(m->content), &cn);
-            if (!c) b.oom = 1;
-            else b_text_n(&b, c, cn);
-            free(c);
+            int answered = 0;
+            if (has_calls) {
+                for (int k = i + 1; k < n && msgs[k].role == LM_ROLE_TOOL; k++) {
+                    g_tool_response(&b, g, &msgs[k]);
+                    answered = 1;
+                }
+            }
+            int has_content = 0;
+            if (!verbatim) {
+                size_t cn = 0;
+                char *c = strip_thinking(sl_of(m->content), &cn);
+                if (!c) b.oom = 1;
+                else b_text_n(&b, c, cn);
+                free(c);
+                has_content = m->content && m->content[0];
+            }
+            /* the jinja: a call with no result yet ends in the <|tool_response> the model writes
+             * next; a call with results and no text after it leaves the turn open */
+            if (has_calls && !answered) {
+                b_special(&b, g->tool_resp);
+                open_call = 1;
+            } else if (answered && !has_content) {
+                open_call = 1;
+            } else {
+                b_special(&b, g->turn_end);
+                b_text(&b, "\n");
+            }
         }
-        b_special(&b, g->turn_end);
-        b_text(&b, "\n");
+        prev_role = m->role;
     }
-    b_special(&b, g->turn);
-    b_text(&b, "model\n");
+    if (!open_call) {
+        b_special(&b, g->turn);
+        b_text(&b, "model\n");
+    }
     b_flush(&b);
     free(b.txt);
     if (b.oom) FAIL("out of memory");
@@ -759,7 +1007,7 @@ static LmParser *g_parser_new(const LmTemplate *t, int thinking)
 {
     (void)thinking;
     const Gemma *g = (const Gemma *)t->impl;
-    PFmt f = { g->tok, g->channel, g->channel_end, g->tool_call, g->tool_call_end, { 0 }, g->n_stop, 1 };
+    PFmt f = { g->tok, g->channel, g->channel_end, g->tool_call, g->tool_call_end, { 0 }, g->n_stop, 1, g->quote };
     memcpy(f.stop, g->stop, sizeof f.stop);
     return parser_new(&f, 0);
 }
@@ -772,6 +1020,14 @@ static int g_is_stop(const LmTemplate *t, int id)
 }
 
 static void g_destroy(LmTemplate *t) { free(t->impl); }
+
+static int g_parse_call(const LmTemplate *t, const char *raw, const jval *tools, LmToolCall *out,
+                        char *err, size_t errlen)
+{
+    (void)t;
+    (void)tools;
+    return lm_gemma_parse_call(raw, out, err, errlen);
+}
 
 LmTemplate *lm_template_gemma4(const LmTok *tok, const int *eos_ids, int n_eos, char *err, size_t errlen)
 {
@@ -791,11 +1047,17 @@ LmTemplate *lm_template_gemma4(const LmTok *tok, const int *eos_ids, int n_eos, 
         lm_tok_require(tok, "<|channel>", &g->channel, err, errlen) ||
         lm_tok_require(tok, "<channel|>", &g->channel_end, err, errlen) ||
         lm_tok_require(tok, "<|tool_call>", &g->tool_call, err, errlen) ||
-        lm_tok_require(tok, "<tool_call|>", &g->tool_call_end, err, errlen)) {
+        lm_tok_require(tok, "<tool_call|>", &g->tool_call_end, err, errlen) ||
+        lm_tok_require(tok, "<|tool>", &g->tool_open, err, errlen) ||
+        lm_tok_require(tok, "<tool|>", &g->tool_close, err, errlen) ||
+        lm_tok_require(tok, "<|tool_response>", &g->tool_resp, err, errlen) ||
+        lm_tok_require(tok, "<tool_response|>", &g->tool_resp_end, err, errlen) ||
+        lm_tok_require(tok, "<|\"|>", &g->quote, err, errlen)) {
         free(g); free(t);
         return NULL;
     }
     g->stop[g->n_stop++] = g->turn_end;
+    g->stop[g->n_stop++] = g->tool_resp; /* what the model writes after a tool call: the result is the caller's */
     for (int i = 0; i < n_eos; i++) {
         int dup = 0;
         for (int j = 0; j < g->n_stop; j++) if (g->stop[j] == eos_ids[i]) dup = 1;
@@ -805,6 +1067,7 @@ LmTemplate *lm_template_gemma4(const LmTok *tok, const int *eos_ids, int n_eos, 
     t->render = g_render;
     t->parser_new = g_parser_new;
     t->is_stop = g_is_stop;
+    t->parse_call = g_parse_call;
     t->destroy = g_destroy;
     t->impl = g;
     return t;

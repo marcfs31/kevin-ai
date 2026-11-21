@@ -177,7 +177,7 @@ static void clear_out(void) { g_ans[0] = g_rea[0] = g_tool[0] = 0; }
 
 static int turn(LmChat *c, const char *text, int max_tokens, LmTurn *t, int (*cancel)(void *), void *cu)
 {
-    LmTurnOpts o = { max_tokens, sink, NULL, cancel, cu };
+    LmTurnOpts o = { max_tokens, sink, NULL, cancel, cu, NULL };
     char err[256] = "";
     clear_out();
     int rc = lm_chat_turn(c, text, &o, t, err, sizeof err);

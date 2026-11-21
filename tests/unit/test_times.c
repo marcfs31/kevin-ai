@@ -15,7 +15,7 @@ static int tok[N];
 static float *run(const char *dir, const char *weights, int *vocab)
 {
     char err[512] = "";
-    LmOpts o = { weights, 0, 0, 0, 0 };
+    LmOpts o = { weights, 0, 0, 0, 0, 0 };
     LmModel *m = lm_open(dir, &o, err, sizeof err);
     CHECK_MSG(m != NULL, "lm_open(%s): %s", dir, err);
     if (!m) return NULL;

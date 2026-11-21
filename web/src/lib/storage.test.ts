@@ -16,6 +16,38 @@ describe('migrate', () => {
     expect(conv?.messages[1]).toMatchObject({ role: 'assistant', content: 'yo', reasoning: '', status: 'done', error: null, stats: null });
   });
 
+  it('loads saved statistics from before estimates were kept with no estimate', () => {
+    const state = migrate({
+      version: 1,
+      conversations: [{ id: 'c', messages: [{ id: 'a', role: 'assistant', content: 'yo', stats: { promptTokens: 4, completionTokens: 2 } }] }],
+    });
+    expect(state?.conversations[0]?.messages[0]).toMatchObject({ stats: { promptTokens: 4, completionTokens: 2, promptEstimate: null, completionEstimate: null } });
+  });
+
+  it('loads a conversation saved before models were chosen on the default, and keeps a chosen one', () => {
+    const state = migrate({ version: 1, conversations: [{ id: 'a', messages: [] }, { id: 'b', model: 'rabbit', messages: [] }, { id: 'c', model: 7, messages: [] }] });
+    expect(state?.conversations.map((c) => c.model)).toEqual([null, 'rabbit', null]);
+  });
+
+  it('loads tool calls and results, and settings from before tools existed with tools off', () => {
+    const state = migrate({
+      version: 1,
+      settings: { systemPrompt: 'x' },
+      conversations: [{ id: 'c', messages: [
+        { id: 'a', role: 'assistant', content: '', toolCalls: [{ id: 'k', name: 'f', arguments: '{}' }, { name: 'bad' }], stepLimit: 3 },
+        { id: 't', role: 'tool', toolCallId: 'k', name: 'f', content: 'r', isError: true },
+        { id: 'x', role: 'tool', content: 'no call id' },
+      ] }],
+    });
+    expect(state?.settings).toMatchObject({ tools: false, maxSteps: 8 });
+    expect(state?.conversations[0]?.messages).toMatchObject([
+      { toolCalls: [{ id: 'k', name: 'f', arguments: '{}' }], stepLimit: 3 },
+      { role: 'tool', toolCallId: 'k', isError: true },
+    ]);
+    expect(migrate({ version: 1, settings: { tools: true, maxSteps: 99 } })?.settings).toMatchObject({ tools: true, maxSteps: 8 });
+    expect(migrate({ version: 1, settings: { maxSteps: 5 } })?.settings.maxSteps).toBe(5);
+  });
+
   it('drops broken entries and resets invalid settings', () => {
     const state = migrate({
       version: 1,

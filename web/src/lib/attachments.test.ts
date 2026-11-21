@@ -10,7 +10,7 @@ import { assess, requestBytes, toWire } from './request';
 import { DEFAULT_SETTINGS, type Message } from './storage';
 
 const info = (over: Partial<ServerInfo> = {}): ServerInfo => ({
-  model: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null, ...over,
+  model: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null, models: [], ...over,
 });
 const pdf = (pages: Array<string | null>, range: string, image = true): Extract<Attachment, { kind: 'pdf' }> => ({
   id: 'p', kind: 'pdf', name: 'doc.pdf', range,
@@ -233,5 +233,55 @@ describe('toWire and assess', () => {
     const big = 'y'.repeat(25 * 1024 * 1024);
     const a = assess(DEFAULT_SETTINGS, [], big, [], big, info());
     expect(a.problems.map((p) => p.kind)).toContain('too_large');
+  });
+});
+
+describe('toWire with tool calls', () => {
+  const asks = (over: Partial<Extract<Message, { role: 'assistant' }>> = {}): Message => ({
+    id: 'a', role: 'assistant', content: '', reasoning: '', status: 'done', error: null, stats: null, createdAt: 0,
+    toolCalls: [{ id: 'c1', name: 'calculator', arguments: '{"expression":"1"}' }], ...over,
+  });
+  const result: Message = { id: 't', role: 'tool', toolCallId: 'c1', name: 'calculator', content: '1', isError: false, createdAt: 0 };
+  const hi: Message = { id: 'u', role: 'user', content: 'hi', typed: 'hi', attachmentNames: [], createdAt: 0 };
+
+  it('sends a call with its result straight after it', () => {
+    expect(toWire('', [hi, asks(), result])).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'calculator', arguments: '{"expression":"1"}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: '1' },
+    ]);
+  });
+
+  it('never sends a call nothing answered, a stopped or failed call, or a stray result', () => {
+    expect(toWire('', [hi, asks()])).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(toWire('', [hi, asks({ content: 'text' })])).toEqual([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'text' }]);
+    expect(toWire('', [hi, asks({ status: 'stopped' }), result])).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(toWire('', [hi, result])).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+});
+
+describe('toWire hardening', () => {
+  const hi = (content: Extract<Message, { role: 'user' }>['content']): Message => ({ id: 'u', role: 'user', content, typed: '', attachmentNames: [], createdAt: 0 });
+  const withCall = (name: string, args: string): Message[] => [
+    { id: 'a', role: 'assistant', content: '', reasoning: '', status: 'done', error: null, stats: null, createdAt: 0, toolCalls: [{ id: 'c', name, arguments: args }] },
+    { id: 't', role: 'tool', toolCallId: 'c', name, content: 'r', isError: true, createdAt: 0 },
+  ];
+
+  it('sends arguments the server accepts and a name it accepts, whatever the model wrote', () => {
+    const sent = (name: string, args: string) => {
+      const a = toWire('', withCall(name, args))[0];
+      return a?.tool_calls?.[0]?.function;
+    };
+    expect(sent('calculator', '{"expression":"1"}')).toEqual({ name: 'calculator', arguments: '{"expression":"1"}' });
+    for (const bad of ['{oops', '', '[1]', 'null', '"x"']) expect(sent('f', bad)?.arguments, bad).toBe('{}');
+    expect(sent('not a name!', '{}')?.name).toBe('unknown_tool');
+    expect(sent('', '{}')?.name).toBe('unknown_tool');
+  });
+
+  it('swaps images for a text note when the model cannot read them', () => {
+    const img = hi([{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }, { type: 'text', text: 'what is this' }]);
+    expect(toWire('', [img])[0]?.content).toEqual([expect.objectContaining({ type: 'image_url' }), { type: 'text', text: 'what is this' }]);
+    expect(toWire('', [img], false)[0]?.content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringContaining('cannot read images') }), { type: 'text', text: 'what is this' }]);
+    expect(toWire('', [hi('plain')], false)[0]?.content).toBe('plain');
   });
 });

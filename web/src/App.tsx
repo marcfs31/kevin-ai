@@ -1,19 +1,23 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Composer } from './components/Composer';
-import { MessageView, errorText, type LiveInfo } from './components/MessageView';
+import { MessageView, errorText } from './components/MessageView';
+import { TokenLine } from './components/TokenLine';
+import { ChatModelSelect } from './components/ChatModelSelect';
 import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
-import { ApiError, fetchServerInfo, resetServer, streamChat, type ServerInfo } from './lib/api';
+import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
-import { assess, toWire } from './lib/request';
+import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
+import { runAgent, type LiveInfo } from './lib/agent';
+import { assess } from './lib/request';
+import { estimateWireTokens, sessionTotals } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
-import type { Usage } from './lib/sse';
 import {
-  backupKeys, createSaver, deleteBackups, loadState, STORAGE_KEY, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
-  type UserMessage,
+  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
+  type Message, type UserMessage,
 } from './lib/storage';
 
 type ServerState = { kind: 'loading' } | { kind: 'ok'; info: ServerInfo } | { kind: 'error'; error: ApiError };
@@ -69,9 +73,18 @@ function Chat({ state, setState, storage, notice }: {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
-  const busy = live !== null;
-  const info = server.kind === 'ok' ? server.info : null;
+  // Busy from send to the end of the reply (and any tool or compaction step in between).
+  const [busy, setBusy] = useState(false);
+  const [compacting, setCompacting] = useState(false);
+  const [compactError, setCompactError] = useState<ApiError | null>(null);
+  const serverInfo = server.kind === 'ok' ? server.info : null;
   const active = state.conversations.find((c) => c.id === state.activeId) ?? null;
+  // The model is per conversation; before the first message it is the pick for the next new one.
+  const [draftModel, setDraftModel] = useState<string | null>(null);
+  const modelId = active ? active.model : draftModel;
+  // Context window and vision follow the model chosen, so everything below reads `info`.
+  const info = infoForModel(serverInfo, modelId);
+  const requestModel = serverInfo && serverInfo.models.length > 1 ? (info?.model ?? null) : null;
 
   const fetchInfo = useCallback((signal?: AbortSignal) => {
     fetchServerInfo(signal).then(
@@ -124,10 +137,52 @@ function Chat({ state, setState, storage, notice }: {
     setState((s) => ({ ...s, conversations: s.conversations.map((c) => (c.id === id ? f(c) : c)) }));
 
   const assessDraft = useCallback(
-    (typed: string, attachments: Attachment[]) =>
-      assess(state.settings, active?.messages ?? [], typed, attachments, buildUserContent(typed, attachments, info?.vision === 'ok'), info),
+    (typed: string, attachments: Attachment[]) => {
+      const content = buildUserContent(typed, attachments, info?.vision === 'ok');
+      const history = active?.messages ?? [];
+      const sent = projectCompaction(history, state.settings.systemPrompt, estimateWireTokens([{ role: 'user', content }], info), info);
+      return assess(state.settings, sent, typed, attachments, content, info);
+    },
     [state.settings, active?.messages, info],
   );
+
+  // Asks the model for a summary of the plan's span and inserts it. Returns the new history, or
+  // null when it failed or was stopped: then nothing changed and every message is still sent.
+  const compact = async (convId: string, history: Message[], plan: Plan, auto: boolean, signal: AbortSignal): Promise<Message[] | null> => {
+    setCompacting(true);
+    let text = '';
+    try {
+      await streamChat({ messages: summaryRequest(plan, info), temperature: 0.2, maxTokens: null, model: requestModel }, signal, (e) => {
+        if (e.kind === 'content') text += e.text;
+      });
+      if (!text.trim()) throw new ApiError(0, { message: '', code: 'summary_empty', type: null });
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === 'AbortError')) setCompactError(e instanceof ApiError ? e : new ApiError(0, null));
+      return null;
+    } finally {
+      setCompacting(false);
+    }
+    const id = newId();
+    const now = Date.now();
+    updateConv(convId, (c) => ({ ...c, messages: applyCompaction(c.messages, plan, text, id, now, auto) }));
+    return applyCompaction(history, plan, text, id, now, auto);
+  };
+
+  const compactNow = async () => {
+    if (controllerRef.current || !active) return;
+    const plan = planCompaction(active.messages);
+    if (!plan) return;
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    setBusy(true);
+    setCompactError(null);
+    try {
+      await compact(active.id, active.messages, plan, false, controller.signal);
+    } finally {
+      controllerRef.current = null;
+      setBusy(false);
+    }
+  };
 
   const send = async (typed: string, attachments: Attachment[]) => {
     if (controllerRef.current) return;
@@ -143,60 +198,42 @@ function Chat({ state, setState, storage, notice }: {
     };
     let conv = active;
     if (!conv) {
-      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, messages: [] };
+      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, messages: [] };
       const created = conv;
       setState((s) => ({ ...s, conversations: [...s.conversations, created], activeId: created.id }));
     }
     const convId = conv.id;
-    const history = [...conv.messages, user];
     updateConv(convId, (c) => ({ ...c, title: c.title || titleFrom(typed, attachments), updatedAt: now, messages: [...c.messages, user] }));
 
     const controller = new AbortController();
     controllerRef.current = controller;
-    const message: AssistantMessage = {
-      id: newId(), role: 'assistant', content: '', reasoning: '', status: 'done', error: null, stats: null, createdAt: now,
-    };
-    const liveInfo: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0 };
-    let usage: Usage | null = null;
-    const publish = () => setLive({ convId, message: { ...message }, info: { ...liveInfo } });
-    publish();
+    setBusy(true);
+    setCompactError(null);
+    let history = [...conv.messages, user];
+    // Near the context limit the older turns are summarised first, so this message still fits.
+    if (shouldCompact(conv.messages, state.settings.systemPrompt, estimateWireTokens([{ role: 'user', content: user.content }], info), info)) {
+      const plan = planCompaction(conv.messages);
+      if (plan) history = (await compact(convId, history, plan, true, controller.signal)) ?? history;
+    }
     try {
-      await streamChat(
-        { messages: toWire(state.settings.systemPrompt, history), temperature: state.settings.temperature, maxTokens: state.settings.maxTokens },
-        controller.signal,
-        (e) => {
-          if (e.kind === 'content' || e.kind === 'reasoning') {
-            if (liveInfo.firstAt === null) liveInfo.firstAt = performance.now();
-            liveInfo.chunks += 1;
-            if (e.kind === 'content') message.content += e.text;
-            else message.reasoning += e.text;
-            publish();
-          } else if (e.kind === 'usage') usage = e.usage;
+      await runAgent({
+        history,
+        settings: state.settings,
+        model: requestModel,
+        info,
+        signal: controller.signal,
+        stream: streamChat,
+        compact: (h, plan) => compact(convId, h, plan, true, controller.signal),
+        onLive: (message, liveInfo) => setLive({ convId, message, info: liveInfo }),
+        onCommit: (m) => {
+          updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, m] }));
+          setLive(null);
         },
-      );
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') message.status = 'stopped';
-      else {
-        const err = e instanceof ApiError ? e : new ApiError(0, null);
-        message.status = 'error';
-        message.error = { code: err.code, message: err.serverMessage, status: err.status };
-      }
+      });
     } finally {
-      const end = performance.now();
-      const u = usage as Usage | null;
-      const generated = u?.completionTokens ?? liveInfo.chunks;
-      const decodeSecs = liveInfo.firstAt === null ? 0 : (end - liveInfo.firstAt) / 1000;
-      message.stats = {
-        ttftMs: liveInfo.firstAt === null ? null : liveInfo.firstAt - liveInfo.startedAt,
-        tokensPerSecond: generated > 1 && decodeSecs > 0 ? (generated - 1) / decodeSecs : null,
-        promptTokens: u?.promptTokens ?? null,
-        cachedTokens: u?.cachedTokens ?? null,
-        completionTokens: u?.completionTokens ?? null,
-      };
-      const done = { ...message };
-      updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, done] }));
       controllerRef.current = null;
       setLive(null);
+      setBusy(false);
     }
   };
 
@@ -236,6 +273,9 @@ function Chat({ state, setState, storage, notice }: {
           : null;
   const canDiscard = hold === 'locked' || hold === 'unreadable' || copies.length > 0;
   const messages = active?.messages ?? [];
+  const totals = sessionTotals(messages);
+  const lastSummary = lastSummaryIndex(messages);
+  const canCompact = active !== null && planCompaction(active.messages) !== null;
 
   return (
     <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
@@ -266,6 +306,14 @@ function Chat({ state, setState, storage, notice }: {
             />
           ) : (
             serverLine && <span>{serverLine}</span>
+          )}
+          {serverInfo && serverInfo.models.length > 1 && (
+            <ChatModelSelect
+              models={serverInfo.models}
+              value={info?.model ?? ''}
+              disabled={busy}
+              onChange={(id) => (active ? updateConv(active.id, (c) => ({ ...c, model: id })) : setDraftModel(id))}
+            />
           )}
           {info?.contextLength && <span>{t('server.context', { n: info.contextLength })}</span>}
           {server.kind === 'error' && (
@@ -338,11 +386,33 @@ function Chat({ state, setState, storage, notice }: {
         >
           <div className="log-entries" role="log" aria-busy={busy}>
             {messages.length === 0 && !live && <p className="empty">{t('app.empty')}</p>}
-            {messages.map((m) => (
-              <MessageView key={m.id} m={m} />
+            {messages.map((m, i) => (
+              <div key={m.id} className={i < lastSummary ? 'compacted' : undefined}>
+                <MessageView m={m} results={m.role === 'assistant' ? toolResults(messages, i) : undefined} />
+              </div>
             ))}
           </div>
           {live && live.convId === active?.id && <MessageView m={live.message} live={live.info} />}
+        </div>
+        {compacting && (
+          <p className="note" role="status">
+            {t('compact.running')}
+          </p>
+        )}
+        {compactError && (
+          <p className="error banner" role="alert">
+            {t('compact.failed', { reason: errorText(t, compactError) })}
+          </p>
+        )}
+        <div className="chat-tools">
+          {totals && <TokenLine className="session hint" labelKey="tokens.session" count={totals} />}
+          <span className="spacer" />
+          <button type="button" onClick={() => void compactNow()} disabled={busy || !canCompact} aria-describedby="compact-hint">
+            {t('compact.button')}
+          </button>
+          <span id="compact-hint" className="sr-only">
+            {t('compact.hint')}
+          </span>
         </div>
         {visionLine && <p className="vision hint">{visionLine}</p>}
         <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} onStop={stop} inputRef={inputRef} />

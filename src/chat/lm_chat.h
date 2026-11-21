@@ -35,6 +35,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "json.h"
 #include "chat/lm_sampler.h"
 #include "chat/lm_template.h"
 #include "tokenizer/lm_tok.h"
@@ -108,8 +109,8 @@ size_t lm_chat_cache_bytes(const LmChat *c);
 /* Replace the conversation with msgs[0..n): an optional system message first, then user and
  * assistant messages (content only for assistants; reasoning and gen_ids are ignored). This
  * is how a client that sends the whole conversation each time (lm-serve) talks to the chat.
- * Leading messages that equal the chat's own history (same role and content fingerprint,
- * including image SHAs, in order) keep what the chat knows about them, so an answer it
+ * Leading messages that equal the chat's own history (same role, content fingerprint,
+ * including image SHAs, tool calls and tool name, in order) keep what the chat knows about them, so an answer it
  * generated is rendered from its exact ids and the next turn's prompt still extends the fed
  * state. Multimodal user messages must carry parts with owned-copyable image rows; content
  * is the fingerprint string (text plus image SHAs). Returns 0, or -1 with a message in err
@@ -117,6 +118,13 @@ size_t lm_chat_cache_bytes(const LmChat *c);
  * the conversation is unchanged. The backend is not touched: the next turn decides what to
  * feed. */
 int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen);
+
+/* Tools for the turns that follow: the request's OpenAI "tools" array, or NULL for none.
+ * Borrowed: it must stay valid until the next call, and the caller clears it (NULL) when the
+ * request is done. With tools set the prompt carries them (the model's own template), a
+ * generated tool call is parsed (LmTurnOpts.on_call, LmTurn.calls) and a reply may hold
+ * several. Without tools the first tool call ends the turn with LM_STOP_TOOLCALL. */
+void lm_chat_set_tools(LmChat *c, const jval *tools);
 
 /* New sampling settings from the next turn on, with the random stream re-seeded. Checked
  * when sampling (an invalid combination makes the turn fail), like LmChatConfig's. */
@@ -136,6 +144,9 @@ typedef struct {
     void *user;
     int (*cancelled)(void *user);   /* may be NULL; polled before each token */
     void *cancel_user;
+    /* May be NULL. A complete, well-formed tool call, as the model finishes writing it
+     * (tools set). A malformed one is not reported here: its text goes to the sink as answer. */
+    void (*on_call)(void *user, int index, const LmToolCall *call);
 } LmTurnOpts;
 
 typedef struct {
@@ -145,7 +156,9 @@ typedef struct {
     int n_cached;           /* ids restored from the prefix cache instead of fed */
     int reprefill;          /* 1 if the backend was reset and the state re-fed from scratch */
     int n_gen;              /* generated ids, stop id excluded */
-    int tool_calls;
+    int tool_calls;         /* tool calls attempted, well-formed or not */
+    int n_calls;            /* the well-formed ones: calls[0..n_calls) */
+    const LmToolCall *calls; /* owned by the chat, valid until the next turn */
     int thinking_open;      /* the turn ended inside an unclosed think block */
     double prefill_s, decode_s;
     const char *reasoning;  /* the parsed text, owned by the chat, valid until the next turn */
@@ -161,6 +174,11 @@ typedef struct {
  * turn that fails before generating anything leaves the history as it was. */
 int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTurn *res,
                  char *err, size_t errlen);
+
+/* Answer the conversation as it stands, which must end with a user or a tool message (the
+ * results of the calls the last assistant message made): lm_chat_sync it, then this. Same
+ * returns as lm_chat_turn; a failure leaves the history as it was. */
+int lm_chat_continue(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, size_t errlen);
 
 /* Like lm_chat_turn, but the user message is multimodal parts (text and/or images).
  * parts must remain valid through the call; image rows are copied into history. */

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { BACKUP_KEY, STORAGE_KEY } from './lib/storage';
-import { DONE, FINISH, USAGE, axeViolations, delta, mockFetch, modelsResponse, sseResponse } from './test/helpers';
+import { DONE, FINISH, FINISH_TOOLS, USAGE, axeViolations, delta, mockFetch, modelsResponse, sseResponse, toolCallDelta } from './test/helpers';
 
 function renderApp(languages: readonly string[] = ['en-US']) {
   return render(<App storage={localStorage} languages={languages} />);
@@ -46,6 +46,352 @@ describe('App', () => {
     expect(bodyOf(fetchMock, 0)).toMatchObject({ messages: [{ role: 'user', content: 'hi there' }], stream: true, stream_options: { include_usage: true } });
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
     expect(saved.conversations[0].messages[1].content).toBe('Hello **world**');
+  });
+
+  it('counts tokens read and written: estimated while streaming, real once usage arrives, summed per chat', async () => {
+    const usage = (p: number, c: number) => `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: p, completion_tokens: c } })}\n\n`;
+    let n = 0;
+    mockFetch((_url, init) => {
+      n += 1;
+      return n === 1 ? heldReply(init) : sseResponse([delta('ok'), FINISH, usage(30, 5), DONE]);
+    });
+    renderApp();
+    typeAndSend('x'.repeat(35));
+    await screen.findByText('partial');
+    const live = screen.getAllByLabelText('Tokens used by this reply').pop();
+    expect(live?.textContent).toBe('Read ≈10 · written ≈1 tokens · ≈ means estimated');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText('Stopped.');
+    // A stopped reply is still counted, as an estimate.
+    expect((await screen.findByLabelText('Tokens used in this chat')).textContent).toBe('This chat: read ≈10 · written ≈1 tokens · ≈ means estimated');
+
+    typeAndSend('again');
+    await waitFor(() => expect(screen.getByLabelText('Tokens used in this chat').textContent).toContain('read ≈40 · written ≈6'));
+    // Real usage replaces the estimate for that reply; the chat total stays marked while one estimate remains.
+    const replies = screen.getAllByLabelText('Tokens used by this reply');
+    expect(replies[replies.length - 1]?.textContent).toBe('Read 30 · written 5 tokens');
+  });
+
+  it('shows a chat total without a mark when every reply has real usage, in Spanish', async () => {
+    mockFetch(() => sseResponse([delta('Hola'), FINISH, USAGE, DONE]));
+    renderApp(['es-ES']);
+    const box = screen.getByLabelText('Mensaje');
+    fireEvent.change(box, { target: { value: 'hola' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect((await screen.findByLabelText('Tokens usados en este chat')).textContent).toBe('Este chat: leídos 12 · escritos 3 tokens');
+    expect(screen.getByLabelText('Tokens usados por esta respuesta').textContent).toBe('Leídos 12 · escritos 3 tokens');
+  });
+
+  describe('model picker', () => {
+    const twoModels = () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: 'qwen3.5-4b', context_length: 8192 },
+            { id: 'whiterabbitneo-2.5-qwen2.5-coder-7b', context_length: 32768 },
+          ],
+        }),
+        { status: 200 },
+      );
+
+    it('lists every model with its context length and sends the chosen one, per conversation', async () => {
+      const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]), twoModels);
+      renderApp();
+      const select = (await screen.findByLabelText('Model for this chat')) as HTMLSelectElement;
+      expect([...select.options].map((o) => o.textContent)).toEqual([
+        'qwen3.5-4b · 8,192 tokens of context',
+        'whiterabbitneo-2.5-qwen2.5-coder-7b · 32,768 tokens of context',
+      ]);
+      expect(select.value).toBe('qwen3.5-4b');
+      expect(screen.getByText('Context: 8,192 tokens')).toBeTruthy();
+
+      fireEvent.change(select, { target: { value: 'whiterabbitneo-2.5-qwen2.5-coder-7b' } });
+      expect(screen.getByText('Context: 32,768 tokens')).toBeTruthy();
+      typeAndSend('one');
+      await screen.findByText('ok');
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+      expect(bodyOf(fetchMock, 0).model).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b');
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].model).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b');
+
+      // The choice belongs to this conversation: a new chat starts on the pick for new chats.
+      fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+      fireEvent.change(await screen.findByLabelText('Model for this chat'), { target: { value: 'qwen3.5-4b' } });
+      typeAndSend('two');
+      await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(2));
+      expect(bodyOf(fetchMock, 1).model).toBe('qwen3.5-4b');
+      fireEvent.click(screen.getByRole('button', { name: /^one/ }));
+      await waitFor(() => expect((screen.getByLabelText('Model for this chat') as HTMLSelectElement).value).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b'));
+    });
+
+    it('shows no picker and sends no model for a server that lists one model', async () => {
+      const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      expect(screen.queryByLabelText('Model for this chat')).toBeNull();
+      typeAndSend('hi');
+      await screen.findByText('ok');
+      expect(bodyOf(fetchMock, 0)).not.toHaveProperty('model');
+    });
+
+    it('is in Spanish and is disabled while a reply streams', async () => {
+      mockFetch((_url, init) => heldReply(init), twoModels);
+      renderApp(['es-ES']);
+      const select = (await screen.findByLabelText('Modelo de este chat')) as HTMLSelectElement;
+      expect(select.options[1]?.textContent).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b · 32.768 tokens de contexto');
+      const box = screen.getByLabelText('Mensaje');
+      fireEvent.change(box, { target: { value: 'hola' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await screen.findByText('partial');
+      expect(select.disabled).toBe(true);
+    });
+  });
+
+  describe('compacting', () => {
+    const SUMMARY_TEXT = 'The user asked about apples and pears.';
+    const PAD = ' lorem ipsum dolor sit amet';
+    /** A saved chat of `count` turns; the second reply was stopped part way. */
+    function seed(count: number, model: string | null = null) {
+      const messages = Array.from({ length: count }, (_, i) => [
+        { id: `u${i}`, role: 'user', content: `question ${i}${PAD}`, typed: `question ${i}${PAD}`, attachmentNames: [], createdAt: 1 },
+        { id: `a${i}`, role: 'assistant', content: i === 1 ? `partial answ${PAD}` : `answer ${i}${PAD}`, reasoning: '', status: i === 1 ? 'stopped' : 'done', error: null, stats: null, createdAt: 1 },
+      ]).flat();
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, activeId: 'c', settings: {}, conversations: [{ id: 'c', title: 'Fruit', createdAt: 1, updatedAt: 1, model, messages }] }),
+      );
+    }
+    const isSummary = (init?: RequestInit) => String(JSON.parse(String(init?.body)).messages[0].content).startsWith('You compress');
+    const reply = (init: RequestInit | undefined, text = 'ok') =>
+      isSummary(init) ? sseResponse([delta(SUMMARY_TEXT), FINISH, DONE]) : sseResponse([delta(text), FINISH, DONE]);
+
+    it('the Compact button replaces older turns with a summary, keeps the last two turns and the old messages on screen', async () => {
+      seed(4);
+      const fetchMock = mockFetch((_u, init) => reply(init));
+      renderApp();
+      fireEvent.click(await screen.findByRole('button', { name: 'Compact chat' }));
+      expect(await screen.findByText('Compacted: 4 earlier messages replaced by a summary')).toBeTruthy();
+      const summaryBody = bodyOf(fetchMock, 0);
+      expect(summaryBody.messages[1].content).toContain('question 0');
+      // The stopped partial reply is in what was summarised, marked as stopped, never dropped silently.
+      expect(summaryBody.messages[1].content).toContain('partial answ lorem');
+      expect(summaryBody.messages[1].content).toContain('[this reply was stopped by the user before it ended]');
+      // Nothing is removed from the saved chat.
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
+      expect(saved).toHaveLength(9);
+      expect(saved[4]).toMatchObject({ role: 'summary', content: SUMMARY_TEXT, covered: 4, auto: false });
+      expect(screen.getByText(`question 0${PAD}`)).toBeTruthy();
+
+      typeAndSend('next');
+      await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(2));
+      const body = bodyOf(fetchMock, 1);
+      expect(body.messages[0]).toMatchObject({ role: 'system' });
+      expect(body.messages[0].content).toContain(SUMMARY_TEXT);
+      expect(body.messages.slice(1).map((m: { content: string }) => m.content)).toEqual([`question 2${PAD}`, `answer 2${PAD}`, `question 3${PAD}`, `answer 3${PAD}`, 'next']);
+    });
+
+    it('is off when there is little to compact or a reply is streaming', async () => {
+      seed(2);
+      mockFetch((_u, init) => heldReply(init));
+      renderApp();
+      expect((await screen.findByRole('button', { name: 'Compact chat' })).hasAttribute('disabled')).toBe(true);
+    });
+
+    it('compacts by itself before sending when the next request would fill the context', async () => {
+      seed(4);
+      const fetchMock = mockFetch(
+        (_u, init) => reply(init, 'sure'),
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      typeAndSend('x');
+      expect(await screen.findByText('sure')).toBeTruthy();
+      const chats = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
+      expect(chats).toHaveLength(2);
+      expect(isSummary(chats[0]?.[1])).toBe(true);
+      expect(bodyOf(fetchMock, 1).messages[0].content).toContain(SUMMARY_TEXT);
+      expect(screen.getByText('Compacted: 4 earlier messages replaced by a summary')).toBeTruthy();
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
+      expect(saved.find((m: { role: string }) => m.role === 'summary')).toMatchObject({ auto: true });
+    });
+
+    it('does not compact by itself while the chat fits, or when the server gives no context length', async () => {
+      seed(4);
+      const fetchMock = mockFetch((_u, init) => reply(init, 'fine'));
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      typeAndSend('x');
+      await screen.findByText('fine');
+      expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(1);
+    });
+
+    it('keeps every message and says why when the summary fails, then still sends', async () => {
+      seed(4);
+      const fetchMock = mockFetch(
+        (_u, init) => (isSummary(init) ? sseResponse([FINISH, DONE]) : sseResponse([delta('sure'), FINISH, DONE])),
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      typeAndSend('x');
+      expect(await screen.findByText('sure')).toBeTruthy();
+      expect(screen.getByText('The chat was not compacted: The model wrote no summary.')).toBeTruthy();
+      expect(screen.queryByText(/Compacted:/)).toBeNull();
+      expect(bodyOf(fetchMock, 1).messages).toHaveLength(9);
+    });
+
+    it('stopping while it summarises leaves the chat as it was', async () => {
+      seed(4);
+      mockFetch((_u, init) => heldReply(init));
+      renderApp();
+      fireEvent.click(await screen.findByRole('button', { name: 'Compact chat' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+      await waitFor(() => expect((screen.getByRole('button', { name: 'Compact chat' }) as HTMLButtonElement).disabled).toBe(false));
+      expect(screen.queryByText(/Compacted:/)).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages).toHaveLength(8);
+    });
+
+    it('is in Spanish', async () => {
+      seed(4);
+      mockFetch((_u, init) => reply(init));
+      renderApp(['es-ES']);
+      fireEvent.click(await screen.findByRole('button', { name: 'Compactar chat' }));
+      expect(await screen.findByText('Compactado: 4 mensajes anteriores sustituidos por un resumen')).toBeTruthy();
+    });
+  });
+
+  describe('tools', () => {
+    function enableTools(maxSteps = 8) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: { tools: true, maxSteps } }));
+    }
+    const asks = (id = 'c1', expr = '6*7') => sseResponse([toolCallDelta(id, 'calculator', JSON.stringify({ expression: expr })), FINISH_TOOLS, DONE]);
+
+    it('runs the tool the model asks for, shows a collapsible trace and sends the result back', async () => {
+      enableTools();
+      let n = 0;
+      const fetchMock = mockFetch(() => (++n === 1 ? asks() : sseResponse([delta('It is 42.'), FINISH, DONE])));
+      renderApp();
+      typeAndSend('what is 6*7?');
+      expect(await screen.findByText('It is 42.')).toBeTruthy();
+      const summary = screen.getByText('Tool calls: calculator');
+      const trace = summary.closest('details') as HTMLDetailsElement;
+      expect(trace.open).toBe(false);
+      expect(within(trace).getByText('{"expression":"6*7"}')).toBeTruthy();
+      expect(within(trace).getByText('42')).toBeTruthy();
+      expect(bodyOf(fetchMock, 0)).toMatchObject({ tool_choice: 'auto', tools: [{ function: { name: 'calculator' } }, { function: { name: 'current_time' } }] });
+      expect(bodyOf(fetchMock, 1).messages.slice(-2)).toMatchObject([{ role: 'assistant', content: null, tool_calls: [{ id: 'c1' }] }, { role: 'tool', tool_call_id: 'c1', content: '42' }]);
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
+      expect(saved.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+      // The next question re-sends the whole exchange, calls and results included.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+      typeAndSend('thanks');
+      await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(3));
+      expect(bodyOf(fetchMock, 2).messages.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant', 'user']);
+    });
+
+    it('compacts between steps when the server’s own count says the context is nearly full', async () => {
+      const turns = Array.from({ length: 4 }, (_, i) => [
+        { id: `u${i}`, role: 'user', content: `q${i}`, typed: `q${i}`, attachmentNames: [], createdAt: 1 },
+        { id: `a${i}`, role: 'assistant', content: `a${i}`, reasoning: '', status: 'done', error: null, stats: null, createdAt: 1 },
+      ]).flat();
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, activeId: 'c', settings: { tools: true }, conversations: [{ id: 'c', title: 't', createdAt: 1, updatedAt: 1, model: null, messages: turns }] }),
+      );
+      const usage = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 90, completion_tokens: 5 } })}\n\n`;
+      let n = 0;
+      const fetchMock = mockFetch(
+        (_u, init) => {
+          const system = String(JSON.parse(String(init?.body)).messages[0].content);
+          if (system.startsWith('You compress')) return sseResponse([delta('SUM'), FINISH, DONE]);
+          return ++n === 1
+            ? sseResponse([toolCallDelta('c1', 'calculator', '{"expression":"6*7"}'), FINISH_TOOLS, usage, DONE])
+            : sseResponse([delta('It is 42.'), FINISH, DONE]);
+        },
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      typeAndSend('6*7?');
+      expect(await screen.findByText('It is 42.')).toBeTruthy();
+      expect(screen.getByText('Compacted: 6 earlier messages replaced by a summary')).toBeTruthy();
+      const bodies = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions')).map((c) => JSON.parse(String(c[1]?.body)));
+      expect(bodies).toHaveLength(3);
+      expect(String(bodies[1].messages[0].content)).toContain('You compress');
+      expect(String(bodies[2].messages[0].content)).toContain('SUM');
+      expect(bodies[2].messages.slice(-2).map((m: { role: string }) => m.role)).toEqual(['assistant', 'tool']);
+      expect(JSON.stringify(bodies[2].messages)).not.toContain('q0');
+    });
+
+    it('stops at the step cap with a note, and the last request forbids tool calls', async () => {
+      enableTools(2);
+      const fetchMock = mockFetch(() => asks());
+      renderApp();
+      typeAndSend('loop');
+      expect(await screen.findByText('Stopped at the limit of 2 steps; the tool calls above were not run.')).toBeTruthy();
+      const chats = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
+      expect(chats).toHaveLength(2);
+      expect(bodyOf(fetchMock, 1).tool_choice).toBe('none');
+      expect(screen.getByText('Not run')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+    });
+
+    it('can be stopped with the Stop button between the steps of a long run', async () => {
+      enableTools();
+      let n = 0;
+      mockFetch((_u, init) => (++n === 1 ? asks() : heldReply(init)));
+      renderApp();
+      typeAndSend('go');
+      await screen.findByText('partial');
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      expect(await screen.findByText('Stopped.')).toBeTruthy();
+      expect(screen.getByText('Tool calls: calculator')).toBeTruthy();
+      expect(n).toBe(2);
+    });
+
+    it('does not offer tools unless they are turned on in Settings, and the cap is set there', async () => {
+      const fetchMock = mockFetch(() => sseResponse([delta('hi'), FINISH, DONE]));
+      renderApp();
+      typeAndSend('x');
+      await screen.findByText('hi');
+      expect(bodyOf(fetchMock, 0)).not.toHaveProperty('tools');
+      fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+      const box = screen.getByLabelText('Let the model use tools') as HTMLInputElement;
+      const steps = screen.getByLabelText('Most steps per message') as HTMLInputElement;
+      expect(box.checked).toBe(false);
+      expect(steps.disabled).toBe(true);
+      fireEvent.click(box);
+      expect(steps.disabled).toBe(false);
+      expect(steps.value).toBe('8');
+      fireEvent.change(steps, { target: { value: '3' } });
+      fireEvent.change(steps, { target: { value: '99' } });
+      expect(steps.value).toBe('3');
+      await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings).toMatchObject({ tools: true, maxSteps: 3 }));
+    });
+
+    it('shows a rejected tool request in the user’s language', async () => {
+      enableTools();
+      mockFetch(() => new Response(JSON.stringify({ error: { message: 'tools must be an array', type: 'invalid_request_error', code: 'invalid_tools' } }), { status: 400 }));
+      renderApp(['es-ES']);
+      const box = screen.getByLabelText('Mensaje');
+      fireEvent.change(box, { target: { value: 'hola' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      expect((await screen.findByRole('alert')).textContent).toBe('El servidor rechazó la petición de herramientas: tools must be an array');
+    });
+
+    it('labels the trace in Spanish and has no accessibility violations', async () => {
+      enableTools();
+      let n = 0;
+      mockFetch(() => (++n === 1 ? asks() : sseResponse([delta('Son 42.'), FINISH, DONE])));
+      const { container } = renderApp(['es-ES']);
+      const box = screen.getByLabelText('Mensaje');
+      fireEvent.change(box, { target: { value: 'cuánto es' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await screen.findByText('Son 42.');
+      expect(screen.getByText('Llamadas a herramientas: calculator')).toBeTruthy();
+      expect(await axeViolations(container)).toEqual([]);
+    });
   });
 
   it('re-sends the previous answer exactly as received', async () => {

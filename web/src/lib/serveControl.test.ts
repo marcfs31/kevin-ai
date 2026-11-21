@@ -24,8 +24,8 @@ describe('parseServeOptions', () => {
   });
 
   it('accepts whiterabbitneo and passes it to the script', () => {
-    expect(parseServeOptions({ model: 'whiterabbitneo' })).toMatchObject({ model: 'whiterabbitneo' });
-    expect(serveScriptArgs({ model: 'whiterabbitneo' })).toEqual(['--id', 'whiterabbitneo']);
+    expect(parseServeOptions({ model: 'whiterabbitneo', ctx: 8192 })).toMatchObject({ model: 'whiterabbitneo', ctx: 8192 });
+    expect(serveScriptArgs({ model: 'whiterabbitneo', ctx: 8192 })).toEqual(['--id', 'whiterabbitneo', '--ctx', '8192']);
   });
 
   it('rejects unknown models and bad integers', () => {

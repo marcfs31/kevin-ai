@@ -64,3 +64,25 @@ describe('parsePayload', () => {
     expect(parsePayload('{"choices":[],"usage":{}}')).toEqual([]);
   });
 });
+
+describe('tool calls in a stream', () => {
+  const payload = (calls: unknown[]) => JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: calls }, finish_reason: null }] });
+
+  it('reads a whole call and a call streamed in pieces', () => {
+    expect(parsePayload(payload([{ index: 0, id: 'c1', type: 'function', function: { name: 'calculator', arguments: '{"a":1}' } }]))).toEqual([
+      { kind: 'tool_call', index: 0, id: 'c1', name: 'calculator', arguments: '{"a":1}' },
+    ]);
+    expect(parsePayload(payload([{ index: 2, function: { arguments: '"x"}' } }]))).toEqual([
+      { kind: 'tool_call', index: 2, id: null, name: null, arguments: '"x"}' },
+    ]);
+  });
+
+  it('numbers calls by position when the server gives no index, and skips junk', () => {
+    const events = parsePayload(payload([{ id: 'a', function: { name: 'f' } }, 'junk', { id: 'b', function: { name: 'g' } }]));
+    expect(events.map((e) => (e.kind === 'tool_call' ? [e.index, e.id] : null))).toEqual([[0, 'a'], [2, 'b']]);
+  });
+
+  it('keeps the finish reason of a tool turn', () => {
+    expect(parsePayload(JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }))).toEqual([{ kind: 'finish', reason: 'tool_calls' }]);
+  });
+});

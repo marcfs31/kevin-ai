@@ -14,6 +14,16 @@ export interface Stats {
   promptTokens: number | null;
   cachedTokens: number | null;
   completionTokens: number | null;
+  /** What was counted locally, kept when the server sent no usage. */
+  promptEstimate: number | null;
+  completionEstimate: number | null;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** The JSON text the model wrote, kept as received. */
+  arguments: string;
 }
 
 export type ReplyStatus = 'done' | 'stopped' | 'error';
@@ -38,16 +48,60 @@ export interface AssistantMessage {
   status: ReplyStatus;
   error: { code: string | null; message: string; status: number } | null;
   stats: Stats | null;
+  /** Tools the model asked for in this reply, if any. */
+  toolCalls?: ToolCall[];
+  /** Set to the step cap when the loop ended here with calls left unrun. */
+  stepLimit?: number;
   createdAt: number;
 }
 
-export type Message = UserMessage | AssistantMessage;
+/** The result of one tool call, sent back to the model right after the reply that asked for it. */
+export interface ToolMessage {
+  id: string;
+  role: 'tool';
+  toolCallId: string;
+  name: string;
+  content: string;
+  isError: boolean;
+  createdAt: number;
+}
+
+/** Stands in, for the model, for the `covered` messages just before it. Those stay in the chat, shown as compacted. */
+export interface SummaryMessage {
+  id: string;
+  role: 'summary';
+  content: string;
+  covered: number;
+  /** Made by the automatic trigger rather than the Compact button. */
+  auto: boolean;
+  createdAt: number;
+}
+
+export type Message = UserMessage | AssistantMessage | SummaryMessage | ToolMessage;
+
+/** The tool messages that directly follow the assistant message at `index`. */
+export function toolResults(messages: Message[], index: number): ToolMessage[] {
+  const out: ToolMessage[] = [];
+  for (let i = index + 1; i < messages.length; i++) {
+    const m = messages[i];
+    if (m?.role !== 'tool') break;
+    out.push(m);
+  }
+  return out;
+}
+
+export function lastSummaryIndex(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) if (messages[i]?.role === 'summary') return i;
+  return -1;
+}
 
 export interface Conversation {
   id: string;
   title: string;
   createdAt: number;
   updatedAt: number;
+  /** The model this conversation is sent to; null = the server's first. */
+  model: string | null;
   messages: Message[];
 }
 
@@ -59,6 +113,10 @@ export interface Settings {
   maxTokens: number | null;
   imagePreset: ImagePreset;
   locale: LocaleSetting;
+  /** Offer the model its tools and run what it calls. Off until the user turns it on. */
+  tools: boolean;
+  /** Most model calls for one message when tools are on; the last one may not call tools. */
+  maxSteps: number;
 }
 
 export interface State {
@@ -74,7 +132,11 @@ export const DEFAULT_SETTINGS: Settings = {
   maxTokens: null,
   imagePreset: 512,
   locale: 'auto',
+  tools: false,
+  maxSteps: 8,
 };
+
+export const MAX_STEPS_LIMIT = 20;
 
 export function emptyState(): State {
   return { version: SCHEMA_VERSION, conversations: [], activeId: null, settings: { ...DEFAULT_SETTINGS } };
@@ -107,7 +169,22 @@ function stats(v: unknown): Stats | null {
     promptTokens: numOrNull(o.promptTokens),
     cachedTokens: numOrNull(o.cachedTokens),
     completionTokens: numOrNull(o.completionTokens),
+    promptEstimate: numOrNull(o.promptEstimate),
+    completionEstimate: numOrNull(o.completionEstimate),
   };
+}
+
+function toolFields(o: Record<string, unknown>): Pick<AssistantMessage, 'toolCalls' | 'stepLimit'> {
+  const out: Pick<AssistantMessage, 'toolCalls' | 'stepLimit'> = {};
+  if (Array.isArray(o.toolCalls)) {
+    const calls = o.toolCalls.flatMap((c): ToolCall[] => {
+      const x = obj(c);
+      return x && typeof x.id === 'string' && typeof x.name === 'string' ? [{ id: x.id, name: x.name, arguments: str(x.arguments) }] : [];
+    });
+    if (calls.length) out.toolCalls = calls;
+  }
+  if (typeof o.stepLimit === 'number' && o.stepLimit >= 1) out.stepLimit = Math.floor(o.stepLimit);
+  return out;
 }
 
 function message(v: unknown): Message | null {
@@ -136,8 +213,16 @@ function message(v: unknown): Message | null {
       status,
       error: e ? { code: typeof e.code === 'string' ? e.code : null, message: str(e.message), status: time(e.status) } : null,
       stats: stats(o.stats),
+      ...toolFields(o),
       createdAt: time(o.createdAt),
     };
+  }
+  if (o.role === 'tool' && typeof o.toolCallId === 'string') {
+    return { id: o.id, role: 'tool', toolCallId: o.toolCallId, name: str(o.name), content: str(o.content), isError: o.isError === true, createdAt: time(o.createdAt) };
+  }
+  if (o.role === 'summary' && typeof o.content === 'string' && o.content.trim()) {
+    const covered = numOrNull(o.covered);
+    return { id: o.id, role: 'summary', content: o.content, covered: covered !== null && covered >= 0 ? Math.floor(covered) : 0, auto: o.auto === true, createdAt: time(o.createdAt) };
   }
   return null;
 }
@@ -146,7 +231,8 @@ function conversation(v: unknown): Conversation | null {
   const o = obj(v);
   if (!o || typeof o.id !== 'string') return null;
   const messages = Array.isArray(o.messages) ? o.messages.map(message).filter((m): m is Message => m !== null) : [];
-  return { id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), messages };
+  const model = typeof o.model === 'string' && o.model ? o.model : null;
+  return { id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), model, messages };
 }
 
 function settings(v: unknown): Settings {
@@ -159,6 +245,8 @@ function settings(v: unknown): Settings {
     maxTokens: typeof m === 'number' && Number.isInteger(m) && m > 0 ? m : null,
     imagePreset: (IMAGE_PRESETS as readonly unknown[]).includes(o.imagePreset) ? (o.imagePreset as ImagePreset) : DEFAULT_SETTINGS.imagePreset,
     locale: o.locale === 'en' || o.locale === 'es' ? o.locale : 'auto',
+    tools: o.tools === true,
+    maxSteps: typeof o.maxSteps === 'number' && Number.isInteger(o.maxSteps) && o.maxSteps >= 1 && o.maxSteps <= MAX_STEPS_LIMIT ? o.maxSteps : DEFAULT_SETTINGS.maxSteps,
   };
 }
 

@@ -255,7 +255,8 @@ writes `<bos>`). 24 `added_tokens` (all special, `normalized` false) are matched
 raw text first. Decoder: `▁` -> space, byte-fallback tokens reassembled to UTF-8, no
 strip. Must handle long single words without quadratic blow-up on a 2k-token prompt.
 
-**Chat template** (`chat_template.jinja`, text only, no tools):
+**Chat template** (`chat_template.jinja`; text here, tool calling is described under
+`lm-serve` in the README and implemented in `src/chat/lm_template.c` / `lm_toolfmt.c`):
 `<bos>` + [`<|turn>system\n` + trim(system) + `<turn|>\n`] + per message
 `<|turn>{user|model}\n` + trim(content) + `<turn|>\n`; generation prompt
 `<|turn>model\n`. Thinking off by default (`enable_thinking` false; on adds
@@ -375,8 +376,9 @@ happens when the input already has the target size, which is what the web client
   `embedding_projection` 768->2560 without bias. Not multiplied by the text embedding scale.
 - **Into the LM.** `<|image>` (255999), `<|image|>` (258880) x N, `<image|>` (258882); the
   template writes `<|image|>` once and the processor expands it. At image positions the
-  per-layer input uses the pad token (id 0) for the table lookup and the pad token's scaled
-  embedding for the projection part (`Gemma4Model.forward`). Positions stay sequential, and
+  per-layer input uses the pad token (id 0) for the table lookup, and the projection part
+  projects the vision row itself: `Gemma4Model.forward` scatters the vision features into
+  `inputs_embeds` before `project_per_layer_inputs`. Positions stay sequential, and
   attention stays causal (`use_bidirectional_attention` is null for E4B; the config check
   already refuses a non-null value).
 

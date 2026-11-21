@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DONE, FINISH, USAGE, delta, sseResponse } from '../test/helpers';
-import { ApiError, parseModels, requestBody, streamChat } from './api';
+import { ApiError, infoForModel, parseModels, requestBody, streamChat } from './api';
 import type { StreamEvent } from './sse';
 
 describe('parseModels', () => {
   it('treats a server without capabilities as vision unknown', () => {
     expect(parseModels({ data: [{ id: 'm' }] })).toEqual({
       model: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null,
+      models: [{ id: 'm', contextLength: null, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null }],
     });
   });
 
@@ -28,11 +29,45 @@ describe('parseModels', () => {
   });
 });
 
+describe('model list', () => {
+  const two = parseModels({
+    data: [
+      { id: 'qwen', context_length: 8192, capabilities: { vision: { status: 'ok', tokens_per_image: 280 } } },
+      { id: 'rabbit', context_length: 32768 },
+      { id: '' },
+      'junk',
+    ],
+  });
+
+  it('keeps every named model with its own context length and vision', () => {
+    expect(two?.models.map((m) => [m.id, m.contextLength, m.vision])).toEqual([['qwen', 8192, 'ok'], ['rabbit', 32768, 'unknown']]);
+    expect(two).toMatchObject({ model: 'qwen', contextLength: 8192 });
+  });
+
+  it('answers with the chosen model’s figures, and the first model for an unknown choice', () => {
+    expect(infoForModel(two, 'rabbit')).toMatchObject({ model: 'rabbit', contextLength: 32768, vision: 'unknown', tokensPerImage: null });
+    expect(infoForModel(two, 'gone')).toMatchObject({ model: 'qwen', contextLength: 8192 });
+    expect(infoForModel(two, null)?.model).toBe('qwen');
+    expect(infoForModel(null, 'rabbit')).toBeNull();
+  });
+});
+
 describe('requestBody', () => {
   it('asks for a stream with usage and leaves max_tokens out when unset', () => {
     const body = JSON.parse(requestBody({ messages: [{ role: 'user', content: 'hi' }], temperature: 0.7, maxTokens: null }));
     expect(body).toEqual({ messages: [{ role: 'user', content: 'hi' }], stream: true, stream_options: { include_usage: true }, temperature: 0.7 });
     expect(JSON.parse(requestBody({ messages: [], temperature: 0, maxTokens: 64 })).max_tokens).toBe(64);
+  });
+});
+
+describe('requestBody with tools', () => {
+  const tools = [{ type: 'function' as const, function: { name: 'f', description: 'd', parameters: { type: 'object' } } }];
+
+  it('sends tools and the choice only when tools are given', () => {
+    const base = { messages: [], temperature: 0, maxTokens: null };
+    expect(JSON.parse(requestBody({ ...base, tools, toolChoice: 'none' }))).toMatchObject({ tools, tool_choice: 'none' });
+    expect(JSON.parse(requestBody({ ...base, tools: [], toolChoice: 'auto' }))).not.toHaveProperty('tool_choice');
+    expect(JSON.parse(requestBody(base))).not.toHaveProperty('tools');
   });
 });
 
