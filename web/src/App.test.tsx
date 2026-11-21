@@ -346,6 +346,23 @@ describe('App', () => {
       expect(bodyOf(fetchMock, 1).messages).toHaveLength(9);
     });
 
+    it('keeps the failed-compaction banner and its Retry with the chat that failed', async () => {
+      seed(4);
+      mockFetch(
+        (_u, init) => (isSummary(init) ? sseResponse([FINISH, DONE]) : sseResponse([delta('sure'), FINISH, DONE])),
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      typeAndSend('x');
+      await screen.findByText('The chat was not compacted: The model wrote no summary.');
+      await screen.findByText('sure');
+      fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+      expect(screen.queryByText(/The chat was not compacted/)).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^Fruit/ }));
+      expect(screen.getByText(/The chat was not compacted/)).toBeTruthy();
+    });
+
     it('does not compact by itself when Auto compact is off, but the button still does, and the choice is kept', async () => {
       seed(4);
       const fetchMock = mockFetch(

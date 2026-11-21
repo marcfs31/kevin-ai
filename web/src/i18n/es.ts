@@ -91,7 +91,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
 
   'compact.button': 'Compactar chat',
   'compact.group': 'Compactación',
-  'compact.auto': 'Compactar solo',
+  'compact.auto': 'Compactar automáticamente',
   'compact.hintAuto': 'Automática: cuando el chat llega al {at}% del contexto, los mensajes antiguos se sustituyen por un resumen que escribe el modelo. Los dos últimos turnos se quedan tal cual y los mensajes antiguos siguen en pantalla. El botón Compactar chat hace lo mismo ahora.',
   'compact.hintManual': 'Manual: no se resume nada hasta que pulses Compactar chat, y un mensaje que ya no cabe se rechaza. Los dos últimos turnos se quedan tal cual y los mensajes antiguos siguen en pantalla.',
   'compact.running': 'Resumiendo los mensajes anteriores…',
