@@ -22,6 +22,12 @@ export function estimateWaitSeconds(tokens: number): number {
   return tokens / PROMPT_TOKENS_PER_SECOND;
 }
 
+/** Whole minutes and leftover seconds for an ETA shown as "M min S s". */
+export function etaParts(seconds: number): { m: number; s: number } {
+  const n = Math.max(0, Math.round(seconds));
+  return { m: Math.floor(n / 60), s: n % 60 };
+}
+
 export type Overflow = { kind: 'ok' } | { kind: 'overflow'; tokens: number; limit: number } | { kind: 'unknown' };
 
 /** Whether a prompt of `tokens` fits the server's context; unknown when it does not say. */

@@ -157,6 +157,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'message.assistant': 'Asistente',
   'message.thinking': 'Razonamiento',
   'message.readingPrompt': 'Leyendo la petición… {s} s',
+  'message.readingPromptEta': 'Leyendo la petición… {elapsed} s · quedan unos {m} min {s} s',
   'message.live': '{rate} tokens/s',
   'message.waiting': 'Esperando la respuesta…',
   'message.stopped': 'Detenido.',

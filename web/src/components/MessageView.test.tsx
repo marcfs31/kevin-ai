@@ -61,6 +61,34 @@ describe('MessageView delete and regenerate', () => {
   });
 });
 
+
+describe('MessageView reading ETA', () => {
+  it('shows minutes and seconds left while reading the prompt', () => {
+    render(
+      <I18nProvider locale="en">
+        <MessageView
+          m={assistant({ content: '' })}
+          live={{ startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate: 1440, usage: null }}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByText(/Reading the prompt… .+ · about 2 min 0 s left/)).toBeTruthy();
+  });
+
+  it('drops the ETA once the estimate has run out', () => {
+    render(
+      <I18nProvider locale="en">
+        <MessageView
+          m={assistant({ content: '' })}
+          live={{ startedAt: performance.now() - 130_000, firstAt: null, chunks: 0, promptEstimate: 1440, usage: null }}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByText(/^Reading the prompt…/)).toBeTruthy();
+    expect(screen.queryByText(/left/)).toBeNull();
+  });
+});
+
 describe('MessageView user images', () => {
   it('shows data-URL image previews with an accessible label', () => {
     const content = [
