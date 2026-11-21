@@ -80,6 +80,17 @@ describe('resetServer', () => {
   });
 });
 
+describe('requestBody thinking', () => {
+  const base = { messages: [], temperature: 0.7, maxTokens: null };
+
+  it('sends the template switch only when the effort chose one', () => {
+    expect(JSON.parse(requestBody({ ...base, thinking: false })).chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(JSON.parse(requestBody({ ...base, thinking: true })).chat_template_kwargs).toEqual({ enable_thinking: true });
+    // NEGATIVE: no choice, no field
+    expect('chat_template_kwargs' in JSON.parse(requestBody(base))).toBe(false);
+  });
+});
+
 describe('requestBody', () => {
   it('asks for a stream with usage and leaves max_tokens out when unset', () => {
     const body = JSON.parse(requestBody({ messages: [{ role: 'user', content: 'hi' }], temperature: 0.7, maxTokens: null }));

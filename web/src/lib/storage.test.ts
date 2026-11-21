@@ -1,6 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, emptyState, loadState, migrate, saveState, truncateFrom, type Message } from './storage';
 
+describe('effort and speed per conversation', () => {
+  it('load with the middle defaults when absent or not a known value, and keep a valid pair', () => {
+    const state = migrate({
+      version: 1,
+      conversations: [
+        { id: 'a', messages: [] },
+        { id: 'b', effort: 'high', speed: 'fast', messages: [] },
+        { id: 'c', effort: 'max', speed: 7, messages: [] },
+      ],
+    });
+    expect(state?.conversations.map((c) => [c.effort, c.speed])).toEqual([['medium', 'balanced'], ['high', 'fast'], ['medium', 'balanced']]);
+  });
+});
+
 describe('migrate', () => {
   it('loads a document missing newer fields with their defaults', () => {
     const state = migrate({

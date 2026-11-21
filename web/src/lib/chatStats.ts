@@ -49,7 +49,7 @@ export interface ContextBar {
 
 /** Null for an empty chat. While a reply streams (`live`) the window is what that request holds:
  * its prompt already contains the whole chat, so it replaces the figure taken from finished replies. */
-export function contextBar(messages: Message[], systemPrompt: string, info: ServerInfo | null, live: Count | null = null): ContextBar | null {
+export function contextBar(messages: Message[], systemPrompt: string, info: ServerInfo | null, live: Count | null = null, autoAt: number = AUTO_RATIO): ContextBar | null {
   if (messages.length === 0) return null;
   const use = live
     ? { prompt: live.read.n, reply: live.written.n, estimated: live.read.estimated || live.written.estimated }
@@ -62,7 +62,7 @@ export function contextBar(messages: Message[], systemPrompt: string, info: Serv
     free: limit === null ? null : Math.max(0, limit - used),
     limit,
     share: limit === null ? null : used / limit,
-    autoAt: AUTO_RATIO,
+    autoAt,
     estimated: use.estimated,
   };
 }

@@ -50,6 +50,8 @@ export interface ChatRequest {
   tools?: WireTool[];
   /** 'none' keeps the tools in the prompt (so the server's cache holds) but forbids calling them. */
   toolChoice?: 'auto' | 'none';
+  /** The chat template's enable_thinking, when the effort says so; a server without it ignores the field. */
+  thinking?: boolean;
 }
 
 /** An HTTP or stream failure. status 0 means the server could not be reached. */
@@ -166,6 +168,7 @@ export function requestBody(req: ChatRequest): string {
   };
   if (req.maxTokens !== null) body.max_tokens = req.maxTokens;
   if (req.model) body.model = req.model;
+  if (req.thinking !== undefined) body.chat_template_kwargs = { enable_thinking: req.thinking };
   if (req.tools?.length) {
     body.tools = req.tools;
     if (req.toolChoice) body.tool_choice = req.toolChoice;

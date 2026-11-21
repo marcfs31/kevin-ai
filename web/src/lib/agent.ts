@@ -30,6 +30,11 @@ export interface AgentOptions {
   settings: Settings;
   /** Sent as `model` when the server lists several. */
   model: string | null;
+  /** The reply cap and thinking switch the effort chose; absent = the settings' cap and the server's own thinking. */
+  maxTokens?: number | null;
+  thinking?: boolean;
+  /** Share of the window at which the chat is compacted between steps (the speed's); absent = the default. */
+  compactAt?: number;
   info: ServerInfo | null;
   signal: AbortSignal;
   stream: StreamFn;
@@ -59,7 +64,8 @@ async function streamReply(o: AgentOptions, wire: ReturnType<typeof toWire>, mes
       {
         messages: wire,
         temperature: o.settings.temperature,
-        maxTokens: o.settings.maxTokens,
+        maxTokens: o.maxTokens === undefined ? o.settings.maxTokens : o.maxTokens,
+        thinking: o.thinking,
         model: o.model,
         tools: tools ? toolDefinitions() : undefined,
         // On the last step the tools stay in the prompt but the model must answer in text.
@@ -132,7 +138,7 @@ export async function runAgent(o: AgentOptions): Promise<void> {
       commit({ ...message, status: 'stopped' });
       return;
     }
-    if (step > 1 && o.compact && shouldCompact(history, o.settings.systemPrompt, 0, o.info)) {
+    if (step > 1 && o.compact && shouldCompact(history, o.settings.systemPrompt, 0, o.info, o.compactAt)) {
       const plan = planCompaction(history);
       if (plan) history = (await o.compact(history, plan)) ?? history;
     }

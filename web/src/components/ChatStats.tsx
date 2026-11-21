@@ -15,10 +15,10 @@ function Box({ kind, label, value }: { kind: 'prompt' | 'reply' | 'free' | 'plai
 
 /** "This chat": the context window as one bar of coloured boxes with their numbers, and the
  * chat's totals as boxes under it. Every figure is also written out, so colour is never the only cue. */
-export function ChatStats({ messages, systemPrompt, autoCompact, info, live }: { messages: Message[]; systemPrompt: string; autoCompact: boolean; info: ServerInfo | null; live: Count | null }) {
+export function ChatStats({ messages, systemPrompt, autoCompact, compactAt, info, live }: { messages: Message[]; systemPrompt: string; autoCompact: boolean; compactAt: number; info: ServerInfo | null; live: Count | null }) {
   const { t, num } = useI18n();
   const figures = chatFigures(messages, live);
-  const bar = contextBar(messages, systemPrompt, info, live);
+  const bar = contextBar(messages, systemPrompt, info, live, compactAt);
   if (!figures || !bar) return null;
   const f = (x: Figure) => `${x.estimated ? '≈' : ''}${num(x.n)}`;
   const approx = bar.estimated ? '≈' : '';

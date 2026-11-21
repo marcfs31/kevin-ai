@@ -70,6 +70,15 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   Stop (or Esc) aborts the
   request; the server stops when the client disconnects. A reply that ends without a finish
   reason is shown as cut short, never as complete.
+- **Effort and speed.** Two selects beside the model picker, saved with each chat. Effort: Low
+  answers without thinking and at most 512 tokens (never more than your Settings cap), Medium
+  without thinking at your length, High thinks first (`chat_template_kwargs.enable_thinking`, sent
+  with every request; llama-server honours it, lm-serve ignores it and thinks only if started with
+  `--think`) and may write up to 4,096 tokens or your cap if larger. Speed: Fast sends images at
+  512 px and compacts at 50% of the window, Balanced uses your Settings, Thorough sends 1,024 px
+  images and compacts at 90%. Choosing a speed also sets the effort it starts from (Low, Medium,
+  High); the effort can then be changed on its own. Before its first message a new chat starts
+  from the last pick.
 - **Redirect.** While a reply streams in the open chat, type a new message and press Redirect (or
   Enter): the reply stops where it is, is kept and marked stopped, and the new message is sent
   right after it with everything already written, so the model carries on from there. Not offered

@@ -3,6 +3,7 @@ import { Composer } from './components/Composer';
 import { MessageView, errorText } from './components/MessageView';
 import { ChatStats } from './components/ChatStats';
 import { ChatModelSelect } from './components/ChatModelSelect';
+import { ModeSelects } from './components/ModeSelects';
 import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
 import { SettingsModal } from './components/SettingsModal';
@@ -11,8 +12,9 @@ import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
-import { AUTO_RATIO, applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
+import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
+import { DEFAULT_EFFORT, DEFAULT_SPEED, SPEED_EFFORT, resolveModes, type Effort, type Speed } from './lib/modes';
 import { assess } from './lib/request';
 import { estimateWireTokens, liveCount } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
@@ -87,6 +89,12 @@ function Chat({ state, setState, storage, notice }: {
   // The model is per conversation; before the first message it is the pick for the next new one.
   const [draftModel, setDraftModel] = useState<string | null>(null);
   const modelId = active ? active.model : draftModel;
+  // Effort and speed are per chat like the model; before the first message they are the pick for the next new chat.
+  const [draftEffort, setDraftEffort] = useState<Effort>(DEFAULT_EFFORT);
+  const [draftSpeed, setDraftSpeed] = useState<Speed>(DEFAULT_SPEED);
+  const effort = active ? active.effort : draftEffort;
+  const speed = active ? active.speed : draftSpeed;
+  const modes = resolveModes(effort, speed, state.settings);
   // Context window and vision follow the model chosen, so everything below reads `info`.
   const info = infoForModel(serverInfo, modelId);
   const requestModel = serverInfo && serverInfo.models.length > 1 ? (info?.model ?? null) : null;
@@ -146,11 +154,11 @@ function Chat({ state, setState, storage, notice }: {
       const content = buildUserContent(typed, attachments, info?.vision === 'ok');
       const history = active?.messages ?? [];
       const sent = state.settings.autoCompact
-        ? projectCompaction(history, state.settings.systemPrompt, estimateWireTokens([{ role: 'user', content }], info), info)
+        ? projectCompaction(history, state.settings.systemPrompt, estimateWireTokens([{ role: 'user', content }], info), info, modes.compactAt)
         : history;
       return assess(state.settings, sent, typed, attachments, content, info);
     },
-    [state.settings, active?.messages, info],
+    [state.settings, active?.messages, info, modes.compactAt],
   );
 
   // Asks the model for a summary of the plan's span and inserts it. Returns the new history, or
@@ -206,7 +214,7 @@ function Chat({ state, setState, storage, notice }: {
     setCompactError(null);
     const auto = state.settings.autoCompact;
     try {
-      if (auto && shouldCompact(prior, state.settings.systemPrompt, newTokens, info)) {
+      if (auto && shouldCompact(prior, state.settings.systemPrompt, newTokens, info, modes.compactAt)) {
         const plan = planCompaction(prior);
         if (plan) history = (await compact(convId, history, plan, true, controller.signal)) ?? history;
       }
@@ -215,6 +223,9 @@ function Chat({ state, setState, storage, notice }: {
         history,
         settings: state.settings,
         model: requestModel,
+        maxTokens: modes.maxTokens,
+        thinking: modes.thinking,
+        compactAt: modes.compactAt,
         info,
         signal: controller.signal,
         stream: streamChat,
@@ -292,7 +303,7 @@ function Chat({ state, setState, storage, notice }: {
     };
     let conv = target;
     if (!conv) {
-      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, messages: [] };
+      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, effort, speed, messages: [] };
       const created = conv;
       setState((s) => ({ ...s, conversations: [...s.conversations, created], activeId: created.id }));
     }
@@ -399,6 +410,19 @@ function Chat({ state, setState, storage, notice }: {
               onChange={(id) => (active ? updateConv(active.id, (c) => ({ ...c, model: id })) : setDraftModel(id))}
             />
           )}
+          <ModeSelects
+            effort={effort}
+            speed={speed}
+            disabled={busy}
+            onEffort={(e) => (active ? updateConv(active.id, (c) => ({ ...c, effort: e })) : setDraftEffort(e))}
+            onSpeed={(sp) => {
+              if (active) updateConv(active.id, (c) => ({ ...c, speed: sp, effort: SPEED_EFFORT[sp] }));
+              else {
+                setDraftSpeed(sp);
+                setDraftEffort(SPEED_EFFORT[sp]);
+              }
+            }}
+          />
           {info?.contextLength && <span>{t('server.context', { n: info.contextLength })}</span>}
           {server.kind === 'error' && (
             <button type="button" onClick={retryServer}>
@@ -512,6 +536,7 @@ function Chat({ state, setState, storage, notice }: {
           messages={messages}
           systemPrompt={state.settings.systemPrompt}
           autoCompact={state.settings.autoCompact}
+          compactAt={modes.compactAt}
           info={info}
           live={live && live.convId === active?.id ? liveCount(live.info.usage, live.info.promptEstimate, live.info.chunks) : null}
         />
@@ -530,7 +555,7 @@ function Chat({ state, setState, storage, notice }: {
             {t('compact.button')}
           </button>
           <span id="compact-hint" className="sr-only">
-            {state.settings.autoCompact ? t('compact.hintAuto', { at: Math.round(AUTO_RATIO * 100) }) : t('compact.hintManual')}
+            {state.settings.autoCompact ? t('compact.hintAuto', { at: Math.round(modes.compactAt * 100) }) : t('compact.hintManual')}
           </span>
         </div>
         {busy && runConv !== null && runConv !== active?.id && (
@@ -538,7 +563,7 @@ function Chat({ state, setState, storage, notice }: {
             {t('app.busyElsewhere')}
           </p>
         )}
-        <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} canRedirect={busy && runConv !== null && runConv === active?.id && !compacting && !redirecting} onRedirect={(tx, a) => void redirectNow(tx, a)} onStop={stop} inputRef={inputRef} />
+        <Composer busy={busy} info={info} imagePreset={modes.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} canRedirect={busy && runConv !== null && runConv === active?.id && !compacting && !redirecting} onRedirect={(tx, a) => void redirectNow(tx, a)} onStop={stop} inputRef={inputRef} />
       </main>
     </div>
   );
