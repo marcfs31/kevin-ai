@@ -425,6 +425,35 @@ happens when the input already has the target size, which is what the web client
    into torch; the text model was not run in torch. Not measured: peak RSS, and a described photo.
 3. Server: a photo described correctly by both models, timings and peak RSS recorded.
 
+## Phase 4: GGUF and the Qwen2 text family (WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B)
+
+Goal: run `bartowski/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-GGUF` (Apache-2.0; a Qwen2.5-Coder-7B
+fine-tune) on the 11 GB machine. Decisions, each with its reason:
+
+- **A GGUF reader, not a conversion.** The model ships as GGUF only in the form that fits the
+  machine; converting back to bf16 safetensors (15 GB) would not. `src/io/lm_gguf.c` maps the file
+  and validates header, metadata and tensor table; weights stay in the page cache, as with safetensors.
+- **Q4_K_M (4.68 GB).** On the 11 GB machine the KV cache is f32 (112 KiB per token for this model,
+  3.5 GiB at its 32k window) and decode reads every weight per token. Q6_K (6.25 GB) and Q8_0
+  (8.10 GB) leave too little for a long context and cost 1.3x / 1.7x the memory traffic per token.
+  Q4_K_M holds Q4_K and Q6_K tensors; the kernels also read Q5_K and Q8_0 so the other bartowski
+  files load.
+- **Kernels** (`src/core/lm_gguf_quant.c`): activations stay float; each block is widened to float
+  with one fused multiply-add per weight and accumulated in 32 lanes in a fixed order, so scalar and
+  AVX2 are bit-identical, a token's result does not depend on the batch it is in, and
+  `lm_prefill` equals `lm_feed` bit for bit (the contract of the other families).
+- **Family** (`src/model/lm_qwen2.c`): plain-weight RMSNorm, GQA with a bias on q/k/v, rotate-half
+  RoPE over the whole head, SwiGLU, untied output; no rope scaling, no qk-norm, no gate. The oracle
+  is `tools/ref_qwen2.py` (float64), reading the same GGUF bytes.
+- **Tokenizer and template**: the BPE tables come out of the GGUF (`tokenizer.ggml.*`) as the
+  document `third_party/tok.h` already loads, with the Qwen2 split (a digit is a piece; NFC first, as
+  Hugging Face does). The template is the one in the file: bare ChatML, no default system prompt.
+  Checked against the Hugging Face tokenizer of Qwen2.5-Coder-7B on a mixed corpus.
+- **Selection**: a path to a `.gguf`, or a directory with exactly one and no `config.json`.
+
+Gates: `tests/unit/test_gguf*.c`, `test_qwen2.c`, `test_tok_gguf.c`, `make gate` on
+`tests/fixtures/qwen2-tiny` (all four matrix types), `tools/test_gguf.py`.
+
 ## Later
 
 Batched prefill, the OpenAI-compatible endpoint (`bin/lm-serve`, with
