@@ -78,7 +78,8 @@ function Chat({ state, setState, storage, notice }: {
   // The chat the running reply belongs to: it can be left and come back to while it runs.
   const [runConv, setRunConv] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
-  const [compactError, setCompactError] = useState<ApiError | null>(null);
+  // Belongs to one chat: its banner and Retry show only there, so Retry never compacts another chat.
+  const [compactError, setCompactError] = useState<{ convId: string; error: ApiError } | null>(null);
   const serverInfo = server.kind === 'ok' ? server.info : null;
   const active = state.conversations.find((c) => c.id === state.activeId) ?? null;
   // The model is per conversation; before the first message it is the pick for the next new one.
@@ -161,7 +162,7 @@ function Chat({ state, setState, storage, notice }: {
       });
       if (!text.trim()) throw new ApiError(0, { message: '', code: 'summary_empty', type: null });
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === 'AbortError')) setCompactError(e instanceof ApiError ? e : new ApiError(0, null));
+      if (!(e instanceof DOMException && e.name === 'AbortError')) setCompactError({ convId, error: e instanceof ApiError ? e : new ApiError(0, null) });
       return null;
     } finally {
       setCompacting(false);
@@ -179,12 +180,14 @@ function Chat({ state, setState, storage, notice }: {
     const controller = new AbortController();
     controllerRef.current = controller;
     setBusy(true);
+    setRunConv(active.id);
     setCompactError(null);
     try {
       await compact(active.id, active.messages, plan, false, controller.signal);
     } finally {
       controllerRef.current = null;
       setBusy(false);
+      setRunConv(null);
     }
   };
 
@@ -396,7 +399,7 @@ function Chat({ state, setState, storage, notice }: {
         {forgetFailed && (
           <p className="error banner" role="alert">
             {t('error.network')}
-            <button type="button" onClick={forgetServer}>
+            <button type="button" onClick={forgetServer} disabled={busy}>
               {t('server.retry')}
             </button>
           </p>
@@ -430,9 +433,9 @@ function Chat({ state, setState, storage, notice }: {
             {t('compact.running')}
           </p>
         )}
-        {compactError && (
+        {compactError && compactError.convId === active?.id && (
           <p className="error banner" role="alert">
-            {t('compact.failed', { reason: errorText(t, compactError) })}
+            {t('compact.failed', { reason: errorText(t, compactError.error) })}
             {canCompact && (
               <button type="button" onClick={() => void compactNow()} disabled={busy}>
                 {t('server.retry')}
