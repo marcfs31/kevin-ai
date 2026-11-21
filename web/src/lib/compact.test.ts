@@ -43,7 +43,7 @@ describe('planCompaction', () => {
   });
 
   it('builds on the previous summary and only counts what came after it', () => {
-    const once = planCompaction(turns(5));
+    const once = plan(turns(5));
     const m = applyCompaction(turns(5), once, 'first', 's1', 0, false);
     expect(planCompaction(m)).toBeNull();
     const more = [...m, ...turns(3)];
