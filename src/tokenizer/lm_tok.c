@@ -17,6 +17,7 @@
 
 #include "tokenizer/lm_nfc.h"
 #include "tokenizer/lm_tok.h"
+#include "io/lm_gguf.h"
 
 enum { FAM_QWEN = 0, FAM_GEMMA = 1 };
 
@@ -176,10 +177,11 @@ static int validate(jval *root, int *nfc, int *family, char *err, size_t errlen)
             jval *pat = json_get(ps->kids[i], "pattern");
             jval *rx = pat ? json_get(pat, "Regex") : NULL;
             if (is_str(rx) && strstr(rx->str, "[\\p{L}\\p{M}]+") && !strstr(rx->str, "\\p{Lu}")) qwen = 1;
+            if (is_str(rx) && strstr(rx->str, "?\\p{L}+|\\p{N}|") && !strstr(rx->str, "\\p{M}") && !strstr(rx->str, "\\p{Lu}")) qwen = 1;
         }
     }
     if (!qwen) {
-        seterr(err, errlen, "tokenizer.json: pre_tokenizer is not the Qwen3.5 split pattern (this tokenizer only implements that one)", NULL, NULL);
+        seterr(err, errlen, "tokenizer.json: pre_tokenizer is not the Qwen3.5 or Qwen2 split pattern (this tokenizer implements those two)", NULL, NULL);
         return -1;
     }
     jval *dec = json_get(root, "decoder");
@@ -359,13 +361,152 @@ LmTok *lm_tok_open(const char *path, char *err, size_t errlen)
         if (build_gemma(t, err, errlen)) { lm_tok_close(t); return NULL; }
         return t;
     }
-    if (!t->t.qwen35) { /* unreachable after validate(); defends the tok.h contract */
-        seterr(err, errlen, "tokenizer.json: Qwen3.5 pre-tokenizer not recognised", NULL, NULL);
+    if (!t->t.qwen35 && !t->t.qwen2) { /* unreachable after validate(); defends the tok.h contract */
+        seterr(err, errlen, "tokenizer.json: Qwen pre-tokenizer not recognised", NULL, NULL);
         tok_free(&t->t);
         free(t);
         return NULL;
     }
     return t;
+}
+
+/* ---- the tokenizer of a GGUF file --------------------------------------------------------
+ * GGUF stores the BPE tables (tokenizer.ggml.tokens in the byte-level spelling, .merges as
+ * "a b" strings, .token_type: 1 normal, 3 control, 4 user defined, 5 unused) but not the
+ * pre-tokenizer regex, only its name (tokenizer.ggml.pre). The tables are written out as the
+ * tokenizer.json document tok.h already loads, with the Qwen2 split pattern and an NFC
+ * normalizer (the Hugging Face tokenizer of every Qwen2 model normalises to NFC). Control
+ * tokens become special added tokens, user-defined ones non-special added tokens; unused
+ * placeholders are dropped. */
+typedef struct { char *p; size_t n, cap; int bad; } Sb;
+
+static void sb_put(Sb *b, const char *s, size_t n)
+{
+    if (b->bad) return;
+    if (b->n + n + 1 > b->cap) {
+        size_t nc = b->cap ? b->cap * 2 : 1 << 16;
+        while (nc < b->n + n + 1) nc *= 2;
+        char *np = (char *)realloc(b->p, nc);
+        if (!np) { b->bad = 1; return; }
+        b->p = np;
+        b->cap = nc;
+    }
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+    b->p[b->n] = 0;
+}
+static void sb_lit(Sb *b, const char *s) { sb_put(b, s, strlen(s)); }
+
+static void sb_json(Sb *b, const char *s, size_t n)
+{
+    sb_put(b, "\"", 1);
+    size_t from = 0;
+    for (size_t i = 0; i < n; i++) {
+        const unsigned char c = (unsigned char)s[i];
+        if (c != '"' && c != '\\' && c >= 0x20) continue;
+        sb_put(b, s + from, i - from);
+        from = i + 1;
+        char e[8];
+        if (c == '"') sb_lit(b, "\\\"");
+        else if (c == '\\') sb_lit(b, "\\\\");
+        else { snprintf(e, sizeof e, "\\u%04x", c); sb_lit(b, e); }
+    }
+    sb_put(b, s + from, n - from);
+    sb_put(b, "\"", 1);
+}
+
+#define QWEN2_SPLIT "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\\\r\\\\n\\\\p{L}\\\\p{N}]?\\\\p{L}+|\\\\p{N}| ?[^\\\\s\\\\p{L}\\\\p{N}]+[\\\\r\\\\n]*|\\\\s*[\\\\r\\\\n]+|\\\\s+(?!\\\\S)|\\\\s+"
+
+LmTok *lm_tok_open_gguf(const LmGguf *g, char *err, size_t errlen)
+{
+    if (err && errlen) err[0] = 0;
+    LmGgufStr model = { NULL, 0 }, pre = { NULL, 0 };
+    if (lm_gguf_get_str(g, "tokenizer.ggml.model", &model) != 0 || model.n != 4 || memcmp(model.s, "gpt2", 4) != 0) {
+        seterr(err, errlen, "%s: tokenizer.ggml.model is not \"gpt2\" (byte-level BPE); only that is supported", g->path, NULL);
+        return NULL;
+    }
+    if (lm_gguf_get_str(g, "tokenizer.ggml.pre", &pre) != 0 || pre.n != 5 || memcmp(pre.s, "qwen2", 5) != 0) {
+        seterr(err, errlen, "%s: tokenizer.ggml.pre is not \"qwen2\"; only the Qwen2 split pattern is implemented", g->path, NULL);
+        return NULL;
+    }
+    int nt = 0, nm = 0, ny = 0;
+    LmGgufStr *toks = lm_gguf_str_array(g, "tokenizer.ggml.tokens", &nt, err, errlen);
+    if (!toks) return NULL;
+    LmGgufStr *merges = lm_gguf_str_array(g, "tokenizer.ggml.merges", &nm, err, errlen);
+    int64_t *types = merges ? lm_gguf_int_array(g, "tokenizer.ggml.token_type", &ny, err, errlen) : NULL;
+    if (!merges || !types) { free(toks); free(merges); free(types); return NULL; }
+    LmTok *res = NULL;
+    Sb b = { NULL, 0, 0, 0 };
+    if (ny != nt || nt < 1) {
+        seterr(err, errlen, "%s: tokenizer.ggml.token_type does not have one entry per token", g->path, NULL);
+        goto done;
+    }
+    sb_lit(&b, "{\"normalizer\":{\"type\":\"NFC\"},\"pre_tokenizer\":{\"type\":\"Sequence\",\"pretokenizers\":["
+               "{\"type\":\"Split\",\"pattern\":{\"Regex\":\"" QWEN2_SPLIT "\"},\"behavior\":\"Isolated\",\"invert\":false},"
+               "{\"type\":\"ByteLevel\",\"add_prefix_space\":false}]},\"decoder\":{\"type\":\"ByteLevel\"},"
+               "\"model\":{\"type\":\"BPE\",\"ignore_merges\":false,\"vocab\":{");
+    int first = 1;
+    for (int i = 0; i < nt; i++) {
+        if (types[i] != 1) continue;
+        if (!first) sb_lit(&b, ",");
+        first = 0;
+        sb_json(&b, toks[i].s, toks[i].n);
+        char idb[24];
+        snprintf(idb, sizeof idb, ":%d", i);
+        sb_lit(&b, idb);
+    }
+    sb_lit(&b, "},\"merges\":[");
+    for (int i = 0; i < nm; i++) {
+        if (i) sb_lit(&b, ",");
+        sb_json(&b, merges[i].s, merges[i].n);
+    }
+    sb_lit(&b, "]},\"added_tokens\":[");
+    first = 1;
+    for (int i = 0; i < nt; i++) {
+        if (types[i] != 3 && types[i] != 4) continue;
+        if (!first) sb_lit(&b, ",");
+        first = 0;
+        char idb[48];
+        snprintf(idb, sizeof idb, "{\"id\":%d,\"content\":", i);
+        sb_lit(&b, idb);
+        sb_json(&b, toks[i].s, toks[i].n);
+        sb_lit(&b, types[i] == 3 ? ",\"special\":true}" : ",\"special\":false}");
+    }
+    sb_lit(&b, "]}");
+    if (b.bad) { seterr(err, errlen, "out of memory", NULL, NULL); goto done; }
+
+    jval *root = json_parse(b.p, NULL);
+    if (!root) { seterr(err, errlen, "%s: the tokenizer tables do not form a valid document", g->path, NULL); goto done; }
+    int nfc = 0, family = FAM_QWEN;
+    const int bad = validate(root, &nfc, &family, err, errlen);
+    json_free_tree(root);
+    if (bad) goto done;
+    res = (LmTok *)calloc(1, sizeof *res);
+    if (!res) { seterr(err, errlen, "out of memory", NULL, NULL); goto done; }
+    tok_load_text(&res->t, b.p);   /* takes b.p */
+    b.p = NULL;
+    res->nfc = nfc;
+    res->family = family;
+    if (!res->t.qwen2) { seterr(err, errlen, "internal: the Qwen2 pre-tokenizer was not recognised", NULL, NULL); lm_tok_close(res); res = NULL; }
+done:
+    free(b.p);
+    free(toks); free(merges); free(types);
+    return res;
+}
+
+LmTok *lm_tok_open_model(const char *model, char *err, size_t errlen)
+{
+    char gp[4096];
+    if (lm_gguf_locate(model, gp, sizeof gp)) {
+        LmGguf g;
+        if (lm_gguf_open(&g, gp, err, errlen) != 0) return NULL;
+        LmTok *t = lm_tok_open_gguf(&g, err, errlen);
+        lm_gguf_close(&g);
+        return t;
+    }
+    char path[4096];
+    snprintf(path, sizeof path, "%s/tokenizer.json", model);
+    return lm_tok_open(path, err, errlen);
 }
 
 void lm_tok_close(LmTok *t)

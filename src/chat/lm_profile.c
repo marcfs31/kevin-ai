@@ -1,6 +1,7 @@
 /* lm_profile.c -- see lm_profile.h. Original to this repository; the config.json reading is
  * the code that used to live in src/cli/lm-chat.c. */
 #include "chat/lm_profile.h"
+#include "io/lm_gguf.h"
 
 #include <errno.h>
 #include <math.h>
@@ -65,6 +66,22 @@ static void read_eos(LmProfile *p, const jval *e)
 int lm_profile_read(const char *dir, LmProfile *p, char *err, size_t errlen)
 {
     memset(p, 0, sizeof *p);
+    char gp[4096];
+    if (lm_gguf_locate(dir, gp, sizeof gp)) {   /* a GGUF model: architecture and stop id from its metadata */
+        LmGguf g;
+        if (lm_gguf_open(&g, gp, err, errlen) != 0) return -1;
+        LmGgufStr arch;
+        uint64_t eos;
+        if (lm_gguf_get_str(&g, "general.architecture", &arch) != 0 || arch.n != 5 || memcmp(arch.s, "qwen2", 5) != 0) {
+            snprintf(err, errlen, "%s: only the qwen2 GGUF architecture is supported", gp);
+            lm_gguf_close(&g);
+            return -1;
+        }
+        snprintf(p->model_type, sizeof p->model_type, "qwen2");
+        if (lm_gguf_get_u64(&g, "tokenizer.ggml.eos_token_id", &eos) == 0 && eos < 1000000000u) p->eos[p->n_eos++] = (int)eos;
+        lm_gguf_close(&g);
+        return 0;
+    }
     jval *root = read_json(dir, "config.json", NULL, err, errlen);
     if (!root) return -1;
     jval *mt = json_get(root, "model_type");
@@ -124,7 +141,8 @@ int lm_profile_read(const char *dir, LmProfile *p, char *err, size_t errlen)
 LmTemplate *lm_profile_template(const LmProfile *p, const LmTok *tok, char *err, size_t errlen)
 {
     if (!strcmp(p->model_type, "qwen3_5")) return lm_template_qwen35(tok, p->eos, p->n_eos, err, errlen);
+    if (!strcmp(p->model_type, "qwen2")) return lm_template_chatml(tok, p->eos, p->n_eos, err, errlen);
     if (!strcmp(p->model_type, "gemma4")) return lm_template_gemma4(tok, p->eos, p->n_eos, err, errlen);
-    snprintf(err, errlen, "no chat template for model_type \"%s\" (supported: qwen3_5, gemma4)", p->model_type);
+    snprintf(err, errlen, "no chat template for model_type \"%s\" (supported: qwen3_5, gemma4, qwen2)", p->model_type);
     return NULL;
 }
