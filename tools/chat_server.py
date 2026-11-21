@@ -3,12 +3,16 @@
 
     chat_server.py [--host 127.0.0.1] [--port 8000] [--dist web/dist]
                    [--upstream http://127.0.0.1:8080] [--upstream-timeout 3600]
+                   [--tools-upstream http://127.0.0.1:8081]
 
 - GET of a file under --dist is served with its MIME type and a strict Content-Security-Policy;
   "/" is index.html. No directory listings; a path that resolves outside --dist is a 404.
 - /v1/* and /health go to --upstream unchanged, and the answer comes back as it arrives
   (server-sent events are not buffered). When the browser goes away, the upstream connection is
   closed, which stops lm-serve's reply, even while it is still reading the prompt.
+- /tools/* goes to --tools-upstream (tools/chat_tools.py, default http://127.0.0.1:8081) the same
+  way, with the browser's Origin and Sec-Fetch-Site passed on so that service can refuse a
+  cross-site request. LM_SERVE_API_KEY is for lm-serve only and is not sent there.
 - LM_SERVE_API_KEY in the environment is sent upstream as "Authorization: Bearer <key>"; it is
   never sent to the browser, and the browser's own Authorization and Cookie headers are dropped.
 - It listens on 127.0.0.1. A --host that is not loopback needs CHAT_PASSWORD in the
@@ -117,7 +121,7 @@ def response_headers(upstream):
 
 
 def is_api(path):
-    return path == "/health" or path.startswith("/v1/")
+    return path == "/health" or path.startswith("/v1/") or path.startswith("/tools/")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -226,6 +230,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return True
 
     def proxy(self):
+        tools = urllib.parse.urlsplit(self.path).path.startswith("/tools/")
+        up = self.server.tools_upstream if tools else self.server.upstream
+        if up is None:
+            self.send_json_error(404, "tools_not_configured", "no tool service is configured")
+            return
+        who = "the tool service" if tools else "lm-serve"
         length = self.headers.get("Content-Length")
         body = None
         if length is not None:
@@ -247,14 +257,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json_error(411, "length_required", "Content-Length required")
             return
 
-        up = self.server.upstream
         headers = {"Host": up.netloc}
-        for name in ("Content-Type", "Accept"):
+        for name in ("Content-Type", "Accept") + (("Origin", "Sec-Fetch-Site") if tools else ()):
             if self.headers.get(name):
                 headers[name] = self.headers[name]
         if body is not None:
             headers["Content-Length"] = str(len(body))
-        if self.server.api_key:
+        if self.server.api_key and not tools:
             headers["Authorization"] = "Bearer " + self.server.api_key
         conn_cls = http.client.HTTPSConnection if up.scheme == "https" else http.client.HTTPConnection
         # A short connect timeout, so an upstream host that is off fails fast; then the long
@@ -266,7 +275,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 conn.sock.settimeout(self.server.upstream_timeout)
                 conn.request(self.command, self.path, body=body, headers=headers)
             except OSError:
-                self.send_json_error(502, "upstream_unreachable", "lm-serve is not reachable")
+                self.send_json_error(502, "upstream_unreachable", f"{who} is not reachable")
                 return
             # lm-serve sends nothing until the first token, which can take minutes: watch the
             # browser meanwhile and hang up on lm-serve if it leaves.
@@ -284,7 +293,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 resp = conn.getresponse()
             except (OSError, http.client.HTTPException):
-                self.send_json_error(502, "upstream_failed", "lm-serve closed the connection")
+                self.send_json_error(502, "upstream_failed", f"{who} closed the connection")
                 return
             self.send_response(resp.status)
             self.common_headers()
@@ -314,13 +323,16 @@ class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, dist, upstream, password, api_key, upstream_timeout=3600):
+    def __init__(self, addr, dist, upstream, password, api_key, upstream_timeout=3600, tools_upstream=None):
         family = socket.AF_INET6 if ":" in addr[0] else socket.AF_INET
         self.address_family = family
         self.dist = os.path.realpath(dist)
         self.upstream = urllib.parse.urlsplit(upstream)
         if self.upstream.scheme not in ("http", "https") or not self.upstream.hostname:
             raise ValueError(f"bad --upstream {upstream!r}")
+        self.tools_upstream = urllib.parse.urlsplit(tools_upstream) if tools_upstream else None
+        if self.tools_upstream and (self.tools_upstream.scheme not in ("http", "https") or not self.tools_upstream.hostname):
+            raise ValueError(f"bad --tools-upstream {tools_upstream!r}")
         self.password = password
         self.api_key = api_key or None
         self.upstream_timeout = upstream_timeout
@@ -344,6 +356,8 @@ def main(argv=None, env=None):
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--dist", default=os.path.join(os.path.dirname(here), "web", "dist"))
     ap.add_argument("--upstream", default="http://127.0.0.1:8080")
+    ap.add_argument("--tools-upstream", default="http://127.0.0.1:8081",
+                    help="the tool service (tools/chat_tools.py) that /tools/* goes to")
     ap.add_argument("--upstream-timeout", type=float, default=3600.0,
                     help="seconds lm-serve may stay silent before the request fails (default 3600)")
     args = ap.parse_args(argv)
@@ -352,7 +366,7 @@ def main(argv=None, env=None):
         sys.exit(f"chat_server: {args.dist}/index.html not found: build the app first (npm run build in web/)")
     try:
         server = Server((args.host, args.port), args.dist, args.upstream, password, env.get("LM_SERVE_API_KEY"),
-                        args.upstream_timeout)
+                        args.upstream_timeout, args.tools_upstream)
     except (OSError, ValueError) as e:
         sys.exit(f"chat_server: {e}")
     host = f"[{args.host}]" if ":" in args.host else args.host
