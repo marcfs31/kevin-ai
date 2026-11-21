@@ -50,8 +50,8 @@ expand_home() { local v=$1; if [[ "$v" == '$HOME/'* ]]; then printf '%s\n' "$HOM
 REPO=$(expand_home "$1"); OPT=$(expand_home "$2"); PORT=$3; UPDATE=$4
 LOG=$HOME/logs/chat-tools.log
 mkdir -p "$(dirname "$LOG")"
-[[ -f "$REPO/tools/chat_tools.py" ]] || { echo "missing $REPO/tools/chat_tools.py (run with --update, or merge the tool service first)" >&2; exit 1; }
 if [[ "$UPDATE" == 1 ]]; then git -C "$REPO" pull --ff-only -q; fi
+[[ -f "$REPO/tools/chat_tools.py" ]] || { echo "missing $REPO/tools/chat_tools.py (run with --update, or merge the tool service first)" >&2; exit 1; }
 if pgrep -f "tools/chat_tools.py" >/dev/null; then
   pkill -f "tools/chat_tools.py" || true
   for _ in $(seq 1 50); do pgrep -f "tools/chat_tools.py" >/dev/null || break; sleep 0.2; done
