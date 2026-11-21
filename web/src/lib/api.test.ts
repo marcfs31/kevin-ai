@@ -60,6 +60,17 @@ describe('requestBody', () => {
   });
 });
 
+describe('requestBody with tools', () => {
+  const tools = [{ type: 'function' as const, function: { name: 'f', description: 'd', parameters: { type: 'object' } } }];
+
+  it('sends tools and the choice only when tools are given', () => {
+    const base = { messages: [], temperature: 0, maxTokens: null };
+    expect(JSON.parse(requestBody({ ...base, tools, toolChoice: 'none' }))).toMatchObject({ tools, tool_choice: 'none' });
+    expect(JSON.parse(requestBody({ ...base, tools: [], toolChoice: 'auto' }))).not.toHaveProperty('tool_choice');
+    expect(JSON.parse(requestBody(base))).not.toHaveProperty('tools');
+  });
+});
+
 describe('streamChat', () => {
   const req = { messages: [{ role: 'user' as const, content: 'hi' }], temperature: 0.7, maxTokens: null };
 

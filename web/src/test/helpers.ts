@@ -49,3 +49,10 @@ export async function axeViolations(node: Element): Promise<string[]> {
   const result = await axe.run(node, { rules: { 'color-contrast': { enabled: false } } });
   return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
 }
+
+/** One streamed tool call, whole, as lm-serve sends it. */
+export function toolCallDelta(id: string, name: string, args: string, index = 0): string {
+  return `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index, id, type: 'function', function: { name, arguments: args } }] }, finish_reason: null }] })}\n\n`;
+}
+
+export const FINISH_TOOLS = `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`;

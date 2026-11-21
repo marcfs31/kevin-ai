@@ -91,6 +91,14 @@ describe('transcript', () => {
     expect(text).toContain('[this reply was stopped by the user before it ended]');
   });
 
+  it('puts tool calls and results into the transcript', () => {
+    const asks = bot('', { toolCalls: [{ id: 'c', name: 'calculator', arguments: '{"expression":"6*7"}' }] });
+    const res = { id: 't', role: 'tool' as const, toolCallId: 'c', name: 'calculator', content: '42', isError: false, createdAt: 0 };
+    const text = transcript(mustPlan([user('q'), asks, res, bot('42'), ...turns(2)]), null);
+    expect(text).toContain('[called tool calculator with {"expression":"6*7"}]');
+    expect(text).toContain('Tool calculator returned:\n42');
+  });
+
   it('carries the previous summary forward', () => {
     const m = applyCompaction(turns(5), mustPlan(turns(5)), 'old facts', 's', 0, false);
     const text = transcript(mustPlan([...m, ...turns(3)]), null);

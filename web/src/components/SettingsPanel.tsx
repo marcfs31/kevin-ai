@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { LANGUAGE_NAMES, LOCALES, useI18n } from '../i18n';
 import { IMAGE_PRESETS, type ImagePreset } from '../lib/attachments';
-import type { LocaleSetting, Settings } from '../lib/storage';
+import { MAX_STEPS_LIMIT, type LocaleSetting, type Settings } from '../lib/storage';
 
 export function SettingsPanel({ settings, onChange }: { settings: Settings; onChange: (s: Settings) => void }) {
   const { t, num } = useI18n();
@@ -66,6 +66,36 @@ export function SettingsPanel({ settings, onChange }: { settings: Settings; onCh
               </option>
             ))}
           </select>
+        </div>
+        <div className="field">
+          <label className="check">
+            <input type="checkbox" checked={settings.tools} aria-describedby={`${id}-tools-hint`} onChange={(e) => set('tools', e.target.checked)} />
+            {t('settings.tools')}
+          </label>
+          <p id={`${id}-tools-hint`} className="hint">
+            {t('settings.toolsHint')}
+          </p>
+        </div>
+        <div className="field">
+          <label htmlFor={`${id}-steps`}>{t('settings.maxSteps')}</label>
+          <input
+            id={`${id}-steps`}
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={MAX_STEPS_LIMIT}
+            step={1}
+            disabled={!settings.tools}
+            value={settings.maxSteps}
+            aria-describedby={`${id}-steps-hint`}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (Number.isInteger(n) && n >= 1 && n <= MAX_STEPS_LIMIT) set('maxSteps', n);
+            }}
+          />
+          <p id={`${id}-steps-hint`} className="hint">
+            {t('settings.maxStepsHint', { max: MAX_STEPS_LIMIT })}
+          </p>
         </div>
         <div className="field">
           <label htmlFor={`${id}-lang`}>{t('settings.language')}</label>

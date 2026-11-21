@@ -2,7 +2,7 @@
 import { requestBody, type ContentPart, type ServerInfo, type WireMessage } from './api';
 import { MAX_BODY_BYTES, MAX_IMAGES, contentText, countImages, type Attachment, estimateAttachment } from './attachments';
 import { checkContext, estimateTextTokens, estimateWaitSeconds } from './estimate';
-import { lastSummaryIndex, type Message, type Settings } from './storage';
+import { lastSummaryIndex, toolResults, type Message, type Settings } from './storage';
 
 /** Heads the summary inside the system message. */
 export const SUMMARY_PREFIX = 'Summary of the earlier part of this conversation (it was compacted to save space):';
@@ -16,9 +16,25 @@ export function toWire(systemPrompt: string, history: Message[]): WireMessage[] 
   const summary = s >= 0 ? history[s] : null;
   const system = [systemPrompt.trim() ? systemPrompt : '', summary ? `${SUMMARY_PREFIX}\n${summary.content}` : ''].filter(Boolean).join('\n\n');
   if (system) out.push({ role: 'system', content: system });
-  for (const m of history.slice(s + 1)) {
+  const kept = history.slice(s + 1);
+  for (const [i, m] of kept.entries()) {
     if (m.role === 'user') out.push({ role: 'user', content: m.content });
-    else if (m.role === 'assistant' && m.content && m.status !== 'error') out.push({ role: 'assistant', content: m.content });
+    else if (m.role === 'assistant') {
+      // Calls go back only with every result: the server refuses a call that nothing answered.
+      const results = m.status === 'done' && m.toolCalls?.length ? toolResults(kept, i) : [];
+      const answered = m.toolCalls?.every((c) => results.some((r) => r.toolCallId === c.id)) === true;
+      if (m.toolCalls?.length && answered) {
+        out.push({
+          role: 'assistant',
+          content: m.content || null,
+          tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
+        });
+        for (const c of m.toolCalls) {
+          const r = results.find((x) => x.toolCallId === c.id);
+          if (r) out.push({ role: 'tool', tool_call_id: r.toolCallId, content: r.content });
+        }
+      } else if (m.content && m.status !== 'error') out.push({ role: 'assistant', content: m.content });
+    }
   }
   return out;
 }

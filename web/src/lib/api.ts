@@ -29,6 +29,11 @@ export interface WireToolCall {
   function: { name: string; arguments: string };
 }
 
+export interface WireTool {
+  type: 'function';
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
 export interface WireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | ContentPart[] | null;
@@ -42,6 +47,9 @@ export interface ChatRequest {
   maxTokens: number | null;
   /** Sent as `model` when set; left out for a server that lists a single model. */
   model?: string | null;
+  tools?: WireTool[];
+  /** 'none' keeps the tools in the prompt (so the server's cache holds) but forbids calling them. */
+  toolChoice?: 'auto' | 'none';
 }
 
 /** An HTTP or stream failure. status 0 means the server could not be reached. */
@@ -152,6 +160,10 @@ export function requestBody(req: ChatRequest): string {
   };
   if (req.maxTokens !== null) body.max_tokens = req.maxTokens;
   if (req.model) body.model = req.model;
+  if (req.tools?.length) {
+    body.tools = req.tools;
+    if (req.toolChoice) body.tool_choice = req.toolChoice;
+  }
   return JSON.stringify(body);
 }
 

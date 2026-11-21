@@ -74,14 +74,16 @@ const SUMMARY_SYSTEM =
 
 function messageLine(m: Message): string {
   if (m.role === 'summary') return `Earlier summary:\n${m.content}`;
+  if (m.role === 'tool') return `Tool ${m.name} returned${m.isError ? ' an error' : ''}:\n${m.content}`;
   if (m.role === 'user') {
     const images = countImages(m.content);
     const note = images > 0 ? `[${images} image${images === 1 ? '' : 's'} attached here; the picture itself is not available]\n` : '';
     return `User:\n${note}${contentText(m.content)}`;
   }
   // A reply that was stopped or failed part way is still part of what happened: say so, never drop it.
+  const calls = (m.toolCalls ?? []).map((c) => `[called tool ${c.name} with ${c.arguments}]`).join('\n');
   const state = m.status === 'stopped' ? '[this reply was stopped by the user before it ended]\n' : m.status === 'error' ? '[this reply failed part way]\n' : '';
-  return `Assistant:\n${state}${m.content}`;
+  return `Assistant:\n${state}${m.content}${calls ? `\n${calls}` : ''}`;
 }
 
 /** The text handed to the model, cut evenly to fit the share of the context it may use. */

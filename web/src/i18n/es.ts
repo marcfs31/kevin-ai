@@ -39,6 +39,10 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'settings.imageSizeOption': '{n} px',
   'settings.language': 'Idioma',
   'settings.languageAuto': 'Idioma del navegador',
+  'settings.tools': 'Dejar que el modelo use herramientas',
+  'settings.toolsHint': 'Ofrece una calculadora y la hora actual. El modelo puede llamarlas y leer los resultados antes de responder. Requiere un servidor con soporte de herramientas.',
+  'settings.maxSteps': 'Máximo de pasos por mensaje',
+  'settings.maxStepsHint': 'Cada paso es una respuesta del modelo. En el último paso debe responder sin herramientas. De 1 a {max}.',
 
   'serve.title': 'Modelo en el servidor',
   'serve.hint': 'Al pulsar se detiene el lm-serve actual en la máquina y se arranca el modelo elegido. El túnel local sigue activo.',
@@ -94,6 +98,13 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'compact.byAuto': 'Hecho automáticamente porque el chat casi llenaba el contexto.',
   'compact.byHand': 'Hecho con el botón Compactar.',
   'compact.earlier': 'Compactado',
+
+  'tools.trace': 'Llamadas a herramientas: {names}',
+  'tools.arguments': 'Argumentos',
+  'tools.result': 'Resultado',
+  'tools.resultError': 'Resultado (error)',
+  'tools.notRun': 'No ejecutada',
+  'tools.stepLimit': 'Detenido en el límite de {n} pasos; las llamadas anteriores no se ejecutaron.',
 
   'vision.ok': 'Imágenes: disponibles',
   'vision.unavailable': 'Imágenes: este modelo no puede leer imágenes.',
@@ -166,6 +177,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'error.stream_cut': 'La respuesta se cortó antes de terminar.',
   'error.bad_stream': 'El servidor envió una respuesta que no se puede leer.',
   'error.summary_empty': 'El modelo no escribió ningún resumen.',
+  'error.toolRequest': 'El servidor rechazó la petición de herramientas: {message}',
   'error.bad_models': 'No se ha podido leer la lista de modelos del servidor.',
   'error.network': 'No se puede conectar con el servidor.',
   'error.upstream_unreachable': 'El proxy no puede conectar con lm-serve. ¿Está en marcha?',

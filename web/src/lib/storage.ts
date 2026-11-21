@@ -19,6 +19,13 @@ export interface Stats {
   completionEstimate: number | null;
 }
 
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** The JSON text the model wrote, kept as received. */
+  arguments: string;
+}
+
 export type ReplyStatus = 'done' | 'stopped' | 'error';
 
 export interface UserMessage {
@@ -41,6 +48,21 @@ export interface AssistantMessage {
   status: ReplyStatus;
   error: { code: string | null; message: string; status: number } | null;
   stats: Stats | null;
+  /** Tools the model asked for in this reply, if any. */
+  toolCalls?: ToolCall[];
+  /** Set to the step cap when the loop ended here with calls left unrun. */
+  stepLimit?: number;
+  createdAt: number;
+}
+
+/** The result of one tool call, sent back to the model right after the reply that asked for it. */
+export interface ToolMessage {
+  id: string;
+  role: 'tool';
+  toolCallId: string;
+  name: string;
+  content: string;
+  isError: boolean;
   createdAt: number;
 }
 
@@ -55,7 +77,18 @@ export interface SummaryMessage {
   createdAt: number;
 }
 
-export type Message = UserMessage | AssistantMessage | SummaryMessage;
+export type Message = UserMessage | AssistantMessage | SummaryMessage | ToolMessage;
+
+/** The tool messages that directly follow the assistant message at `index`. */
+export function toolResults(messages: Message[], index: number): ToolMessage[] {
+  const out: ToolMessage[] = [];
+  for (let i = index + 1; i < messages.length; i++) {
+    const m = messages[i];
+    if (m?.role !== 'tool') break;
+    out.push(m);
+  }
+  return out;
+}
 
 export function lastSummaryIndex(messages: Message[]): number {
   for (let i = messages.length - 1; i >= 0; i--) if (messages[i]?.role === 'summary') return i;
@@ -80,6 +113,10 @@ export interface Settings {
   maxTokens: number | null;
   imagePreset: ImagePreset;
   locale: LocaleSetting;
+  /** Offer the model its tools and run what it calls. Off until the user turns it on. */
+  tools: boolean;
+  /** Most model calls for one message when tools are on; the last one may not call tools. */
+  maxSteps: number;
 }
 
 export interface State {
@@ -95,7 +132,11 @@ export const DEFAULT_SETTINGS: Settings = {
   maxTokens: null,
   imagePreset: 512,
   locale: 'auto',
+  tools: false,
+  maxSteps: 8,
 };
+
+export const MAX_STEPS_LIMIT = 20;
 
 export function emptyState(): State {
   return { version: SCHEMA_VERSION, conversations: [], activeId: null, settings: { ...DEFAULT_SETTINGS } };
@@ -133,6 +174,19 @@ function stats(v: unknown): Stats | null {
   };
 }
 
+function toolFields(o: Record<string, unknown>): Pick<AssistantMessage, 'toolCalls' | 'stepLimit'> {
+  const out: Pick<AssistantMessage, 'toolCalls' | 'stepLimit'> = {};
+  if (Array.isArray(o.toolCalls)) {
+    const calls = o.toolCalls.flatMap((c): ToolCall[] => {
+      const x = obj(c);
+      return x && typeof x.id === 'string' && typeof x.name === 'string' ? [{ id: x.id, name: x.name, arguments: str(x.arguments) }] : [];
+    });
+    if (calls.length) out.toolCalls = calls;
+  }
+  if (typeof o.stepLimit === 'number' && o.stepLimit >= 1) out.stepLimit = Math.floor(o.stepLimit);
+  return out;
+}
+
 function message(v: unknown): Message | null {
   const o = obj(v);
   if (!o || typeof o.id !== 'string') return null;
@@ -159,8 +213,12 @@ function message(v: unknown): Message | null {
       status,
       error: e ? { code: typeof e.code === 'string' ? e.code : null, message: str(e.message), status: time(e.status) } : null,
       stats: stats(o.stats),
+      ...toolFields(o),
       createdAt: time(o.createdAt),
     };
+  }
+  if (o.role === 'tool' && typeof o.toolCallId === 'string') {
+    return { id: o.id, role: 'tool', toolCallId: o.toolCallId, name: str(o.name), content: str(o.content), isError: o.isError === true, createdAt: time(o.createdAt) };
   }
   if (o.role === 'summary' && typeof o.content === 'string' && o.content.trim()) {
     const covered = numOrNull(o.covered);
@@ -187,6 +245,8 @@ function settings(v: unknown): Settings {
     maxTokens: typeof m === 'number' && Number.isInteger(m) && m > 0 ? m : null,
     imagePreset: (IMAGE_PRESETS as readonly unknown[]).includes(o.imagePreset) ? (o.imagePreset as ImagePreset) : DEFAULT_SETTINGS.imagePreset,
     locale: o.locale === 'en' || o.locale === 'es' ? o.locale : 'auto',
+    tools: o.tools === true,
+    maxSteps: typeof o.maxSteps === 'number' && Number.isInteger(o.maxSteps) && o.maxSteps >= 1 && o.maxSteps <= MAX_STEPS_LIMIT ? o.maxSteps : DEFAULT_SETTINGS.maxSteps,
   };
 }
 

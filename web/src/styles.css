@@ -522,3 +522,10 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .compacted { border-inline-start: 2px dashed var(--border); padding-inline-start: 0.5rem; }
 .msg.summary { border-inline-start: 3px solid var(--border, currentColor); padding-inline-start: 0.75rem; }
 .msg.summary summary { cursor: pointer; font-size: 0.875rem; }
+
+.trace { margin: 0.5rem 0; font-size: 0.875rem; }
+.trace summary { cursor: pointer; }
+.trace-calls { margin: 0.4rem 0 0; padding-inline-start: 1.2rem; }
+.trace-name { font-weight: 600; margin: 0.2rem 0; }
+.trace pre { margin: 0.2rem 0 0.5rem; padding: 0.4rem 0.6rem; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 6px; }
+.check { display: flex; align-items: center; gap: 0.5rem; }

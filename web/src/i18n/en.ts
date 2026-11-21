@@ -37,6 +37,10 @@ export const en = {
   'settings.imageSizeOption': '{n} px',
   'settings.language': 'Language',
   'settings.languageAuto': 'Browser language',
+  'settings.tools': 'Let the model use tools',
+  'settings.toolsHint': 'Offers a calculator and the current time. The model may call them and read the results before it answers. Needs a server that supports tools.',
+  'settings.maxSteps': 'Most steps per message',
+  'settings.maxStepsHint': 'Each step is one reply from the model. On the last step it must answer without tools. 1 to {max}.',
 
   'serve.title': 'Model on the server',
   'serve.hint': 'Click to stop the current lm-serve on the machine and start the chosen model. The local tunnel stays up.',
@@ -91,6 +95,13 @@ export const en = {
   'compact.byAuto': 'Made automatically because the chat was nearly filling the context.',
   'compact.byHand': 'Made with the Compact button.',
   'compact.earlier': 'Compacted',
+
+  'tools.trace': 'Tool calls: {names}',
+  'tools.arguments': 'Arguments',
+  'tools.result': 'Result',
+  'tools.resultError': 'Result (error)',
+  'tools.notRun': 'Not run',
+  'tools.stepLimit': 'Stopped at the limit of {n} steps; the tool calls above were not run.',
 
   'vision.ok': 'Images: available',
   'vision.unavailable': 'Images: this model cannot read images.',
@@ -161,6 +172,7 @@ export const en = {
   'error.stream_cut': 'The reply stopped before it was finished.',
   'error.bad_stream': 'The server sent a reply that could not be read.',
   'error.summary_empty': 'The model wrote no summary.',
+  'error.toolRequest': 'The server refused the tool request: {message}',
   'error.bad_models': 'The server’s model list could not be read.',
   'error.network': 'Could not reach the server.',
   'error.upstream_unreachable': 'The proxy cannot reach lm-serve. Is it running?',

@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { useI18n, type I18n } from '../i18n';
 import type { ApiError, ContentPart } from '../lib/api';
 import { isAllowedImageDataUrl } from '../lib/attachments';
-import type { AssistantMessage, Message, Stats, SummaryMessage, UserMessage } from '../lib/storage';
+import type { AssistantMessage, Message, Stats, SummaryMessage, ToolMessage, UserMessage } from '../lib/storage';
 import { liveCount, replyCount } from '../lib/tokens';
-import type { Usage } from '../lib/sse';
+import type { LiveInfo } from '../lib/agent';
 import { CopyButton, Markdown } from './Markdown';
 import { TokenLine } from './TokenLine';
 
@@ -17,6 +17,8 @@ const KNOWN_CODES = new Set([
 export function errorText(t: I18n['t'], e: Pick<ApiError, 'status' | 'code' | 'serverMessage'>): string {
   // lm-serve names this context_length_exceeded; the catalogs call it context_overflow.
   if (e.code === 'context_length_exceeded') return t('error.context_overflow');
+  if (e.code === 'invalid_tools' || e.code === 'invalid_tool_call' || e.code === 'invalid_tool_message')
+    return t('error.toolRequest', { message: e.serverMessage || '—' });
   if (e.code && KNOWN_CODES.has(e.code)) return t(`error.${e.code}` as Parameters<I18n['t']>[0]);
   if (e.status === 0) return t('error.network');
   if (e.status === 401 || e.status === 403) return t('error.unauthorized');
@@ -24,15 +26,6 @@ export function errorText(t: I18n['t'], e: Pick<ApiError, 'status' | 'code' | 's
   // An error event inside a stream that had started with 200.
   if (e.status >= 200 && e.status < 300) return t('error.stream', { message: e.serverMessage || '—' });
   return t('error.http', { status: String(e.status), message: e.serverMessage || '—' });
-}
-
-export interface LiveInfo {
-  startedAt: number;
-  firstAt: number | null;
-  chunks: number;
-  /** Estimated prompt tokens, used until the server sends its usage. */
-  promptEstimate: number;
-  usage: Usage | null;
 }
 
 function LiveStatus({ live }: { live: LiveInfo }) {
@@ -81,7 +74,7 @@ function StatsLine({ stats }: { stats: Stats }) {
   );
 }
 
-function Assistant({ m, live }: { m: AssistantMessage; live: LiveInfo | null }) {
+function Assistant({ m, live, results }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[] }) {
   const { t } = useI18n();
   return (
     <article className="msg assistant" aria-label={t('message.assistant')}>
@@ -97,6 +90,7 @@ function Assistant({ m, live }: { m: AssistantMessage; live: LiveInfo | null }) 
           <Markdown text={m.content} />
         </div>
       )}
+      {m.toolCalls && m.toolCalls.length > 0 && <ToolTrace m={m} results={results} />}
       {live && <LiveStatus live={live} />}
       {m.status === 'stopped' && <p className="note">{t('message.stopped')}</p>}
       {m.error && (
@@ -143,6 +137,34 @@ function User({ m }: { m: UserMessage }) {
   );
 }
 
+/** What the model asked for and what came back, folded away until the user wants to see it. */
+function ToolTrace({ m, results }: { m: AssistantMessage; results: ToolMessage[] }) {
+  const { t } = useI18n();
+  const calls = m.toolCalls ?? [];
+  return (
+    <>
+      <details className="trace">
+        <summary>{t('tools.trace', { names: calls.map((c) => c.name || '?').join(', ') })}</summary>
+        <ol className="trace-calls">
+          {calls.map((c) => {
+            const r = results.find((x) => x.toolCallId === c.id);
+            return (
+              <li key={c.id}>
+                <p className="trace-name">{c.name || '?'}</p>
+                <p className="hint">{t('tools.arguments')}</p>
+                <pre>{c.arguments || '{}'}</pre>
+                <p className="hint">{r ? (r.isError ? t('tools.resultError') : t('tools.result')) : t('tools.notRun')}</p>
+                {r && <pre>{r.content}</pre>}
+              </li>
+            );
+          })}
+        </ol>
+      </details>
+      {m.stepLimit !== undefined && <p className="note">{t('tools.stepLimit', { n: m.stepLimit })}</p>}
+    </>
+  );
+}
+
 /** The marker where older turns were replaced by a summary; the summary itself folds away. */
 function Summary({ m }: { m: SummaryMessage }) {
   const { t, tp } = useI18n();
@@ -159,8 +181,10 @@ function Summary({ m }: { m: SummaryMessage }) {
   );
 }
 
-export function MessageView({ m, live = null }: { m: Message; live?: LiveInfo | null }) {
-  if (m.role === 'assistant') return <Assistant m={m} live={live} />;
+export function MessageView({ m, live = null, results = [] }: { m: Message; live?: LiveInfo | null; results?: ToolMessage[] }) {
+  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} />;
   if (m.role === 'summary') return <Summary m={m} />;
+  // A tool result is shown inside the reply that asked for it.
+  if (m.role === 'tool') return null;
   return <User m={m} />;
 }
