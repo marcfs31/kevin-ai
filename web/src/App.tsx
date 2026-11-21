@@ -9,6 +9,7 @@ import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { SettingsPanel } from './components/SettingsPanel';
+import { ToolsPanel } from './components/ToolsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type ServerInfo } from './lib/api';
@@ -90,6 +91,7 @@ function Chat({ state, setState, storage, notice }: {
   const serverKey = Object.entries(state.settings.toolsConfig.servers).filter(([, sv]) => sv.on).map(([id]) => id).sort().join(',');
   const internetOn = state.settings.internet.on;
   const mcpKey = `${serverKey}|${internetOn ? 1 : 0}`;
+  const [mcpReload, setMcpReload] = useState(0);
   const [mcp, setMcp] = useState<{ key: string; load: McpLoad | null; error: ApiError | null }>({ key: '', load: null, error: null });
   useEffect(() => {
     if (!toolsOn || serverKey === '') return;
@@ -101,7 +103,7 @@ function Chat({ state, setState, storage, notice }: {
       },
     );
     return () => controller.abort();
-  }, [toolsOn, serverKey, internetOn, mcpKey]);
+  }, [toolsOn, serverKey, internetOn, mcpKey, mcpReload]);
   const mcpSpecs = toolsOn && mcp.key === mcpKey ? (mcp.load?.specs ?? []) : [];
   // The user is asked before a tool that is not read-only runs; Stop answers no.
   const [approval, setApproval] = useState<{ request: ApprovalRequest; answer: (a: Answer) => void } | null>(null);
@@ -466,6 +468,11 @@ function Chat({ state, setState, storage, notice }: {
             }}
           />
           {info?.contextLength && <span>{t('server.context', { n: info.contextLength })}</span>}
+          {state.settings.internet.on && (
+            <span className="internet-badge" role="status">
+              {t('internet.badge')}
+            </span>
+          )}
           {server.kind === 'error' && (
             <button type="button" onClick={retryServer}>
               {t('server.retry')}
@@ -486,6 +493,7 @@ function Chat({ state, setState, storage, notice }: {
       <SettingsModal open={settingsOpen} onClose={closeSettings}>
         <ServerPanel busy={busy} runningModel={info?.model ?? null} onStarted={onServeStarted} />
         <SettingsPanel settings={state.settings} onChange={updateSettings} />
+            <ToolsPanel settings={state.settings} onChange={updateSettings} load={toolsOn && mcp.key === mcpKey ? mcp.load : null} reload={() => setMcpReload((n) => n + 1)} />
       </SettingsModal>
       <aside id="sidebar" className="side">
         <Sidebar

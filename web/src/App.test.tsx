@@ -259,6 +259,162 @@ describe('App', () => {
     });
   });
 
+  describe('Settings: tools and internet', () => {
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    const STATUS = {
+      ok: true,
+      configError: null,
+      servers: [{ id: 'fs', title: 'Files', kind: 'stdio', network: false, catalog: 'filesystem', state: 'stopped', error: null, tools: null }, { id: 'net', title: 'Web fetch', kind: 'stdio', network: true, catalog: null, state: 'failed', error: 'cannot run uvx', tools: null }],
+      catalog: [
+        { id: 'filesystem', title: 'Files', description: 'Read and write files', runtime: 'node', network: false, verified: false, added: true },
+        { id: 'time', title: 'Time', description: 'Time zones', runtime: 'python', network: false, verified: false, added: false },
+        { id: 'fetch', title: 'Fetch', description: 'Read a URL', runtime: 'python', network: true, verified: false, added: false },
+      ],
+    };
+    const LIST = { ok: true, tools: [
+      { name: 'read_file', title: 'read_file', description: 'Read a file', inputSchema: { type: 'object' }, readOnly: true, tokens: 120 },
+      { name: 'write_file', title: 'write_file', description: 'Write a file', inputSchema: { type: 'object' }, readOnly: false, tokens: 130 },
+    ] };
+
+    function open(opts: { service?: boolean; saved?: Record<string, unknown>; extra?: (url: string, init?: RequestInit) => Response | null } = {}) {
+      if (opts.saved) localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: opts.saved }));
+      const fetchMock = mockFetch((url, init) => {
+        const x = opts.extra?.(url, init);
+        if (x) return x;
+        if (opts.service === false && url.startsWith('/tools/')) return json({ ok: false, error: { code: 'upstream_unreachable', message: 'the tool service is not reachable' } }, 502);
+        if (url === '/tools/status') return json(STATUS);
+        if (url.includes('/tools/servers/fs/tools')) return json(LIST);
+        return json({ ok: true });
+      });
+      renderApp();
+      return fetchMock;
+    }
+    const settings = async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+      return await screen.findByRole('region', { name: 'Tools and internet' });
+    };
+    const saved = () => JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings;
+
+    it('says when the tool service is not reachable, quietly, and recovers on Retry', async () => {
+      let up = false;
+      open({ extra: (url) => (url === '/tools/status' && up ? json(STATUS) : url.startsWith('/tools/') ? json({ ok: false, error: { code: 'upstream_unreachable', message: 'the tool service is not reachable' } }, 502) : null) });
+      const panel = await settings();
+      expect(await within(panel).findByText(/The tool service is not reachable/)).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+      up = true;
+      fireEvent.click(within(panel).getByRole('button', { name: 'Retry' }));
+      expect(await within(panel).findByText('Reachable.')).toBeTruthy();
+    });
+
+    it('lists the servers with their state, and turns one on, which is saved and needs the tools switch', async () => {
+      open();
+      const panel = await settings();
+      const files = (await within(panel).findByLabelText('Use Files')) as HTMLInputElement;
+      expect(files.disabled).toBe(true);                       // "Let the model use tools" is off
+      expect(within(panel).getByText('Turn on "Let the model use tools" above for the servers below to be used.')).toBeTruthy();
+      fireEvent.click(screen.getByLabelText('Let the model use tools'));
+      expect(files.disabled).toBe(false);
+      fireEvent.click(files);
+      expect(saved().toolsConfig.servers.fs).toEqual({ on: true, disabledTools: [] });
+      expect(within(panel).getByText(/failed to start · needs the internet/)).toBeTruthy();
+      expect(within(panel).getByText('cannot run uvx')).toBeTruthy();
+    });
+
+    it('shows a server\'s tools with read-only or asks first and their cost, and a tool can be switched off', async () => {
+      open({ saved: { tools: true, toolsConfig: { servers: { fs: { on: true, disabledTools: [] } } } } });
+      const panel = await settings();
+      fireEvent.click(await within(panel).findByText('2 tools'));
+      expect(within(panel).getByText(/read-only · ≈\d+ tokens/)).toBeTruthy();
+      expect(within(panel).getByText(/asks first · ≈\d+ tokens/)).toBeTruthy();
+      fireEvent.click(within(panel).getByLabelText('Offer write_file'));
+      expect(saved().toolsConfig.servers.fs.disabledTools).toEqual(['write_file']);
+      fireEvent.click(within(panel).getByLabelText('Offer write_file'));
+      expect(saved().toolsConfig.servers.fs.disabledTools).toEqual([]);
+    });
+
+    it('keeps the internet off by default, shows a badge when it is on, and tests the search address', async () => {
+      const f = open({ extra: (url) => (url === '/tools/search' ? json({ ok: true, content: '1. One\n   u\n   c\n2. Two\n   u\n   c', isError: false }) : null) });
+      const panel = await settings();
+      const box = within(panel).getByLabelText('Allow the tools to use the internet') as HTMLInputElement;
+      const url = within(panel).getByLabelText('Web search address (a SearXNG instance)') as HTMLInputElement;
+      expect(box.checked).toBe(false);
+      expect(url.disabled).toBe(true);
+      expect(screen.queryByText('Internet on')).toBeNull();
+      fireEvent.click(box);
+      expect(screen.getByText('Internet on')).toBeTruthy();
+      fireEvent.change(url, { target: { value: ' http://127.0.0.1:8888 ' } });
+      expect(saved().internet).toEqual({ on: true, searchUrl: 'http://127.0.0.1:8888' });
+      fireEvent.click(within(panel).getByRole('button', { name: 'Test search' }));
+      expect(await within(panel).findByText('Search works: 2 results.')).toBeTruthy();
+      const post = f.mock.calls.find(([u]) => String(u) === '/tools/search');
+      expect(JSON.parse(String(post?.[1]?.body))).toEqual({ query: 'test', searchUrl: 'http://127.0.0.1:8888', internet: true });
+    });
+
+    it('reports a failing search test and cannot test without the switch and an address', async () => {
+      open({ extra: (url) => (url === '/tools/search' ? json({ ok: false, error: { code: 'search_failed', message: 'the search server answered 500' } }, 502) : null), saved: { internet: { on: true, searchUrl: 'http://127.0.0.1:8888' } } });
+      const panel = await settings();
+      fireEvent.click(await within(panel).findByRole('button', { name: 'Test search' }));
+      expect((await within(panel).findByText(/Search failed/)).textContent).toContain('500');
+      fireEvent.click(within(panel).getByLabelText('Allow the tools to use the internet'));
+      expect((within(panel).getByRole('button', { name: 'Test search' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('offers only what is not added from the catalog, adds it through the service, and a network entry waits for the internet', async () => {
+      let added = '';
+      const f = open({ extra: (url, init) => (url.startsWith('/tools/catalog/') ? ((added = `${url} ${String(init?.body)}`), json({ ok: true, added: true })) : null) });
+      const panel = await settings();
+      expect(within(panel).queryByRole('button', { name: 'Add Files' })).toBeNull();
+      const fetchBtn = (await within(panel).findByRole('button', { name: 'Add Fetch' })) as HTMLButtonElement;
+      expect(fetchBtn.disabled).toBe(true);
+      expect(within(panel).getByText('Turn the internet on to add it.')).toBeTruthy();
+      fireEvent.click(within(panel).getByRole('button', { name: 'Add Time' }));
+      await waitFor(() => expect(added).toBe('/tools/catalog/time/add {"internet":false}'));
+      fireEvent.click(within(panel).getByLabelText('Allow the tools to use the internet'));
+      expect((within(panel).getByRole('button', { name: 'Add Fetch' }) as HTMLButtonElement).disabled).toBe(false);
+      expect(f.mock.calls.filter(([u]) => String(u) === '/tools/status').length).toBeGreaterThan(1);       // the list was refreshed
+    });
+
+    it('shows a failed add', async () => {
+      open({ extra: (url) => (url === '/tools/catalog/time/add' ? json({ ok: false, error: { code: 'bad_config', message: 'mcp.json: broken' } }, 500) : null) });
+      const panel = await settings();
+      fireEvent.click(await within(panel).findByRole('button', { name: 'Add Time' }));
+      expect((await within(panel).findByRole('alert')).textContent).toContain('500');
+    });
+
+    it('sets the budget with a cost, the approval mode, and forgets an always-allowed tool', async () => {
+      open({ saved: { tools: true, toolsConfig: { servers: { fs: { on: true, disabledTools: [] } }, alwaysAllow: ['fs__write_file'] } } });
+      const panel = await settings();
+      await within(panel).findByText('Tool definitions per step: up to 1,500 tokens');
+      expect(within(panel).getByText(/add up to ≈\d+ tokens/)).toBeTruthy();
+      fireEvent.change(within(panel).getByLabelText(/Tool definitions per step/), { target: { value: '3000' } });
+      expect(saved().toolsConfig.budgetTokens).toBe(3000);
+      fireEvent.change(within(panel).getByLabelText('Ask before running a tool'), { target: { value: 'always' } });
+      expect(saved().toolsConfig.approval).toBe('always');
+      fireEvent.click(within(panel).getByRole('button', { name: 'Ask again about fs__write_file' }));
+      expect(saved().toolsConfig.alwaysAllow).toEqual([]);
+      expect(within(panel).queryByText('Tools you stopped being asked about')).toBeNull();
+    });
+
+    it('is in Spanish', async () => {
+      mockFetch((url) => (url === '/tools/status' ? json(STATUS) : json({ ok: true })));
+      renderApp(['es-ES']);
+      fireEvent.click(await screen.findByRole('button', { name: 'Ajustes' }));
+      const panel = await screen.findByRole('region', { name: 'Herramientas e internet' });
+      expect(await within(panel).findByLabelText('Usar Files')).toBeTruthy();
+      expect(within(panel).getByLabelText('Permitir que las herramientas usen internet')).toBeTruthy();
+      expect(within(panel).getByRole('button', { name: 'Añadir Time' })).toBeTruthy();
+    });
+
+    it('has no axe violations with the panel open, servers listed and a tool list expanded', async () => {
+      mockFetch((url) => (url === '/tools/status' ? json(STATUS) : url.includes('/tools/servers/fs/tools') ? json(LIST) : json({ ok: true })));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: { tools: true, internet: { on: true, searchUrl: 'http://127.0.0.1:8888' }, toolsConfig: { servers: { fs: { on: true, disabledTools: [] } }, alwaysAllow: ['fs__write_file'] } } }));
+      const { container } = renderApp();
+      const panel = await settings();
+      fireEvent.click(await within(panel).findByText('2 tools'));
+      expect(await axeViolations(container)).toEqual([]);
+    });
+  });
+
   describe('effort and speed', () => {
     const pick = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
     const chatCalls = (fetchMock: ReturnType<typeof mockFetch>) => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
