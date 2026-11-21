@@ -25,13 +25,13 @@ check '[ "$got" = "$want" ]' "quoted arguments did not round-trip: [$got]"
 check '! grep -q "remote_cmd=\${remote_cmd" "$script"' "the script still splices with a pattern substitution"
 
 out=$(bash "$script" 2>&1 || true)
-check '[[ "$out" == *"must be qwen, qwen-uncensored or gemma"* ]]' "no arguments should refuse before ssh, got: $out"
+check '[[ "$out" == *"must be qwen, qwen-uncensored, gemma or whiterabbitneo"* ]]' "no arguments should refuse before ssh, got: $out"
 
 out=$(bash "$script" --id qwen --host 0.0.0.0 2>&1 || true)
 check '[[ "$out" == *refusing*--host* ]]' "the script accepted --host: $out"
 
 out=$(bash "$script" --id llama 2>&1 || true)
-check '[[ "$out" == *"must be qwen, qwen-uncensored or gemma"* ]]' "an unknown id should be refused, got: $out"
+check '[[ "$out" == *"must be qwen, qwen-uncensored, gemma or whiterabbitneo"* ]]' "an unknown id should be refused, got: $out"
 
 # Resolve each id to its remote directory with a fake ssh that prints the arguments
 # it would send (the directory name is the third positional word of the remote command).
@@ -41,7 +41,7 @@ cat >"$fakebin/ssh" <<'EOF'
 printf '%s\n' "$*"
 EOF
 chmod +x "$fakebin/ssh"
-for pair in qwen:qwen3.5-4b qwen-uncensored:qwen3.5-4b-uncensored gemma:gemma-4-e4b; do
+for pair in qwen:qwen3.5-4b qwen-uncensored:qwen3.5-4b-uncensored gemma:gemma-4-e4b whiterabbitneo:whiterabbitneo-2.5-7b-q4km; do
   id=${pair%%:*}
   want_dir=${pair#*:}
   out=$(PATH="$fakebin:$PATH" bash "$script" --id "$id" 2>&1 || true)

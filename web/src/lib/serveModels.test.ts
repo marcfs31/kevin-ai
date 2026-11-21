@@ -18,6 +18,7 @@ describe('matchServeModel', () => {
     expect(matchServeModel('qwen3.5-4b')).toBe('qwen');
     expect(matchServeModel('gemma-4-e4b')).toBe('gemma');
     expect(matchServeModel('qwen3.5-4b-uncensored')).toBe('qwen-uncensored');
+    expect(matchServeModel('whiterabbitneo-2.5-7b-q4km')).toBe('whiterabbitneo');
   });
 
   it('returns null when unknown or missing', () => {
@@ -55,6 +56,10 @@ describe('ctxPresetsFor', () => {
   it('does not cap the plain Qwen target by a running uncensored model', () => {
     expect(ctxPresetsFor('qwen', 'qwen3.5-4b-uncensored', 8192)).toHaveLength(7);
     expect(ctxPresetsFor('qwen-uncensored', 'qwen3.5-4b-uncensored', 8192)).toEqual([null, 4096, 8192]);
+  });
+
+  it('caps WhiteRabbitNeo at its 32k window', () => {
+    expect(ctxPresetsFor('whiterabbitneo', null, null)).toEqual([null, 4096, 8192, 16384, 32768]);
   });
 
   it('includes a running ctx value that is not on the ladder', () => {

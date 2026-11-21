@@ -60,4 +60,27 @@ describe('ServerPanel', () => {
     const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
     expect(body.model).toBe('qwen-uncensored');
   });
+
+  it('offers WhiteRabbitNeo, marks it running by name and sends --id whiterabbitneo', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { unmount } = render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} runningModel="whiterabbitneo-2.5-7b-q4km" onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'Start WhiteRabbitNeo 2.5 Coder 7B' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('false');
+    unmount();
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Start WhiteRabbitNeo 2.5 Coder 7B' }));
+    await screen.findByRole('status');
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.model).toBe('whiterabbitneo');
+  });
 });

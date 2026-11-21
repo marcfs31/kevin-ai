@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Stop the remote lm-serve (if any) and start one for Qwen, Qwen uncensored or Gemma.
+# Stop the remote lm-serve (if any) and start one for Qwen, Qwen uncensored, Gemma or WhiteRabbitNeo.
 # Extra flags are forwarded to lm-serve as-is; omit a flag to keep lm-serve's own default.
 # The local SSH tunnel to port 8080 is left alone — only the remote process is replaced.
 set -euo pipefail
 
 usage() {
   cat <<'EOF' >&2
-usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma [lm-serve flags…]
+usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma|whiterabbitneo [lm-serve flags…]
 
-  --id qwen|qwen-uncensored|gemma
-                    which checkpoint under ~/models on the remote host
+  --id qwen|qwen-uncensored|gemma|whiterabbitneo
+                    which checkpoint under ~/models on the remote host (whiterabbitneo is the
+                    GGUF Qwen2.5-Coder 7B: one .gguf file, no --weights)
   Remaining arguments are passed to lm-serve (for example --ctx 8192 --think).
   --host and --port are always 127.0.0.1 and 8080 so the local tunnel keeps working.
 
@@ -58,11 +59,13 @@ main() {
     esac
   done
 
+  local KIND=q8
   case "$ID" in
     qwen) DIR_NAME=qwen3.5-4b ;;
     qwen-uncensored) DIR_NAME=qwen3.5-4b-uncensored ;;
     gemma) DIR_NAME=gemma-4-e4b ;;
-    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored or gemma" >&2; usage ;;
+    whiterabbitneo) DIR_NAME=whiterabbitneo-2.5-7b-q4km; KIND=gguf ;;
+    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored, gemma or whiterabbitneo" >&2; usage ;;
   esac
 
   SSH_TARGET=${LM_SERVE_SSH:-toor@192.168.1.96}
@@ -85,14 +88,21 @@ expand_home() {
 BIN=$(expand_home "$1")
 ROOT=$(expand_home "$2")
 DIR_NAME=$3
-shift 3
+KIND=$4
+shift 4
 DIR="$ROOT/$DIR_NAME"
 WEIGHTS="$DIR/model.q8.safetensors"
+WEIGHTS_ARGS=(--weights "$WEIGHTS")
 LOG=${HOME}/logs/lm-serve.log
 mkdir -p "$(dirname "$LOG")"
 if [[ ! -x "$BIN" ]]; then echo "missing lm-serve at $BIN" >&2; exit 1; fi
 if [[ ! -d "$DIR" ]]; then echo "missing model dir $DIR" >&2; exit 1; fi
-if [[ ! -f "$WEIGHTS" ]]; then echo "missing weights $WEIGHTS" >&2; exit 1; fi
+if [[ "$KIND" == gguf ]]; then
+  # the GGUF file is the weights, the tokenizer and the template; the engine wants exactly one
+  n=$(find "$DIR" -maxdepth 1 -name '*.gguf' | wc -l)
+  if [[ "$n" -ne 1 ]]; then echo "$DIR must hold exactly one .gguf file, found $n" >&2; exit 1; fi
+  WEIGHTS_ARGS=()
+elif [[ ! -f "$WEIGHTS" ]]; then echo "missing weights $WEIGHTS" >&2; exit 1; fi
 # Stop any previous serve before starting the new one.
 if pgrep -x lm-serve >/dev/null; then
   pkill -x lm-serve || true
@@ -105,7 +115,7 @@ if pgrep -x lm-serve >/dev/null; then
     exit 1
   fi
 fi
-nohup "$BIN" --model "$DIR" --weights "$WEIGHTS" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
+nohup "$BIN" --model "$DIR" "${WEIGHTS_ARGS[@]}" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
 # Wait until /health answers (model load can take a while).
 ok=0
 for _ in $(seq 1 120); do
@@ -131,7 +141,7 @@ echo
 EOS
 )
 
-  args=("$REMOTE_BIN" "$REMOTE_ROOT" "$DIR_NAME")
+  args=("$REMOTE_BIN" "$REMOTE_ROOT" "$DIR_NAME" "$KIND")
   if [[ ${#EXTRA[@]} -gt 0 ]]; then
     args+=("${EXTRA[@]}")
   fi

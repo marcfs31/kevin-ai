@@ -23,6 +23,11 @@ describe('parseServeOptions', () => {
     expect(serveScriptArgs({ model: 'qwen-uncensored' })).toEqual(['--id', 'qwen-uncensored']);
   });
 
+  it('accepts whiterabbitneo and passes it to the script', () => {
+    expect(parseServeOptions({ model: 'whiterabbitneo' })).toMatchObject({ model: 'whiterabbitneo' });
+    expect(serveScriptArgs({ model: 'whiterabbitneo' })).toEqual(['--id', 'whiterabbitneo']);
+  });
+
   it('rejects unknown models and bad integers', () => {
     expect(parseServeOptions({ model: 'llama' })).toBeNull();
     expect(parseServeOptions({ model: 'qwen-uncensored-x' })).toBeNull();
