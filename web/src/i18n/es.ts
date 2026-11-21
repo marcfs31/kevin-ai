@@ -31,6 +31,8 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'sidebar.cancel': 'Cancelar',
 
   'settings.open': 'Ajustes',
+  'settings.close': 'Cerrar',
+  'settings.closeBackdrop': 'Cerrar ajustes',
   'settings.title': 'Ajustes',
   'settings.systemPrompt': 'Instrucciones del sistema',
   'settings.systemPromptHint': 'Se envían antes de cada conversación. Si no cambian, el servidor puede reutilizar su lectura.',
