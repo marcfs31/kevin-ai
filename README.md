@@ -78,9 +78,46 @@ What this means for the engine:
 | Qwen3.5-4B | ~4.2 B | 9.32 GB bf16, 2 shards | phase 1, implemented | Gated DeltaNet linear attention, three layers to one full attention |
 | Gemma 4 E4B | ~4 B core + per-layer embeddings | 15.99 GB bf16, 1 file | phase 2, implemented | per-layer embeddings, KV sharing across layers, logit softcap 30 |
 
-Both are Apache-2.0 and ungated. Vision and audio are out of scope; the engine is text only.
+A third family runs from a GGUF file: **WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B** (a Qwen2.5-Coder-7B
+fine-tune, Apache-2.0), the Q4_K_M quantisation of `bartowski/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-GGUF`.
+See "WhiteRabbitNeo (GGUF)" below.
+
+Qwen3.5 and Gemma 4 are Apache-2.0 and ungated. Vision and audio are out of scope; the engine is text only.
 Qwen's multi-token-prediction (MTP) head is used for speculative greedy decoding in `lm-run
 --mtp` (see below).
+
+## WhiteRabbitNeo (GGUF)
+
+`bartowski/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-GGUF` (revision `4874da7a…`, Apache-2.0 on the
+fine-tune and on its base Qwen2.5-Coder-7B; the file says `general.license = apache-2.0`) runs from
+its GGUF file: the engine's third family, `qwen2` (grouped-query attention with a bias on q, k and
+v, SwiGLU, rotate-half RoPE, no linear attention). `scripts/download-model.sh --model
+whiterabbitneo-2.5-7b-q4km` fetches the pinned file (4,683,072,032 bytes, sha256 checked) into
+`~/models/whiterabbitneo-2.5-7b-q4km/`; any path to a `.gguf`, or a directory with exactly one and
+no `config.json`, is a GGUF model for `lm-run`, `lm-chat` and `lm-serve`. The file carries the
+tokenizer and the chat template (bare ChatML, no default system prompt); `--weights` does not apply.
+In the web app, Settings and the header picker start it as "WhiteRabbitNeo 2.5 Coder 7B"
+(`start-remote-lm-serve.sh --id whiterabbitneo`).
+
+**Quantisation: Q4_K_M.** The KV cache is f32 (112 KiB per token, 3.5 GiB at the model's 32k
+window) and decode reads every weight once per token, at about 11 GB/s here. Q6_K (6.25 GB) and
+Q8_0 (8.10 GB) would leave 11 GB with a short context and read 1.3x and 1.7x more per token;
+Q4_K_M (4.68 GB: Q4_K matrices, Q6_K for half of `attn_v` and `ffn_down` and for the output matrix)
+keeps the full 32k window in memory. The kernels also read Q5_K and Q8_0, so the other bartowski
+files of the same model load (not measured here).
+
+Measured on the target machine (2026-11-21, 2.5 GHz, 4 threads, another `lm-serve` idle beside it):
+
+| | |
+|---|---|
+| resident after a request | 4.35 GiB (4.28 GiB of it the mapped file, 74 MiB anonymous; the KV cache fills as the context does) |
+| context chosen with no `--ctx` | 32,768 (the model's maximum; 9.2 GiB available) |
+| generating | 1.5 to 1.7 tokens/s (about 0.6 s per token; the read alone is 4.7 GB at 11 GB/s, so memory-bound would be 2.3) |
+| prompt | 3.2 to 3.3 tokens/s on 64 to 96 tokens (compute-bound: the float widening of each block) |
+| an 80-token code answer through `lm-serve` | 55 s, correct |
+
+The kernels keep activations in float and are bit-identical between scalar and AVX2. An int8-activation
+path like `--fast` for q8 would read the same bytes with far fewer instructions; it is not implemented.
 
 ## Ubuntu Server installation
 
