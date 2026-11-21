@@ -130,7 +130,32 @@ export interface Settings {
   maxSteps: number;
   /** Summarise older turns by itself near the context limit. Off: only the Compact button does. */
   autoCompact: boolean;
+  /** Which MCP servers and tools are on, how much of the request they may take, and when to ask first. */
+  toolsConfig: ToolsConfig;
+  /** The internet is off until the user turns it on; search needs the address of a SearXNG instance. */
+  internet: InternetConfig;
 }
+
+export type ApprovalMode = 'readonly-free' | 'always' | 'never';
+export const APPROVAL_MODES: readonly ApprovalMode[] = ['readonly-free', 'always', 'never'];
+
+export interface ToolsConfig {
+  /** By server id (the service's config key). A server that is absent is off. */
+  servers: Record<string, { on: boolean; disabledTools: string[] }>;
+  /** Tokens of tool definitions sent per step, beyond the built-in tools (see lib/toolSelect.ts). */
+  budgetTokens: number;
+  approval: ApprovalMode;
+  /** Tools (by the name the model sees) the user chose to stop being asked about. */
+  alwaysAllow: string[];
+}
+
+export interface InternetConfig {
+  on: boolean;
+  searchUrl: string;
+}
+
+export const MIN_TOOL_BUDGET = 300;
+export const MAX_TOOL_BUDGET = 12000;
 
 export interface State {
   version: typeof SCHEMA_VERSION;
@@ -148,6 +173,8 @@ export const DEFAULT_SETTINGS: Settings = {
   tools: false,
   maxSteps: 8,
   autoCompact: true,
+  toolsConfig: { servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [] },
+  internet: { on: false, searchUrl: '' },
 };
 
 export const MAX_STEPS_LIMIT = 20;
@@ -252,6 +279,35 @@ function conversation(v: unknown): Conversation | null {
   };
 }
 
+const SERVER_KEY = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+
+function toolsConfig(v: unknown): ToolsConfig {
+  const o = obj(v) ?? {};
+  const servers: ToolsConfig['servers'] = {};
+  for (const [id, raw] of Object.entries(obj(o.servers) ?? {})) {
+    const s = obj(raw);
+    if (!SERVER_KEY.test(id) || !s) continue;
+    servers[id] = { on: s.on === true, disabledTools: strings(s.disabledTools, 200) };
+  }
+  const budget = o.budgetTokens;
+  return {
+    servers,
+    budgetTokens: typeof budget === 'number' && Number.isInteger(budget) && budget >= MIN_TOOL_BUDGET && budget <= MAX_TOOL_BUDGET ? budget : DEFAULT_SETTINGS.toolsConfig.budgetTokens,
+    approval: (APPROVAL_MODES as readonly unknown[]).includes(o.approval) ? (o.approval as ApprovalMode) : DEFAULT_SETTINGS.toolsConfig.approval,
+    alwaysAllow: strings(o.alwaysAllow, 500),
+  };
+}
+
+function internetConfig(v: unknown): InternetConfig {
+  const o = obj(v) ?? {};
+  const url = typeof o.searchUrl === 'string' ? o.searchUrl.trim() : '';
+  return { on: o.on === true, searchUrl: url.length <= 300 ? url : '' };
+}
+
+function strings(v: unknown, max: number): string[] {
+  return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 128))].slice(0, max) : [];
+}
+
 function settings(v: unknown): Settings {
   const o = obj(v) ?? {};
   const t = o.temperature;
@@ -265,6 +321,8 @@ function settings(v: unknown): Settings {
     tools: o.tools === true,
     maxSteps: typeof o.maxSteps === 'number' && Number.isInteger(o.maxSteps) && o.maxSteps >= 1 && o.maxSteps <= MAX_STEPS_LIMIT ? o.maxSteps : DEFAULT_SETTINGS.maxSteps,
     autoCompact: typeof o.autoCompact === 'boolean' ? o.autoCompact : DEFAULT_SETTINGS.autoCompact,
+    toolsConfig: toolsConfig(o.toolsConfig),
+    internet: internetConfig(o.internet),
   };
 }
 

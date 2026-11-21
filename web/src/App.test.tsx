@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { BACKUP_KEY, STORAGE_KEY } from './lib/storage';
@@ -122,6 +122,141 @@ describe('App', () => {
     // Once it ends the same reply is counted from the finished message, not twice.
     expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Written')).toBe('≈1');
     expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Read')).toBe('≈10');
+  });
+
+  describe('MCP tools', () => {
+    const TOOLS_LIST = {
+      ok: true,
+      tools: [
+        { name: 'read_file', title: 'read_file', description: 'Read the contents of a file', inputSchema: { type: 'object' }, readOnly: true, tokens: 40 },
+        { name: 'write_file', title: 'write_file', description: 'Write a file', inputSchema: { type: 'object' }, readOnly: false, tokens: 40 },
+      ],
+    };
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+    /** Saved settings with the tools switch and a server on, then a fake service and a model that calls `tool`. */
+    function setup(opts: { tool?: string; args?: string; internet?: boolean; servers?: Record<string, { on: boolean; disabledTools: string[] }>; toolsOn?: boolean; alwaysAllow?: string[] } = {}) {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          version: 1, activeId: null, conversations: [],
+          settings: {
+            tools: opts.toolsOn ?? true, internet: { on: opts.internet ?? false, searchUrl: '' },
+            toolsConfig: { servers: opts.servers ?? { fs: { on: true, disabledTools: [] } }, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: opts.alwaysAllow ?? [] },
+          },
+        }),
+      );
+      let step = 0;
+      const fetchMock = mockFetch((url) => {
+        if (url === '/tools/status') return json({ ok: true, servers: [{ id: 'fs', title: 'fs', kind: 'stdio', network: false, state: 'stopped' }, { id: 'net', title: 'net', kind: 'stdio', network: true, state: 'stopped' }], catalog: [] });
+        if (url.startsWith('/tools/servers/') && url.includes('/tools?')) return json(TOOLS_LIST);
+        if (url.endsWith('/call')) return json({ ok: true, content: 'wrote it', isError: false });
+        step += 1;
+        return step === 1 && opts.tool ? sseResponse([toolCallDelta('c1', opts.tool, opts.args ?? '{"path":"/x"}'), FINISH_TOOLS, DONE]) : sseResponse([delta('all done'), FINISH, DONE]);
+      });
+      return fetchMock;
+    }
+    const urls = (f: ReturnType<typeof mockFetch>) => f.mock.calls.map(([u]) => String(u));
+    const calls = (f: ReturnType<typeof mockFetch>) => f.mock.calls.filter(([u]) => String(u).endsWith('/call'));
+    const ready = (f: ReturnType<typeof mockFetch>) => waitFor(() => expect(urls(f).some((u) => u.includes('/tools/servers/fs/tools'))).toBe(true));
+
+    it('offers the tools of the servers that are on, picked for the message, and asks before a write', async () => {
+      const f = setup({ tool: 'fs__write_file' });
+      renderApp();
+      await ready(f);
+      typeAndSend('please write a file');
+      const card = await screen.findByRole('alertdialog');
+      expect(card.textContent).toContain('Allow fs · write_file?');
+      expect(card.textContent).toContain('"path": "/x"');
+      const names = (bodyOf(f, 0).tools as { function: { name: string } }[]).map((t) => t.function.name);
+      expect(names).toEqual(expect.arrayContaining(['calculator', 'current_time', 'find_tools', 'fs__write_file']));
+      expect(calls(f)).toHaveLength(0);                       // nothing ran yet
+      fireEvent.click(within(card).getByRole('button', { name: 'Allow once' }));
+      expect(await screen.findByText('all done')).toBeTruthy();
+      expect(calls(f)).toHaveLength(1);
+      expect(JSON.parse(String(calls(f)[0]?.[1]?.body))).toEqual({ name: 'write_file', arguments: { path: '/x' }, internet: false });
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+
+    it('does not run a call that is denied, and tells the model so', async () => {
+      const f = setup({ tool: 'fs__write_file' });
+      renderApp();
+      await ready(f);
+      typeAndSend('please write a file');
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Deny' }));
+      expect(await screen.findByText('all done')).toBeTruthy();
+      expect(calls(f)).toHaveLength(0);
+      const second = bodyOf(f, 1).messages as { role: string; content: string }[];
+      expect(second.find((m) => m.role === 'tool')?.content).toBe('error: the user did not allow this tool call');
+    });
+
+    it('remembers "always allow this tool" and does not ask again', async () => {
+      const f = setup({ tool: 'fs__write_file' });
+      renderApp();
+      await ready(f);
+      typeAndSend('please write a file');
+      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Always allow this tool' }));
+      await screen.findByText('all done');
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.toolsConfig.alwaysAllow).toEqual(['fs__write_file']);
+      expect(calls(f)).toHaveLength(1);
+    });
+
+    it('runs a read-only tool without asking', async () => {
+      const f = setup({ tool: 'fs__read_file' });
+      renderApp();
+      await ready(f);
+      typeAndSend('read my file');
+      expect(await screen.findByText('all done')).toBeTruthy();
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(calls(f)).toHaveLength(1);
+    });
+
+    it('refuses the call when Stop is pressed while the question is open', async () => {
+      const f = setup({ tool: 'fs__write_file' });
+      renderApp();
+      await ready(f);
+      typeAndSend('please write a file');
+      await screen.findByRole('alertdialog');
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await screen.findByText('Stopped.');
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+      expect(calls(f)).toHaveLength(0);
+    });
+
+    it('keeps a server that needs the internet out while it is off, and asks it with the flag once it is on', async () => {
+      const servers = { fs: { on: true, disabledTools: [] }, net: { on: true, disabledTools: [] } };
+      const off = setup({ servers });
+      renderApp();
+      await ready(off);
+      expect(urls(off).some((u) => u.includes('/tools/servers/net/'))).toBe(false);
+      cleanup();
+      vi.unstubAllGlobals();
+      const on = setup({ servers, internet: true });
+      renderApp();
+      await waitFor(() => expect(urls(on)).toContain('/tools/servers/net/tools?internet=1'));
+      expect(urls(on)).toContain('/tools/servers/fs/tools?internet=1');
+    });
+
+    it('asks the service about nothing and sends no tools while the tools switch is off', async () => {
+      const f = setup({ toolsOn: false });
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      typeAndSend('please write a file');
+      await screen.findByText('all done');
+      expect(urls(f).some((u) => u.startsWith('/tools/'))).toBe(false);
+      expect('tools' in bodyOf(f, 0)).toBe(false);
+    });
+
+    it('does not ask about a tool the user turned off', async () => {
+      const f = setup({ tool: 'fs__write_file', servers: { fs: { on: true, disabledTools: ['write_file'] } } });
+      renderApp();
+      await ready(f);
+      typeAndSend('please write a file');
+      await screen.findByText('all done');
+      const names = (bodyOf(f, 0).tools as { function: { name: string } }[]).map((t) => t.function.name);
+      expect(names).not.toContain('fs__write_file');
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
   });
 
   describe('effort and speed', () => {
