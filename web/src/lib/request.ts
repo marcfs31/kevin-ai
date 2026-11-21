@@ -22,7 +22,8 @@ const IMAGE_PART_BYTES = jsonBytes({ type: 'image_url', image_url: { url: '' } }
 // Image parts hold megabytes of base64: measure each content array once, not per keystroke.
 const partsCache = new WeakMap<ContentPart[], number>();
 
-function contentBytes(content: string | ContentPart[]): number {
+function contentBytes(content: string | ContentPart[] | null): number {
+  if (content === null) return 4;
   if (typeof content === 'string') return jsonBytes(content);
   const cached = partsCache.get(content);
   if (cached !== undefined) return cached;
@@ -54,8 +55,8 @@ export interface Assessment {
   problems: Problem[];
 }
 
-function imageTokensOf(content: string | ContentPart[], perImage: number | null): number {
-  return perImage === null ? 0 : countImages(content) * perImage;
+function imageTokensOf(content: string | ContentPart[] | null, perImage: number | null): number {
+  return perImage === null || content === null ? 0 : countImages(content) * perImage;
 }
 
 /** Estimates and limit checks for sending `draft` after `history`. */
@@ -78,9 +79,9 @@ export function assess(
   // Earlier images are re-sent too; count them at the server's fixed size when it gives one.
   const perImage = info?.tokensPerImage ?? null;
   let promptTokens = newTokens;
-  for (const m of wire.slice(0, -1)) promptTokens += estimateTextTokens(contentText(m.content)) + imageTokensOf(m.content, perImage);
+  for (const m of wire.slice(0, -1)) promptTokens += estimateTextTokens(contentText(m.content ?? '')) + imageTokensOf(m.content, perImage);
   const problems: Problem[] = [];
-  const images = wire.reduce((n, m) => n + countImages(m.content), 0);
+  const images = wire.reduce((n, m) => n + countImages(m.content ?? ''), 0);
   if (images > MAX_IMAGES) problems.push({ kind: 'too_many_images', count: images, max: MAX_IMAGES });
   const bytes = requestBytes(wire, settings);
   if (bytes > MAX_BODY_BYTES) problems.push({ kind: 'too_large', bytes });

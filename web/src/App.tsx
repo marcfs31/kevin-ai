@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Composer } from './components/Composer';
 import { MessageView, errorText, type LiveInfo } from './components/MessageView';
+import { TokenLine } from './components/TokenLine';
 import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -9,6 +10,7 @@ import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { assess, toWire } from './lib/request';
+import { estimateWireTokens, sessionTotals } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
 import type { Usage } from './lib/sse';
 import {
@@ -156,13 +158,15 @@ function Chat({ state, setState, storage, notice }: {
     const message: AssistantMessage = {
       id: newId(), role: 'assistant', content: '', reasoning: '', status: 'done', error: null, stats: null, createdAt: now,
     };
-    const liveInfo: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0 };
+    const wire = toWire(state.settings.systemPrompt, history);
+    const promptEstimate = estimateWireTokens(wire, info);
+    const liveInfo: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate, usage: null };
     let usage: Usage | null = null;
     const publish = () => setLive({ convId, message: { ...message }, info: { ...liveInfo } });
     publish();
     try {
       await streamChat(
-        { messages: toWire(state.settings.systemPrompt, history), temperature: state.settings.temperature, maxTokens: state.settings.maxTokens },
+        { messages: wire, temperature: state.settings.temperature, maxTokens: state.settings.maxTokens },
         controller.signal,
         (e) => {
           if (e.kind === 'content' || e.kind === 'reasoning') {
@@ -171,7 +175,11 @@ function Chat({ state, setState, storage, notice }: {
             if (e.kind === 'content') message.content += e.text;
             else message.reasoning += e.text;
             publish();
-          } else if (e.kind === 'usage') usage = e.usage;
+          } else if (e.kind === 'usage') {
+            usage = e.usage;
+            liveInfo.usage = e.usage;
+            publish();
+          }
         },
       );
     } catch (e) {
@@ -192,6 +200,8 @@ function Chat({ state, setState, storage, notice }: {
         promptTokens: u?.promptTokens ?? null,
         cachedTokens: u?.cachedTokens ?? null,
         completionTokens: u?.completionTokens ?? null,
+        promptEstimate,
+        completionEstimate: liveInfo.chunks,
       };
       const done = { ...message };
       updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, done] }));
@@ -236,6 +246,7 @@ function Chat({ state, setState, storage, notice }: {
           : null;
   const canDiscard = hold === 'locked' || hold === 'unreadable' || copies.length > 0;
   const messages = active?.messages ?? [];
+  const totals = sessionTotals(messages);
 
   return (
     <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
@@ -344,6 +355,7 @@ function Chat({ state, setState, storage, notice }: {
           </div>
           {live && live.convId === active?.id && <MessageView m={live.message} live={live.info} />}
         </div>
+        {totals && <TokenLine className="session hint" labelKey="tokens.session" count={totals} />}
         {visionLine && <p className="vision hint">{visionLine}</p>}
         <Composer busy={busy} info={info} imagePreset={state.settings.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} onStop={stop} inputRef={inputRef} />
       </main>

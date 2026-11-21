@@ -136,6 +136,11 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'stats.rate': '{rate} tokens/s',
   'stats.prompt': '{n} tokens de entrada',
   'stats.cached': '{n} de caché',
+  'tokens.reply': 'Leídos {read} · escritos {written} tokens',
+  'tokens.session': 'Este chat: leídos {read} · escritos {written} tokens',
+  'tokens.replyLabel': 'Tokens usados por esta respuesta',
+  'tokens.sessionLabel': 'Tokens usados en este chat',
+  'tokens.estimated': '≈ significa estimado',
 
   'error.image_unsupported': 'Este servidor no puede leer imágenes.',
   'error.image_invalid': 'El servidor no ha podido leer una imagen.',
