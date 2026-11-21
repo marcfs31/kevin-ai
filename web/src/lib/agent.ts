@@ -5,6 +5,7 @@
 import type { ApiError, ChatRequest, ServerInfo } from './api';
 import { ApiError as ApiErrorClass } from './api';
 import { newId } from './attachments';
+import { planCompaction, shouldCompact, type Plan } from './compact';
 import { toWire } from './request';
 import type { StreamEvent, Usage } from './sse';
 import type { AssistantMessage, Message, Settings, ToolCall, ToolMessage } from './storage';
@@ -36,6 +37,9 @@ export interface AgentOptions {
   onLive: (message: AssistantMessage, info: LiveInfo) => void;
   /** A reply or tool result that is final. */
   onCommit: (message: Message) => void;
+  /** Summarises older turns when the chat nears the context between steps (tool results grow it).
+   * Returns the new history, or null when it failed or was stopped: then nothing changed. */
+  compact?: (history: Message[], plan: Plan) => Promise<Message[] | null>;
   /** Runs a tool call; the real one unless a test replaces it. */
   run?: (call: ToolCall) => ToolResult;
 }
@@ -114,7 +118,7 @@ export async function runAgent(o: AgentOptions): Promise<void> {
   const useTools = o.settings.tools;
   const cap = Math.max(1, o.settings.maxSteps);
   const run = o.run ?? ((c: ToolCall) => runTool(c.name, c.arguments));
-  const history = [...o.history];
+  let history = [...o.history];
   const commit = (m: Message) => {
     history.push(m);
     o.onCommit(m);
@@ -127,6 +131,10 @@ export async function runAgent(o: AgentOptions): Promise<void> {
     if (o.signal.aborted) {
       commit({ ...message, status: 'stopped' });
       return;
+    }
+    if (step > 1 && o.compact && shouldCompact(history, o.settings.systemPrompt, 0, o.info)) {
+      const plan = planCompaction(history);
+      if (plan) history = (await o.compact(history, plan)) ?? history;
     }
     const last = useTools && step >= cap;
     await streamReply(o, toWire(o.settings.systemPrompt, history, o.info?.vision === 'ok'), message, useTools, last);

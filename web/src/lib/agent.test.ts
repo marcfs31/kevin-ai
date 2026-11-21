@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { runAgent, type StreamFn } from './agent';
-import { ApiError } from './api';
+import { runAgent, type AgentOptions, type StreamFn } from './agent';
+import { ApiError, type ServerInfo } from './api';
+import { applyCompaction } from './compact';
 import { DEFAULT_SETTINGS, type AssistantMessage, type Message, type UserMessage } from './storage';
 
 const user: UserMessage = { id: 'u', role: 'user', content: 'what is 6*7?', typed: 'what is 6*7?', attachmentNames: [], createdAt: 0 };
@@ -23,11 +24,11 @@ function upstream(steps: Step[]) {
 const call = (id: string, name: string, args: string): Step => (_r, on) => on({ kind: 'tool_call', index: 0, id, name, arguments: args });
 const say = (text: string): Step => (_r, on) => on({ kind: 'content', text });
 
-async function drive(steps: Step[], opts: { settings?: typeof settings; signal?: AbortSignal } = {}) {
+async function drive(steps: Step[], opts: { settings?: typeof settings; signal?: AbortSignal; history?: Message[]; info?: ServerInfo | null; compact?: AgentOptions['compact'] } = {}) {
   const up = upstream(steps);
   const committed: Message[] = [];
   await runAgent({
-    history: [user], settings: opts.settings ?? settings, model: null, info: null, signal: opts.signal ?? new AbortController().signal,
+    history: opts.history ?? [user], settings: opts.settings ?? settings, model: null, info: opts.info ?? null, compact: opts.compact, signal: opts.signal ?? new AbortController().signal,
     stream: up.stream, onLive: () => undefined, onCommit: (m) => committed.push(m),
   });
   return { ...up, committed };
@@ -133,5 +134,45 @@ describe('runAgent', () => {
     expect(first?.stats).toMatchObject({ promptTokens: null, completionTokens: null });
     expect(first?.stats?.promptEstimate).toBeGreaterThan(0);
     expect(second?.stats).toMatchObject({ promptTokens: 9, completionTokens: 2 });
+  });
+
+  describe('compacting between steps', () => {
+    const old = (i: number): Message[] => [
+      { ...user, id: `ou${i}`, typed: `old ${i}`, content: `old ${i} ${'x'.repeat(120)}` },
+      { id: `oa${i}`, role: 'assistant', content: `old answer ${i} ${'y'.repeat(120)}`, reasoning: '', status: 'done', error: null, stats: null, createdAt: 0 },
+    ];
+    const info = (contextLength: number | null): ServerInfo => ({ model: 'm', contextLength, vision: 'unknown', maxPixels: null, pixelsPerToken: null, tokensPerImage: null, models: [] });
+    const history = [...old(0), ...old(1), ...old(2), user];
+
+    it('summarises older turns before the next step once tool results nearly fill the context', async () => {
+      let asked = 0;
+      const compact: AgentOptions['compact'] = async (h, plan) => {
+        asked += 1;
+        return applyCompaction(h, plan, 'SUMMARY', 's', 0, true);
+      };
+      const { requests } = await drive([call('c', 'calculator', '{"expression":"1"}'), say('done')], { history, info: info(200), compact });
+      expect(asked).toBe(1);
+      // Step 1 is sent whole (the caller compacts before a run); step 2 carries the summary, not the old turns.
+      expect(requests[0]?.messages.length).toBeGreaterThan(requests[1]?.messages.length ?? 99);
+      expect(JSON.stringify(requests[1]?.messages[0])).toContain('SUMMARY');
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain('old 0');
+      expect(JSON.stringify(requests[1]?.messages)).toContain('what is 6*7?');
+    });
+
+    it('does nothing while the chat fits, without a context length, or when the summary fails', async () => {
+      let asked = 0;
+      const compact: AgentOptions['compact'] = async () => {
+        asked += 1;
+        return null;
+      };
+      const steps = [call('c', 'calculator', '{"expression":"1"}'), say('done')];
+      await drive(steps, { history, info: info(100000), compact });
+      await drive(steps, { history, info: info(null), compact });
+      expect(asked).toBe(0);
+      const failed = await drive(steps, { history, info: info(200), compact });
+      expect(asked).toBe(1);
+      expect(failed.requests[1]?.messages.length).toBeGreaterThan(5);
+      expect(failed.committed[failed.committed.length - 1]).toMatchObject({ content: 'done' });
+    });
   });
 });

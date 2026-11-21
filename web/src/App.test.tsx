@@ -290,6 +290,40 @@ describe('App', () => {
       expect(bodyOf(fetchMock, 2).messages.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant', 'user']);
     });
 
+    it('compacts between steps when the server’s own count says the context is nearly full', async () => {
+      const turns = Array.from({ length: 4 }, (_, i) => [
+        { id: `u${i}`, role: 'user', content: `q${i}`, typed: `q${i}`, attachmentNames: [], createdAt: 1 },
+        { id: `a${i}`, role: 'assistant', content: `a${i}`, reasoning: '', status: 'done', error: null, stats: null, createdAt: 1 },
+      ]).flat();
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, activeId: 'c', settings: { tools: true }, conversations: [{ id: 'c', title: 't', createdAt: 1, updatedAt: 1, model: null, messages: turns }] }),
+      );
+      const usage = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 90, completion_tokens: 5 } })}\n\n`;
+      let n = 0;
+      const fetchMock = mockFetch(
+        (_u, init) => {
+          const system = String(JSON.parse(String(init?.body)).messages[0].content);
+          if (system.startsWith('You compress')) return sseResponse([delta('SUM'), FINISH, DONE]);
+          return ++n === 1
+            ? sseResponse([toolCallDelta('c1', 'calculator', '{"expression":"6*7"}'), FINISH_TOOLS, usage, DONE])
+            : sseResponse([delta('It is 42.'), FINISH, DONE]);
+        },
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      typeAndSend('6*7?');
+      expect(await screen.findByText('It is 42.')).toBeTruthy();
+      expect(screen.getByText('Compacted: 6 earlier messages replaced by a summary')).toBeTruthy();
+      const bodies = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions')).map((c) => JSON.parse(String(c[1]?.body)));
+      expect(bodies).toHaveLength(3);
+      expect(String(bodies[1].messages[0].content)).toContain('You compress');
+      expect(String(bodies[2].messages[0].content)).toContain('SUM');
+      expect(bodies[2].messages.slice(-2).map((m: { role: string }) => m.role)).toEqual(['assistant', 'tool']);
+      expect(JSON.stringify(bodies[2].messages)).not.toContain('q0');
+    });
+
     it('stops at the step cap with a note, and the last request forbids tool calls', async () => {
       enableTools(2);
       const fetchMock = mockFetch(() => asks());
