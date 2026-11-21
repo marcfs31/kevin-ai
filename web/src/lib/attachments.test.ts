@@ -4,7 +4,7 @@ import {
   AttachError, DEFAULT_MAX_PIXELS, MAX_BODY_BYTES, MAX_DECODE_SIDE, MAX_IMAGES, buildUserContent, checkText, classifyFile,
   estimateAttachment, fence, fitSize, isAllowedImageDataUrl, joinTextItems, parsePageRange, selectPdf, type Attachment,
 } from './attachments';
-import { checkContext, estimateImageTokens, estimateTextTokens, estimateWaitSeconds } from './estimate';
+import { checkContext, estimateImageTokens, estimateTextTokens, estimateWaitSeconds, etaParts } from './estimate';
 import { requestBody } from './api';
 import { assess, requestBytes, toWire } from './request';
 import { DEFAULT_SETTINGS, type Message } from './storage';
@@ -96,6 +96,13 @@ describe('estimates', () => {
   });
   it('waits at 12 prompt tokens a second', () => {
     expect(estimateWaitSeconds(1440)).toBe(120);
+  });
+
+  it('splits a wait into minutes and seconds', () => {
+    expect(etaParts(626)).toEqual({ m: 10, s: 26 });
+    expect(etaParts(45.4)).toEqual({ m: 0, s: 45 });
+    expect(etaParts(-1)).toEqual({ m: 0, s: 0 });
+
   });
   it('checks the context only when the server gives it', () => {
     expect(checkContext(100, info())).toEqual({ kind: 'unknown' });

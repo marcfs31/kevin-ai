@@ -66,7 +66,8 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
 ## What it does
 
 - **Streaming and Stop.** While lm-serve reads the prompt the reply shows "Reading the prompt…
-  N s" (on this hardware that can take minutes), then tokens per second. Stop (or Esc) aborts the
+  N s · about M min S s left" (12 prompt tokens/s on the target machine), then tokens per second.
+  Stop (or Esc) aborts the
   request; the server stops when the client disconnects. A reply that ends without a finish
   reason is shown as cut short, never as complete.
 - **Redirect.** While a reply streams in the open chat, type a new message and press Redirect (or
