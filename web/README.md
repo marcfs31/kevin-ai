@@ -119,8 +119,20 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
 - **Tools (off by default, Settings).** Offers a calculator and the current time through the
   OpenAI `tools` / `tool_calls` shape (a server with tool support, e.g. lm-serve on Qwen3.5 or
   Gemma 4). Calls and results are shown in a collapsible trace; the loop is capped at 1–20 steps
-  (default 8), the last step sends `tool_choice: "none"`, and Stop ends it at once. Tools run in
-  the page and touch nothing outside it.
+  (default 8), the last step sends `tool_choice: "none"`, and Stop ends it at once. The two
+  built-in tools run in the page and touch nothing outside it.
+- **MCP tools and web search (settings `toolsConfig` and `internet`; the controls come in the
+  Settings panel PR).** With `tools/chat_tools.py` running and reachable at `/tools/*`
+  (`LM_TOOLS_URL`), the tools of the MCP servers turned on are fetched from it (one server at a
+  time) and offered as `server__tool`. Only a **budget** of definitions is sent each step
+  (default about 1,500 tokens, at most 12): the built-ins, `find_tools`, and the tools that best
+  match your message by keyword; `find_tools(query)` lets the model name what it needs and
+  unlocks those tools for the rest of the message. A call to a tool that is not read-only (or
+  to any tool, in "always" mode) shows a card with the exact arguments and runs only after
+  Allow once or Always allow this tool; Deny, or Stop, refuses it and the model is told. With
+  nobody to ask, such a call is refused. Tool results are marked in the system message as data,
+  never instructions. Servers that reach the network, and `web_search` (a SearXNG address), are
+  offered only while the internet switch is on; it is off by default.
 - **Server state reuse.** Every earlier answer is re-sent exactly as received (no reasoning, no
   edits), because lm-serve reuses its state only then. Stopped replies are re-sent as far as
   they got; failed replies are left out, even when they streamed some text.

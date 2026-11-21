@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Composer } from './components/Composer';
 import { MessageView, errorText } from './components/MessageView';
+import { ApprovalCard, type Answer } from './components/ApprovalCard';
 import { ChatStats } from './components/ChatStats';
 import { ChatModelSelect } from './components/ChatModelSelect';
 import { ModeSelects } from './components/ModeSelects';
@@ -14,6 +15,8 @@ import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type 
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
+import { loadMcpSpecs, type McpLoad } from './lib/mcpLoad';
+import { createToolHost, type ApprovalRequest } from './lib/toolHost';
 import { DEFAULT_EFFORT, DEFAULT_SPEED, SPEED_EFFORT, resolveModes, type Effort, type Speed } from './lib/modes';
 import { assess } from './lib/request';
 import { estimateWireTokens, liveCount } from './lib/tokens';
@@ -82,6 +85,43 @@ function Chat({ state, setState, storage, notice }: {
   // The chat the running reply belongs to: it can be left and come back to while it runs.
   const [runConv, setRunConv] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
+  // MCP tools of the servers turned on in Settings, asked of the tool service; the key says what they were asked for.
+  const toolsOn = state.settings.tools;
+  const serverKey = Object.entries(state.settings.toolsConfig.servers).filter(([, sv]) => sv.on).map(([id]) => id).sort().join(',');
+  const internetOn = state.settings.internet.on;
+  const mcpKey = `${serverKey}|${internetOn ? 1 : 0}`;
+  const [mcp, setMcp] = useState<{ key: string; load: McpLoad | null; error: ApiError | null }>({ key: '', load: null, error: null });
+  useEffect(() => {
+    if (!toolsOn || serverKey === '') return;
+    const controller = new AbortController();
+    loadMcpSpecs(serverKey.split(','), internetOn, controller.signal).then(
+      (load) => setMcp({ key: mcpKey, load, error: null }),
+      (e: unknown) => {
+        if (!(e instanceof DOMException && e.name === 'AbortError')) setMcp({ key: mcpKey, load: null, error: e instanceof ApiError ? e : new ApiError(0, null) });
+      },
+    );
+    return () => controller.abort();
+  }, [toolsOn, serverKey, internetOn, mcpKey]);
+  const mcpSpecs = toolsOn && mcp.key === mcpKey ? (mcp.load?.specs ?? []) : [];
+  // The user is asked before a tool that is not read-only runs; Stop answers no.
+  const [approval, setApproval] = useState<{ request: ApprovalRequest; answer: (a: Answer) => void } | null>(null);
+  const approve = (request: ApprovalRequest, signal: AbortSignal) =>
+    new Promise<'allow' | 'deny'>((resolve) => {
+      if (signal.aborted) return resolve('deny');
+      const done = (d: 'allow' | 'deny') => {
+        setApproval(null);
+        resolve(d);
+      };
+      signal.addEventListener('abort', () => done('deny'), { once: true });
+      setApproval({
+        request,
+        answer: (a) => {
+          if (a === 'always')
+            setState((st) => ({ ...st, settings: { ...st.settings, toolsConfig: { ...st.settings.toolsConfig, alwaysAllow: [...new Set([...st.settings.toolsConfig.alwaysAllow, request.tool])] } } }));
+          done(a === 'deny' ? 'deny' : 'allow');
+        },
+      });
+    });
   // Belongs to one chat: its banner and Retry show only there, so Retry never compacts another chat.
   const [compactError, setCompactError] = useState<{ convId: string; error: ApiError } | null>(null);
   const serverInfo = server.kind === 'ok' ? server.info : null;
@@ -226,6 +266,8 @@ function Chat({ state, setState, storage, notice }: {
         maxTokens: modes.maxTokens,
         thinking: modes.thinking,
         compactAt: modes.compactAt,
+        tools: toolsOn ? createToolHost({ mcp: mcpSpecs, config: state.settings.toolsConfig, internet: state.settings.internet }) : undefined,
+        approve,
         info,
         signal: controller.signal,
         stream: streamChat,
@@ -517,6 +559,7 @@ function Chat({ state, setState, storage, notice }: {
           </div>
           {live && live.convId === active?.id && <MessageView m={live.message} live={live.info} />}
         </div>
+        {approval && <ApprovalCard request={approval.request} onAnswer={approval.answer} />}
         {compacting && (
           <p className="note" role="status">
             {t('compact.running')}

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { runAgent, type AgentOptions, type StreamFn } from './agent';
+import { TOOL_NOTE, runAgent, type AgentOptions, type StreamFn } from './agent';
 import { ApiError, type ServerInfo } from './api';
 import { applyCompaction } from './compact';
 import { DEFAULT_SETTINGS, type AssistantMessage, type Message, type UserMessage } from './storage';
+import type { ApprovalRequest, ToolHost } from './toolHost';
 
 const user: UserMessage = { id: 'u', role: 'user', content: 'what is 6*7?', typed: 'what is 6*7?', attachmentNames: [], createdAt: 0 };
 const settings = { ...DEFAULT_SETTINGS, tools: true, maxSteps: 3 };
@@ -174,5 +175,110 @@ describe('runAgent', () => {
       expect(failed.requests[1]?.messages.length).toBeGreaterThan(5);
       expect(failed.committed[failed.committed.length - 1]).toMatchObject({ content: 'done' });
     });
+  });
+});
+
+describe('runAgent with a tool host', () => {
+  const request = (name: string): ApprovalRequest => ({ callId: 'c1', tool: name, title: name, server: 's', args: '{}', readOnly: false });
+  /** A host whose "write" needs the user's OK and whose results are recorded. */
+  function host(over: Partial<ToolHost> = {}) {
+    const seen: { query: string; unlocked: string[] }[] = [];
+    const ran: string[] = [];
+    const h: ToolHost = {
+      external: true,
+      definitions: (query, unlocked) => {
+        seen.push({ query, unlocked: [...unlocked] });
+        return [{ type: 'function', function: { name: 'write', description: 'w', parameters: {} } }];
+      },
+      approval: (c) => (c.name === 'write' ? request('write') : null),
+      run: async (c, _signal, unlock) => {
+        ran.push(c.name);
+        if (c.name === 'find') unlock(['unlocked_tool']);
+        return { content: `ran ${c.name}`, isError: false };
+      },
+      ...over,
+    };
+    return { h, seen, ran };
+  }
+  async function go(h: ToolHost, steps: Step[], opts: { approve?: AgentOptions['approve']; settings?: typeof settings; signal?: AbortSignal } = {}) {
+    const up = upstream(steps);
+    const committed: Message[] = [];
+    await runAgent({
+      history: [user], settings: opts.settings ?? settings, model: null, info: null, signal: opts.signal ?? new AbortController().signal,
+      stream: up.stream, onLive: () => undefined, onCommit: (m) => committed.push(m), tools: h, approve: opts.approve,
+    });
+    return { ...up, committed };
+  }
+  const toolText = (m: Message | undefined) => (m?.role === 'tool' ? m.content : null);
+
+  it('asks before a call that needs it and runs it on allow', async () => {
+    const { h, ran } = host();
+    const asked: string[] = [];
+    const { committed } = await go(h, [call('c1', 'write', '{}'), say('done')], { approve: async (r) => (asked.push(r.tool), 'allow') });
+    expect(asked).toEqual(['write']);
+    expect(ran).toEqual(['write']);
+    expect(toolText(committed[1])).toBe('ran write');
+  });
+
+  it('hands the model a refusal on deny and does not run the tool, and the model carries on', async () => {
+    const { h, ran } = host();
+    const { committed, requests } = await go(h, [call('c1', 'write', '{}'), say('ok, not doing it')], { approve: async () => 'deny' });
+    expect(ran).toEqual([]);
+    expect(committed[1]).toMatchObject({ role: 'tool', isError: true, content: 'error: the user did not allow this tool call' });
+    expect(committed.at(-1)).toMatchObject({ role: 'assistant', content: 'ok, not doing it' });
+    expect(requests).toHaveLength(2);
+  });
+
+  it('refuses when nobody can be asked, and when asking fails', async () => {
+    const a = host();
+    const noAsker = await go(a.h, [call('c1', 'write', '{}'), say('x')]);
+    expect(a.ran).toEqual([]);
+    expect(toolText(noAsker.committed[1])).toContain('did not allow');
+    const b = host();
+    const failing = await go(b.h, [call('c1', 'write', '{}'), say('x')], { approve: async () => { throw new Error('ui gone'); } });
+    expect(b.ran).toEqual([]);
+    expect(toolText(failing.committed[1])).toContain('did not allow');
+  });
+
+  it('does not ask for a call the host lets through', async () => {
+    const { h, ran } = host({ approval: () => null });
+    let asked = 0;
+    await go(h, [call('c1', 'write', '{}'), say('x')], { approve: async () => (asked++, 'allow') });
+    expect(asked).toBe(0);
+    expect(ran).toEqual(['write']);
+  });
+
+  it('stops where it is when Stop is pressed while a question is open, without running the tool', async () => {
+    const { h, ran } = host();
+    const controller = new AbortController();
+    const { committed } = await go(h, [call('c1', 'write', '{}')], {
+      signal: controller.signal,
+      approve: (_r, signal) => new Promise((resolve) => {
+        signal.addEventListener('abort', () => resolve('deny'));
+        controller.abort();
+      }),
+    });
+    expect(ran).toEqual([]);
+    expect(committed.at(-1)).toMatchObject({ role: 'assistant', status: 'stopped' });
+  });
+
+  it('gives the host the user\'s last message, and what the model unlocked on the next step', async () => {
+    const { h, seen } = host({ approval: () => null });
+    await go(h, [call('c1', 'find', '{"query":"x"}'), say('done')]);
+    expect(seen[0]).toEqual({ query: 'what is 6*7?', unlocked: [] });
+    expect(seen[1]).toEqual({ query: 'what is 6*7?', unlocked: ['unlocked_tool'] });
+  });
+
+  it('tells the model to treat tool results as data, after the user\'s own system prompt, only when outside tools are in play', async () => {
+    const withUser = await go(host().h, [say('x')], { settings: { ...settings, systemPrompt: 'Be brief.' } });
+    expect(withUser.requests[0]?.messages[0]).toMatchObject({ role: 'system', content: `Be brief.\n\n${TOOL_NOTE}` });
+    const alone = await go(host().h, [say('x')]);
+    expect(alone.requests[0]?.messages[0]).toMatchObject({ role: 'system', content: TOOL_NOTE });
+    const local = await go(host({ external: false }).h, [say('x')], { settings: { ...settings, systemPrompt: 'Be brief.' } });
+    expect(local.requests[0]?.messages[0]).toMatchObject({ role: 'system', content: 'Be brief.' });
+    // NEGATIVE: with tools off the prompt is untouched and no tools are sent
+    const off = await go(host().h, [say('x')], { settings: { ...settings, tools: false, systemPrompt: 'Be brief.' } });
+    expect(off.requests[0]?.messages[0]).toMatchObject({ content: 'Be brief.' });
+    expect(off.requests[0]?.tools).toBeUndefined();
   });
 });

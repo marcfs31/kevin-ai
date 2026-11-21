@@ -119,19 +119,26 @@ export function toolDefinitions(): WireTool[] {
   return TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
 }
 
-/** Runs one call as the model wrote it. A failure is a result the model can read, never a throw. */
-export function runTool(name: string, argumentsJson: string, now: Date = new Date()): ToolResult {
-  const tool = TOOLS.find((t) => t.name === name);
-  if (!tool) return { content: `error: no tool named "${name}"`, isError: true };
+/** The arguments the model wrote as an object, or the error text to hand back to it. */
+export function parseArguments(argumentsJson: string): { args: Record<string, unknown> } | { error: string } {
   let args: unknown;
   try {
     args = argumentsJson.trim() ? JSON.parse(argumentsJson) : {};
   } catch {
-    return { content: 'error: the arguments are not valid JSON', isError: true };
+    return { error: 'the arguments are not valid JSON' };
   }
-  if (args === null || typeof args !== 'object' || Array.isArray(args)) return { content: 'error: the arguments must be a JSON object', isError: true };
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return { error: 'the arguments must be a JSON object' };
+  return { args: args as Record<string, unknown> };
+}
+
+/** Runs one call as the model wrote it. A failure is a result the model can read, never a throw. */
+export function runTool(name: string, argumentsJson: string, now: Date = new Date()): ToolResult {
+  const tool = TOOLS.find((t) => t.name === name);
+  if (!tool) return { content: `error: no tool named "${name}"`, isError: true };
+  const parsed = parseArguments(argumentsJson);
+  if ('error' in parsed) return { content: `error: ${parsed.error}`, isError: true };
   try {
-    return { content: tool.run(args as Record<string, unknown>, now), isError: false };
+    return { content: tool.run(parsed.args, now), isError: false };
   } catch (e) {
     return { content: `error: ${e instanceof Error ? e.message : 'the tool failed'}`, isError: true };
   }

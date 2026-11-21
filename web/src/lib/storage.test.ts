@@ -1,6 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, emptyState, loadState, migrate, saveState, truncateFrom, type Message } from './storage';
 
+describe('tools and internet settings', () => {
+  const load = (settings: unknown) => migrate({ version: 1, settings })?.settings;
+
+  it('default to nothing on and the internet off, so a chat saved before them loads as it was', () => {
+    expect(load({})?.toolsConfig).toEqual({ servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [] });
+    expect(load({})?.internet).toEqual({ on: false, searchUrl: '' });
+  });
+
+  it('keep a valid configuration', () => {
+    const cfg = { servers: { fs: { on: true, disabledTools: ['write_file'] } }, budgetTokens: 3000, approval: 'always', alwaysAllow: ['fs__read_file'] };
+    expect(load({ toolsConfig: cfg, internet: { on: true, searchUrl: ' http://127.0.0.1:8888 ' } })).toMatchObject({ toolsConfig: cfg, internet: { on: true, searchUrl: 'http://127.0.0.1:8888' } });
+  });
+
+  it('refuse what is not valid, one field at a time', () => {
+    expect(load({ toolsConfig: { servers: { 'Bad Name': { on: true }, ok: { on: 'yes', disabledTools: [1, 'x', 'x'] }, list: [] }, budgetTokens: 5, approval: 'maybe', alwaysAllow: [3, '', 'a'] } })?.toolsConfig).toEqual({
+      servers: { ok: { on: false, disabledTools: ['x'] } }, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: ['a'],
+    });
+    expect(load({ toolsConfig: { budgetTokens: 99999 } })?.toolsConfig.budgetTokens).toBe(1500);
+    expect(load({ internet: { on: 'true', searchUrl: 'x'.repeat(400) } })?.internet).toEqual({ on: false, searchUrl: '' });
+    expect(load({ toolsConfig: 'x', internet: 7 })).toMatchObject({ toolsConfig: { servers: {} }, internet: { on: false } });
+  });
+});
+
 describe('effort and speed per conversation', () => {
   it('load with the middle defaults when absent or not a known value, and keep a valid pair', () => {
     const state = migrate({

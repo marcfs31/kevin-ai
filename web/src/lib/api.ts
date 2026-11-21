@@ -3,6 +3,7 @@
 // exposes POST /control/serve on the Vite server to start a remote model.
 import { SseParser, obj, parseErrorBody, parsePayload, type ApiErrorBody, type StreamEvent } from './sse';
 import type { ServeOptions, ServeResult } from './serveControl';
+import type { McpTool } from './toolRegistry';
 
 export type VisionStatus = 'ok' | 'unavailable' | 'unknown';
 
@@ -157,6 +158,108 @@ export async function resetServer(signal?: AbortSignal): Promise<void> {
   const res = await send('/v1/chat/reset', { method: 'POST', signal, headers: { Accept: 'application/json' } });
   if (res.status === 404) return;
   if (!res.ok) throw await errorFrom(res);
+}
+
+// ---- the tool service (tools/chat_tools.py), reached through the same-origin /tools/* paths ----
+
+export interface McpServerStatus {
+  id: string;
+  title: string;
+  kind: 'stdio' | 'http';
+  /** It reaches the internet, so it only runs while the internet switch is on. */
+  network: boolean;
+  catalog: string | null;
+  state: 'ready' | 'stopped' | 'failed';
+  error: string | null;
+  tools: number | null;
+}
+
+export interface CatalogEntry {
+  id: string;
+  title: string;
+  description: string;
+  runtime: string;
+  network: boolean;
+  verified: boolean;
+  added: boolean;
+}
+
+export interface ToolsStatus {
+  servers: McpServerStatus[];
+  catalog: CatalogEntry[];
+  configError: string | null;
+}
+
+async function toolsJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
+  const res = await send(url, { ...init, headers: { Accept: 'application/json', ...(init.method === 'POST' ? { 'Content-Type': 'application/json' } : {}) } });
+  const text = await res.text().catch(() => '');
+  let raw: unknown = null;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    // Not JSON (a proxy's error page): the status alone is reported.
+  }
+  if (!res.ok) throw new ApiError(res.status, parseErrorBody(raw));
+  const json = obj(raw);
+  if (!json) throw new ApiError(res.status, { message: '', code: 'bad_tools_reply', type: null });
+  return json;
+}
+
+const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d);
+
+export async function toolsStatus(signal?: AbortSignal): Promise<ToolsStatus> {
+  const j = await toolsJson('/tools/status', { signal });
+  const servers = (Array.isArray(j.servers) ? j.servers : []).flatMap((v): McpServerStatus[] => {
+    const s = obj(v);
+    if (!s || typeof s.id !== 'string') return [];
+    return [{
+      id: s.id, title: str(s.title, s.id), kind: s.kind === 'http' ? 'http' : 'stdio', network: s.network === true, catalog: typeof s.catalog === 'string' ? s.catalog : null,
+      state: s.state === 'ready' || s.state === 'failed' ? s.state : 'stopped', error: typeof s.error === 'string' ? s.error : null, tools: typeof s.tools === 'number' ? s.tools : null,
+    }];
+  });
+  const catalog = (Array.isArray(j.catalog) ? j.catalog : []).flatMap((v): CatalogEntry[] => {
+    const c = obj(v);
+    if (!c || typeof c.id !== 'string') return [];
+    return [{ id: c.id, title: str(c.title, c.id), description: str(c.description), runtime: str(c.runtime), network: c.network === true, verified: c.verified === true, added: c.added === true }];
+  });
+  return { servers, catalog, configError: typeof j.configError === 'string' ? j.configError : null };
+}
+
+export async function toolsList(server: string, internet: boolean, signal?: AbortSignal): Promise<McpTool[]> {
+  const j = await toolsJson(`/tools/servers/${encodeURIComponent(server)}/tools?internet=${internet ? '1' : '0'}`, { signal });
+  return (Array.isArray(j.tools) ? j.tools : []).flatMap((v): McpTool[] => {
+    const t = obj(v);
+    if (!t || typeof t.name !== 'string') return [];
+    return [{
+      name: t.name, title: str(t.title, t.name), description: str(t.description), inputSchema: obj(t.inputSchema) ?? { type: 'object', properties: {} },
+      readOnly: t.readOnly === true, tokens: typeof t.tokens === 'number' ? t.tokens : 0,
+    }];
+  });
+}
+
+export interface ToolCallResult {
+  content: string;
+  isError: boolean;
+}
+
+function toolResult(j: Record<string, unknown>): ToolCallResult {
+  return { content: str(j.content), isError: j.isError === true };
+}
+
+export async function toolsCall(server: string, name: string, args: Record<string, unknown>, internet: boolean, signal?: AbortSignal): Promise<ToolCallResult> {
+  return toolResult(await toolsJson(`/tools/servers/${encodeURIComponent(server)}/call`, { method: 'POST', signal, body: JSON.stringify({ name, arguments: args, internet }) }));
+}
+
+export async function toolsSearch(query: string, searchUrl: string, signal?: AbortSignal): Promise<ToolCallResult> {
+  return toolResult(await toolsJson('/tools/search', { method: 'POST', signal, body: JSON.stringify({ query, searchUrl, internet: true }) }));
+}
+
+export async function toolsStop(server: string): Promise<void> {
+  await toolsJson(`/tools/servers/${encodeURIComponent(server)}/stop`, { method: 'POST', body: '{}' });
+}
+
+export async function toolsAddCatalog(id: string, internet: boolean): Promise<boolean> {
+  return (await toolsJson(`/tools/catalog/${encodeURIComponent(id)}/add`, { method: 'POST', body: JSON.stringify({ internet }) })).added === true;
 }
 
 export function requestBody(req: ChatRequest): string {
