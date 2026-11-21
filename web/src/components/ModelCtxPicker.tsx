@@ -17,7 +17,8 @@ type Status =
   | { kind: 'error'; message: string; detail?: string };
 
 interface Props {
-  modelName: string;
+  /** The model the server reports, or null when it cannot be reached: the picker is then how to start one. */
+  modelName: string | null;
   contextLength: number | null;
   busy: boolean;
   onStarted: () => void;
@@ -111,11 +112,11 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        aria-label={`${t('server.ok', { model: modelName })}. ${t('picker.open')}`}
+        aria-label={modelName === null ? t('picker.startNone') : `${t('server.ok', { model: modelName })}. ${t('picker.open')}`}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
       >
-        {t('server.ok', { model: modelName })}
+        {modelName === null ? t('picker.startNone') : t('server.ok', { model: modelName })}
       </button>
       {open && (
         <div

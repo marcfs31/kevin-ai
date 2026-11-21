@@ -752,9 +752,31 @@ describe('App', () => {
     mockFetch(() => sseResponse([FINISH]), () => (up ? modelsResponse() : Promise.reject(new TypeError('down')) as unknown as Response));
     renderApp();
     expect(await screen.findByText('Could not reach the server.')).toBeTruthy();
+    // A stopped server can be started from the header, without opening Settings.
+    expect(screen.getByRole('button', { name: 'Start a model' })).toBeTruthy();
     up = true;
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Model: qwen3.5-4b')).toBeTruthy();
+  });
+
+  it('deleting a chat is quiet when the server has no reset endpoint, and names the status when the reset fails', async () => {
+    let reset = 404;
+    mockFetch((url) => (url.endsWith('/v1/chat/reset') ? new Response('{}', { status: reset }) : sseResponse([delta('ok'), FINISH, DONE])));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+    typeAndSend('one');
+    await screen.findByText('ok');
+    const nav = screen.getByRole('navigation', { name: 'Conversations' });
+    fireEvent.click(within(nav).getByRole('button', { name: 'Delete “one”' }));
+    await act(async () => {});
+    // llama-server has no /v1/chat/reset: that is not "could not reach the server".
+    expect(screen.queryByRole('alert')).toBeNull();
+    reset = 500;
+    typeAndSend('two');
+    await screen.findByText('ok');
+    fireEvent.click(within(nav).getByRole('button', { name: 'Delete “two”' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('500');
+    expect(screen.queryByText('Could not reach the server.')).toBeNull();
   });
 
   it('renames, deletes and deletes all conversations', async () => {

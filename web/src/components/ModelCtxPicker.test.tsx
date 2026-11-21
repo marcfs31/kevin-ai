@@ -12,6 +12,17 @@ function renderPicker() {
 }
 
 describe('ModelCtxPicker', () => {
+  it('is the way to start a model when the server cannot be reached', () => {
+    render(
+      <I18nProvider locale="en">
+        <ModelCtxPicker modelName={null} contextLength={null} busy={false} onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Start a model' }));
+    expect(screen.getByRole('dialog', { name: 'Model and context' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeTruthy();
+  });
+
   it('opens from the model header button', () => {
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));

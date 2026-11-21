@@ -76,6 +76,7 @@ export const en = {
   'server.retry': 'Retry',
 
   'picker.open': 'Choose model and context window',
+  'picker.startNone': 'Start a model',
   'picker.title': 'Model and context',
   'picker.model': 'Model',
   'picker.ctx': 'Context window',
