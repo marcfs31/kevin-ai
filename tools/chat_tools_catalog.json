@@ -13,7 +13,7 @@
       ],
       "network": false,
       "install": true,
-      "verified": false
+      "verified": true
     },
     {
       "id": "memory",
@@ -30,7 +30,7 @@
       },
       "network": false,
       "install": true,
-      "verified": false
+      "verified": true
     },
     {
       "id": "thinking",
@@ -44,7 +44,7 @@
       ],
       "network": false,
       "install": true,
-      "verified": false
+      "verified": true
     },
     {
       "id": "time",
@@ -57,7 +57,7 @@
       ],
       "network": false,
       "install": true,
-      "verified": false
+      "verified": true
     },
     {
       "id": "git",
@@ -72,7 +72,7 @@
       ],
       "network": false,
       "install": true,
-      "verified": false
+      "verified": true
     },
     {
       "id": "fetch",
@@ -85,22 +85,7 @@
       ],
       "network": true,
       "install": true,
-      "verified": false
-    },
-    {
-      "id": "sqlite",
-      "title": "SQLite (scratch folder)",
-      "description": "Query and change a SQLite database in the scratch folder.",
-      "runtime": "python",
-      "command": "uvx",
-      "args": [
-        "mcp-server-sqlite==2025.4.25",
-        "--db-path",
-        "{ROOT}/chat.db"
-      ],
-      "network": false,
-      "install": true,
-      "verified": false
+      "verified": true
     }
   ]
 }
