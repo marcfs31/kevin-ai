@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { chatFigures, contextBar } from './chatStats';
 import type { AssistantMessage, Message, Stats, SummaryMessage, UserMessage } from './storage';
+import type { Count } from './tokens';
 
 let n = 0;
 const user = (text: string): UserMessage => ({ id: `u${n++}`, role: 'user', content: text, typed: text, attachmentNames: [], createdAt: 0 });
@@ -57,5 +58,27 @@ describe('contextBar', () => {
   it('says nothing about free space or a share when the server gave no window size', () => {
     expect(contextBar(m, '', info(null))).toMatchObject({ prompt: 60, reply: 20, free: null, limit: null, share: null });
     expect(contextBar(m, '', null)?.free).toBeNull();
+  });
+});
+
+describe('while a reply streams', () => {
+  const live = (readN: number, writtenN: number, estimated = true): Count => ({ read: { n: readN, estimated }, written: { n: writtenN, estimated } });
+  const m: Message[] = [user('q1'), bot({ promptTokens: 60, completionTokens: 20 }), user('q2')];
+
+  it('adds the reply in progress to the totals and keeps the turn count', () => {
+    expect(chatFigures(m, live(90, 7))).toMatchObject({ read: { n: 150, estimated: true }, written: { n: 27, estimated: true }, turns: 2 });
+    // NEGATIVE: with nothing streaming the totals are the finished replies only
+    expect(chatFigures(m, null)).toMatchObject({ read: { n: 60, estimated: false }, written: { n: 20, estimated: false } });
+  });
+
+  it('shows the window as the running request holds it, not the finished reply plus the new one', () => {
+    expect(contextBar(m, '', info(200), live(90, 7))).toMatchObject({ prompt: 90, reply: 7, free: 103, share: 97 / 200, estimated: true });
+    expect(contextBar(m, '', info(200), live(90, 7, false))?.estimated).toBe(false);
+    expect(contextBar(m, '', info(200), null)).toMatchObject({ prompt: 61, reply: 20, estimated: true });
+  });
+
+  it('still says nothing for an empty chat', () => {
+    expect(chatFigures([], live(1, 1))).toBeNull();
+    expect(contextBar([], '', info(100), live(1, 1))).toBeNull();
   });
 });

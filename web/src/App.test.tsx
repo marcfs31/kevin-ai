@@ -105,6 +105,25 @@ describe('App', () => {
     expect(screen.getByLabelText('This chat').textContent).toContain('15% of 100 tokens');
   });
 
+  it('moves the context bar and the totals while the reply is still being written', async () => {
+    mockFetch((_u, init) => heldReply(init), () => modelsResponse({ context_length: 1000 }));
+    renderApp();
+    await screen.findByText('Context: 1,000 tokens');
+    typeAndSend('x'.repeat(35));
+    await screen.findByText('partial');
+    // The reply is not finished and has no usage yet: the figures are the live estimates.
+    const bar = screen.getByRole('img', { name: 'Context: prompt ≈10 tokens, last reply 1, free ≈989 of 1,000 (1% full)' });
+    expect(within(bar).getByText('Last reply').nextElementSibling?.textContent).toBe('1');
+    const totals = screen.getByLabelText('Totals for this chat');
+    expect(boxValue(totals, 'Read')).toBe('≈10');
+    expect(boxValue(totals, 'Written')).toBe('≈1');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText('Stopped.');
+    // Once it ends the same reply is counted from the finished message, not twice.
+    expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Written')).toBe('≈1');
+    expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Read')).toBe('≈10');
+  });
+
   it('keeps the chat list usable while a reply is being written', async () => {
     let n = 0;
     mockFetch((_u, init) => (++n === 1 ? sseResponse([delta('first answer'), FINISH, USAGE, DONE]) : heldReply(init)));

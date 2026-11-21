@@ -13,7 +13,7 @@ import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { AUTO_RATIO, applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
 import { assess } from './lib/request';
-import { estimateWireTokens } from './lib/tokens';
+import { estimateWireTokens, liveCount } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
 import {
   backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
@@ -442,7 +442,13 @@ function Chat({ state, setState, storage, notice }: {
             )}
           </p>
         )}
-        <ChatStats messages={messages} systemPrompt={state.settings.systemPrompt} autoCompact={state.settings.autoCompact} info={info} />
+        <ChatStats
+          messages={messages}
+          systemPrompt={state.settings.systemPrompt}
+          autoCompact={state.settings.autoCompact}
+          info={info}
+          live={live && live.convId === active?.id ? liveCount(live.info.usage, live.info.promptEstimate, live.info.chunks) : null}
+        />
         <div className="chat-tools" role="group" aria-label={t('compact.group')}>
           <label className="check">
             <input
