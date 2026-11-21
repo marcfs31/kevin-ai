@@ -408,7 +408,7 @@ static void load_script(Fake *f, int with_thought)
 
 static int run_turn(LmChat *c, const char *text, LmTurn *t)
 {
-    LmTurnOpts o = { 100, NULL, NULL, NULL, NULL };
+    LmTurnOpts o = { 100, NULL, NULL, NULL, NULL, NULL };
     char err[200] = "";
     int rc = lm_chat_turn(c, text, &o, t, err, sizeof err);
     if (rc != LM_OK) fprintf(stderr, "  turn rc=%d err=%s\n", rc, err);

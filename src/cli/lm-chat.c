@@ -184,7 +184,7 @@ static int run_turn(Session *s, const char *text)
 {
     char err[512] = "";
     LmTurn t;
-    LmTurnOpts to = { s->max_tokens, sink, &s->out, cancelled, NULL };
+    LmTurnOpts to = { s->max_tokens, sink, &s->out, cancelled, NULL, NULL };
     s->out.in_reasoning = 0;
     s->out.wrote_answer = 0;
     g_cancel = 0;
