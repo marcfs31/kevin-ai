@@ -355,6 +355,23 @@ describe('App', () => {
     }
   });
 
+  it('starts gemma with ctx from the header picker after confirm', async () => {
+    const fetchMock = mockFetch(
+      () => new Response(JSON.stringify({ ok: true, model: 'gemma', health: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+    await screen.findByText('Model: qwen3.5-4b');
+    fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Gemma 4 E4B' }));
+    fireEvent.click(screen.getByRole('radio', { name: '8k' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    expect(confirm).toHaveBeenCalledWith('Stop the current model and start Gemma 4 E4B?');
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/control/serve'))).toBe(true));
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/control/serve'));
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ model: 'gemma', ctx: 8192 });
+  });
+
   it('asks before replacing the running model', async () => {
     const fetchMock = mockFetch(
       () => new Response(JSON.stringify({ ok: true, model: 'gemma', health: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } }),

@@ -36,6 +36,7 @@ describe('phone layout', () => {
     expect(css).toContain('2.75rem');
     expect(css).toMatch(/\.serve-actions button\s*\{[^}]*inline-size:\s*100%/);
     expect(css).toMatch(/\.serve-actions button\s*\{[^}]*min-block-size:\s*2\.75rem/);
+    expect(css).toMatch(/\.model-picker-choices button\s*\{[^}]*min-block-size:\s*2\.75rem/);
   });
 
   it('places copy above the code and lets a PDF name wrap', () => {

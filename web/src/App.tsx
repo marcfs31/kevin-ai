@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Composer } from './components/Composer';
 import { MessageView, errorText, type LiveInfo } from './components/MessageView';
+import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Sidebar } from './components/Sidebar';
@@ -208,7 +209,11 @@ function Chat({ state, setState, storage, notice }: {
   };
 
   const serverLine =
-    server.kind === 'loading' ? t('server.checking') : server.kind === 'error' ? errorText(t, server.error) : t('server.ok', { model: server.info.model });
+    server.kind === 'loading' ? t('server.checking') : server.kind === 'error' ? errorText(t, server.error) : null;
+  const onServeStarted = () => {
+    setServer({ kind: 'loading' });
+    fetchInfo();
+  };
   // When images are off, the composer says why next to the disabled button.
   const visionLine = info?.vision === 'ok' ? t('vision.ok') : null;
   const storageError =
@@ -242,7 +247,16 @@ function Chat({ state, setState, storage, notice }: {
           <h1>{t('app.title')}</h1>
         </div>
         <div className={`server server-${server.kind}`} role="status">
-          <span>{serverLine}</span>
+          {server.kind === 'ok' ? (
+            <ModelCtxPicker
+              modelName={server.info.model}
+              contextLength={server.info.contextLength}
+              busy={busy}
+              onStarted={onServeStarted}
+            />
+          ) : (
+            serverLine && <span>{serverLine}</span>
+          )}
           {info?.contextLength && <span>{t('server.context', { n: info.contextLength })}</span>}
           {server.kind === 'error' && (
             <button type="button" onClick={retryServer}>
@@ -283,14 +297,7 @@ function Chat({ state, setState, storage, notice }: {
       <main className="main">
         {settingsOpen && (
           <div id="settings" className="panels">
-            <ServerPanel
-              busy={busy}
-              runningModel={info?.model ?? null}
-              onStarted={() => {
-                setServer({ kind: 'loading' });
-                fetchInfo();
-              }}
-            />
+            <ServerPanel busy={busy} runningModel={info?.model ?? null} onStarted={onServeStarted} />
             <SettingsPanel settings={state.settings} onChange={updateSettings} />
           </div>
         )}

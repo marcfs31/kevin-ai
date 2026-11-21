@@ -68,6 +68,15 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'server.down': 'No se puede conectar con el servidor.',
   'server.context': 'Contexto: {n} tokens',
   'server.retry': 'Reintentar',
+
+  'picker.open': 'Elegir modelo y ventana de contexto',
+  'picker.title': 'Modelo y contexto',
+  'picker.model': 'Modelo',
+  'picker.ctx': 'Ventana de contexto',
+  'picker.ctxAuto': 'Automático (predeterminado del servidor)',
+  'picker.ctxSize': '{label}',
+  'picker.start': 'Arrancar',
+
   'vision.ok': 'Imágenes: disponibles',
   'vision.unavailable': 'Imágenes: este modelo no puede leer imágenes.',
   'vision.unknown': 'Imágenes: desactivadas, porque este servidor no indica si puede leerlas.',

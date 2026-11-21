@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
-import { controlRequestAllowed, parseServeOptions, serveScriptArgs, type ServeResult } from './src/lib/serveControl.ts';
+import { controlRequestAllowed, parseServeOptions, serveScriptArgs, type ServeResult } from './src/lib/serveControl';
 
 const webDir = dirname(fileURLToPath(import.meta.url));
 const scriptPath = resolve(webDir, '..', 'scripts', 'start-remote-lm-serve.sh');
