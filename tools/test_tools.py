@@ -1434,6 +1434,42 @@ class GemmaFixtureTests(unittest.TestCase):
                           "logit_softcap.json", "sliding_attention.json"])
 
 
+class ImagePromptOracleTests(unittest.TestCase):
+    """The text model's M-RoPE and image-row paths (ref_qwen35, ref_gemma4) and their generator."""
+
+    def test_mrope_with_equal_positions_is_plain_rope(self):
+        x = [0.3 * i - 1.0 for i in range(32)]
+        plain = ref.rope_apply(x, 1234, 16, 1e7)
+        self.assertEqual(ref.rope_apply(x, (1234, 1234, 1234), 16, 1e7, [4, 2, 2]), plain)
+        # NEGATIVE: distinct positions move exactly the h and w frequencies (k % 3 == 1, 2)
+        moved = ref.rope_apply(x, (5, 11, 17), 16, 1e7, [4, 2, 2])
+        self.assertNotEqual(moved, ref.rope_apply(x, (5, 5, 5), 16, 1e7, [4, 2, 2]))
+        self.assertEqual([ref.section_axis(k, [4, 2, 2]) for k in range(8)], [0, 1, 2, 0, 1, 2, 0, 0])
+
+    def test_qwen_config_refuses_a_bad_mrope_section(self):
+        with open(os.path.join(ROOT, "tests", "fixtures", "qwen35-vl-tiny", "config.json")) as f:
+            cfg = json.load(f)
+        for bad in ({"mrope_interleaved": False}, {"mrope_section": [1, 1, 1]}, {"mrope_section": [2, 1]},
+                    {"mrope_section": None}):
+            c = json.loads(json.dumps(cfg))
+            c["text_config"]["rope_parameters"].update(bad)
+            if bad.get("mrope_section", 0) is None:
+                del c["text_config"]["rope_parameters"]["mrope_section"]
+            with self.assertRaises((ValueError, TypeError), msg=bad):
+                ref.Config(c)
+
+    def test_image_rows_change_the_logits_and_positions_matter(self):
+        d = os.path.join(ROOT, "tests", "fixtures", "qwen35-vl-tiny")
+        m = ref.Model.load(d)
+        rows = [[0.1 * ((i + j) % 7 - 3) for i in range(64)] for j in range(6)]
+        a, b = m.new_state(), m.new_state()
+        la = m.feed_image(a, rows, 2, 3, 380, 381)
+        lb = m.feed_image(b, rows, 2, 3, 380, 381, mrope=False)
+        self.assertNotEqual(la, lb)                       # a 2x3 grid is not a line of 6
+        self.assertEqual((a["pos"], a["rope"]), (8, 1 + 3 + 1))   # 8 slots, but start + max(2,3) + end
+        self.assertEqual((b["pos"], b["rope"]), (8, 8))
+
+
 class VisionOracleTests(unittest.TestCase):
     def test_smart_resize_matches_transformers(self):
         # expected values printed by transformers' qwen2_vl smart_resize @56547cb (factor 32,

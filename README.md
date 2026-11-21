@@ -641,7 +641,21 @@ bin/lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F
 `--image` runs only the image encoder (Qwen3.5 or Gemma 4) on a binary PPM that is already at
 the encoder's grid size: sides in multiples of 32 for Qwen3.5 and 48 for Gemma 4. It writes one
 little-endian f32 row of the text hidden size per image token. Resizing, other image formats,
-and feeding the rows to the language model come in later phases (docs/PLAN.md "Phase 3").
+come in later phases (docs/PLAN.md "Phase 3").
+
+```
+bin/lm-run --model DIR [--weights FILE] --tokens 5,6,img,7,img,8 --image A.ppm --image B.ppm
+           [--logits-out F] [--greedy N] [--mtp]
+```
+
+With `--tokens`, each `img` stands for the next `--image` file (same grid-size rule as above) and
+is fed to the language model as the model's start token, the image rows and its end token
+(`lm_prefill_image`). The prompt is a list of items (a run of ids, or one image) and
+`--logits-out` gets one logits row per item. For Qwen3.5 the rows take M-RoPE positions
+(`mrope_section` from `config.json`, required), so the position after an image is not the
+cache position; Gemma 4 keeps sequential positions and takes the image row unscaled. The model
+must have its vision weights (a q8 file from an `lm-quant` of this version, or the bf16
+checkpoint); `lm-run` says why when it does not. `--no-prefill` and `--mtp-out` do not apply.
 
 ### bin/lm-quant
 

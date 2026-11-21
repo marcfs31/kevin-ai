@@ -25,6 +25,11 @@ for each variant and each image listed:
   5. `lm-run ... --image IMG --vision-rows-out TMP`: TMP is exactly the golden number of rows of
      the golden width, all finite, every value within 2e-4 * max|golden rows of that image|.
 The text checks 1-4 are required unless the fixture holds vision goldens.
+When it also holds golden_image_{bf16,q8}.json (a prompt of text and images through the text model):
+  6. `lm-run ... --tokens <ids with img placeholders> --image F ... --logits-out TMP` writes one logits
+     row per ITEM (a run of ids, or one image), each within 2e-4 * max|golden row| with the golden
+     argmax; `--greedy N` on the same prompt prints exactly the golden ids, also with `--mtp` when
+     the model has the head (a Qwen3.5 fixture).
 Then `lm-quant --model DIR --out TMP`: its file must be byte-identical to model.q8.safetensors.
 
 Fails closed: a missing binary or fixture, non-zero exit, timeout, wrong row count, NaN/Inf,
@@ -224,6 +229,37 @@ def check_vision(label, run_bin, model_dir, weights, golden_path, timeout, tmp):
     return "%s vision %d images, %d rows (worst error %.0f%% of tolerance)" % (label, len(images), nrows, 100 * worst)
 
 
+def check_image_prompt(label, run_bin, model_dir, weights, golden_path, vocab, timeout, tmp, mtp):
+    need_file(golden_path, "golden file")
+    with open(golden_path) as f:
+        g = json.load(f)
+    spec, rows, gr = g["prompt"], g["rows"], g["greedy"]
+    if len(rows) != len(spec) or any(len(r) != vocab for r in rows):
+        raise Failure("%s: rows are not [%d items][%d vocab]" % (golden_path, len(spec), vocab))
+    parts, images = [], []
+    for item in spec:
+        if "image" in item:
+            parts.append("img")
+            images += ["--image", os.path.join(model_dir, item["image"])]
+        else:
+            parts.append(",".join(str(t) for t in item["tokens"]))
+    toks = ",".join(parts)
+    base = [run_bin, "--model", model_dir] + (["--weights", weights] if weights else [])
+    lpath = os.path.join(tmp, label + ".image.logits.f32")
+    stdout = run(base + ["--tokens", toks] + images + ["--logits-out", lpath], timeout, label + " image logits run")
+    if stdout.strip():
+        raise Failure("%s image logits run wrote to stdout: %r" % (label, stdout[:80]))
+    flat_tokens = [-1 if "image" in it else it["tokens"][-1] for it in spec]
+    err = compare_rows(label + " image logits", lpath, rows, flat_tokens, vocab)
+    n = gr["n"]
+    for extra, name in (([], "greedy"), (["--mtp"], "mtp greedy")) if mtp else (([], "greedy"),):
+        stdout = run(base + ["--tokens", toks] + images + ["--greedy", str(n)] + extra, timeout,
+                     "%s image %s run" % (label, name))
+        check_greedy("%s image %s" % (label, name), stdout, gr["out"])
+    return "%s image prompt %d items (worst error %.0f%% of tolerance) + %d greedy ids%s" % (
+        label, len(spec), 100 * err, n, " (also --mtp)" if mtp else "")
+
+
 def check_quantiser(quant_bin, model_dir, golden_q8, timeout, tmp):
     need_file(golden_q8, "q8 fixture")
     out = os.path.join(tmp, "quant.q8.safetensors")
@@ -280,6 +316,11 @@ def check(run_bin, quant_bin, fixtures, timeout):
                                       os.path.join(fixtures, "golden_vision_bf16.json"), timeout, tmp))
             parts.append(check_vision("q8", run_bin, fixtures, q8,
                                       os.path.join(fixtures, "golden_vision_q8.json"), timeout, tmp))
+        for label, w, name in (("bf16", None, "golden_image_bf16.json"), ("q8", q8, "golden_image_q8.json")):
+            gpath = os.path.join(fixtures, name)
+            if os.path.isfile(gpath):
+                has_mtp = family != "gemma4"
+                parts.append(check_image_prompt(label, run_bin, fixtures, w, gpath, vocab, timeout, tmp, has_mtp))
         size = check_quantiser(quant_bin, fixtures, q8, timeout, tmp)
     parts.append("quantiser byte-identical (%d bytes)" % size)
     tag = " [gemma4]" if family == "gemma4" else ""

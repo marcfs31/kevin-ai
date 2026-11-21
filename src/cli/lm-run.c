@@ -2,6 +2,8 @@
  *                       [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]
  *                       [--mtp [--mtp-out F]]
  *        bin/lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F
+ *        bin/lm-run --model DIR [--weights FILE] --tokens 5,6,img,7 --image F.ppm [--image G.ppm ...]
+ *                   [--logits-out F] [--greedy N] [--mtp]
  *
  * Feeds the token ids (through lm_prefill when no logits are written, token by token with
  * --no-prefill or --logits-out: the results are bit-identical), writes one little-endian f32
@@ -15,6 +17,10 @@
  * (position p sees the token at p+1), one row each, fed token by token.
  * --image runs only the vision encoder (src/model/lm_vision.h) on a binary PPM already at its
  * grid size and writes one little-endian f32 row per image token to the --vision-rows-out file.
+ * With --tokens, `img` entries stand for the --image files in order (lm_prefill_image: the start
+ * token, the rows, the end token). The prompt is then a list of ITEMS: each run of ids is one
+ * item, each `img` one more, and --logits-out gets one row per ITEM (the logits after its last
+ * token), not one per token. --no-prefill and --mtp-out do not apply to such a prompt.
  * Original code; contract in docs/PLAN.md. */
 #include <errno.h>
 #include <stdint.h>
@@ -31,7 +37,8 @@ static int usage(void)
     fprintf(stderr, "usage: lm-run --model DIR [--weights FILE] --tokens 1,2,3 [--logits-out F]\n"
                     "              [--greedy N] [--ctx N] [--threads N] [--fast] [--no-prefill] [--profile]\n"
                     "              [--mtp [--mtp-out F]]\n"
-                    "       lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F\n");
+                    "       lm-run --model DIR [--weights FILE] --image F.ppm --vision-rows-out F\n"
+                    "       lm-run --model DIR [--weights FILE] --tokens 5,img,6 --image F.ppm [--image G.ppm ...]\n");
     return 2;
 }
 
@@ -52,6 +59,7 @@ static const char *code_name(int rc)
     case LM_ERR_TOKEN: return "token id outside the vocabulary";
     case LM_ERR_IO:    return "weight read failed";
     case LM_ERR_STATE: return "call out of order";
+    case LM_ERR_IMAGE: return "image rejected";
     default:           return "unknown error";
     }
 }
@@ -110,7 +118,8 @@ done:
 int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *tokstr = NULL, *outp = NULL, *mtp_out = NULL;
-    const char *image = NULL, *vrows = NULL;
+    const char *images[16], *vrows = NULL;
+    int nimg = 0;
     int greedy = 0, ctx = 0, threads = 0, fast = 0, no_prefill = 0, profile = 0, mtp = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -126,15 +135,18 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--profile")) profile = 1;
         else if (!strcmp(a, "--mtp")) mtp = 1;
         else if (!strcmp(a, "--mtp-out") && has) mtp_out = argv[++i];
-        else if (!strcmp(a, "--image") && has) image = argv[++i];
+        else if (!strcmp(a, "--image") && has) {
+            if (nimg == 16) { fprintf(stderr, "lm-run: at most 16 --image\n"); return 2; }
+            images[nimg++] = argv[++i];
+        }
         else if (!strcmp(a, "--vision-rows-out") && has) vrows = argv[++i];
         else if (!strcmp(a, "--threads") && has) { if (parse_int(argv[++i], 1, &threads)) { fprintf(stderr, "lm-run: bad --threads\n"); return 2; } }
         else return usage();
     }
-    if (image || vrows) {
-        if (!model || !image || !vrows || tokstr || outp || mtp || mtp_out || greedy || ctx || threads || fast ||
+    if (vrows) {
+        if (!model || nimg != 1 || tokstr || outp || mtp || mtp_out || greedy || ctx || threads || fast ||
             no_prefill || profile) return usage();
-        return run_image(model, weights, image, vrows);
+        return run_image(model, weights, images[0], vrows);
     }
     if (!model || !tokstr || (mtp_out && !mtp)) return usage();
 
@@ -145,15 +157,24 @@ int main(int argc, char **argv)
         char *copy = strdup(tokstr), *save = NULL;
         if (!copy) { fprintf(stderr, "lm-run: out of memory\n"); return 1; }
         for (char *p = strtok_r(copy, ",", &save); p; p = strtok_r(NULL, ",", &save)) {
-            if (parse_int(p, 0, &tok[ntok])) { fprintf(stderr, "lm-run: bad token id \"%s\"\n", p); free(copy); free(tok); return 2; }
+            if (!strcmp(p, "img")) tok[ntok] = -1;   /* an image placeholder */
+            else if (parse_int(p, 0, &tok[ntok])) { fprintf(stderr, "lm-run: bad token id \"%s\"\n", p); free(copy); free(tok); return 2; }
             ntok++;
         }
         free(copy);
     }
     if (ntok == 0) { fprintf(stderr, "lm-run: --tokens is empty\n"); free(tok); return 2; }
+    int nplace = 0;
+    for (int i = 0; i < ntok; i++) nplace += tok[i] < 0;
+    if (nplace != nimg) {
+        fprintf(stderr, "lm-run: --tokens has %d img placeholder(s) but %d --image file(s)\n", nplace, nimg);
+        free(tok);
+        return 2;
+    }
+    if (nimg && (no_prefill || mtp_out)) { free(tok); return usage(); }
 
     char err[1024] = "";
-    LmOpts o = { weights, ctx, threads, fast, mtp };
+    LmOpts o = { weights, ctx, threads, fast, mtp, nimg > 0 };
     LmModel *m = lm_open(model, &o, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-run: %s\n", err); free(tok); return 1; }
     const int vocab = lm_n_vocab(m);
@@ -183,7 +204,38 @@ int main(int argc, char **argv)
     LmTimes t_start, t_prompt, t_end;
     lm_times_enable(profile);
     lm_times_get(&t_start);
-    if (!fo && !no_prefill) {   /* no per-token rows wanted: the prompt goes in as chunks */
+    if (nimg) {   /* items: runs of ids and images, one logits row each */
+        int ii = 0;
+        for (int i = 0; i < ntok;) {
+            int j = i, r;
+            while (j < ntok && tok[j] >= 0) j++;
+            const int is_img = j == i, end = is_img ? i + 1 : j;
+            float *want = fo || (greedy > 0 && end == ntok) ? logits : NULL;
+            if (is_img) {
+                uint8_t *rgb;
+                int w, h;
+                char ierr[512];
+                if (lm_ppm_read(images[ii], &rgb, &w, &h, ierr, sizeof ierr) != 0) { fprintf(stderr, "lm-run: %s\n", ierr); goto done; }
+                r = lm_prefill_image(m, rgb, h, w, want);
+                free(rgb);
+                if (r != LM_OK) {
+                    const char *why = r == LM_ERR_STATE ? lm_vision_status(m) : NULL;
+                    fprintf(stderr, "lm-run: image %s (%dx%d): %s%s%s\n", images[ii], w, h, code_name(r),
+                            why ? ": " : "", why ? why : "");
+                    goto done;
+                }
+                ii++;
+            } else {
+                r = lm_prefill(m, tok + i, j - i, want);
+                if (r != LM_OK) { fprintf(stderr, "lm-run: ids at item offset %d: %s\n", i, code_name(r)); goto done; }
+            }
+            if (fo && fwrite(logits, sizeof(float), (size_t)vocab, fo) != (size_t)vocab) {
+                fprintf(stderr, "lm-run: write to %s failed\n", outp);
+                goto done;
+            }
+            i = end;
+        }
+    } else if (!fo && !no_prefill) {   /* no per-token rows wanted: the prompt goes in as chunks */
         const int r = lm_prefill(m, tok, ntok, greedy > 0 ? logits : NULL);
         if (r != LM_OK) { fprintf(stderr, "lm-run: prompt of %d tokens: %s\n", ntok, code_name(r)); goto done; }
     } else {

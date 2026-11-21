@@ -25,5 +25,22 @@ done
 "$RUN" --model "$FIX" --image "$FIX/img_64x96.ppm" > /dev/null 2>&1; rc=$?
 check '[ $rc -eq 2 ]' "--image without --vision-rows-out exited $rc"
 
+# an image prompt: img placeholders must match the --image files, one logits row per ITEM
+img=$FIX/img_32x32.ppm
+"$RUN" --model "$FIX" --tokens 5,6,img,7 --image "$img" --logits-out "$tmp/l1" --greedy 2 > "$tmp/ids" 2> "$tmp/err"; rc=$?
+check '[ $rc -eq 0 ]' "image prompt exited $rc: $(cat "$tmp/err")"
+check '[ "$(wc -c < "$tmp/l1")" -eq $((3 * 384 * 4)) ]' "logits are not 3 items (ids, image, ids) of 384 f32"
+check '[ "$(wc -l < "$tmp/ids")" -eq 2 ]' "no 2 greedy ids"
+# NEGATIVE: the text-only fixture cannot take an image, and says why
+"$RUN" --model tests/fixtures/qwen35-tiny --tokens 5,img --image "$img" > /dev/null 2> "$tmp/err2"; rc=$?
+check '[ $rc -eq 1 ] && grep -q "no image encoder" "$tmp/err2"' "text-only model: exit $rc: $(cat "$tmp/err2")"
+# NEGATIVE: placeholder and file counts must agree; --no-prefill does not apply
+"$RUN" --model "$FIX" --tokens 5,img,img --image "$img" > /dev/null 2>&1; rc=$?
+check '[ $rc -eq 2 ]' "2 placeholders with 1 --image exited $rc"
+"$RUN" --model "$FIX" --tokens 5,6 --image "$img" > /dev/null 2>&1; rc=$?
+check '[ $rc -eq 2 ]' "an --image with no placeholder exited $rc"
+"$RUN" --model "$FIX" --tokens 5,img --image "$img" --no-prefill > /dev/null 2>&1; rc=$?
+check '[ $rc -eq 2 ]' "--no-prefill with an image prompt exited $rc"
+
 if [ "$fails" -ne 0 ]; then echo "test_lm_run_image: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_lm_run_image: $checks checks passed"
