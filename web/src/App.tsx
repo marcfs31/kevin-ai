@@ -5,6 +5,7 @@ import { ChatStats } from './components/ChatStats';
 import { ChatModelSelect } from './components/ChatModelSelect';
 import { ModelCtxPicker } from './components/ModelCtxPicker';
 import { ServerPanel } from './components/ServerPanel';
+import { SettingsModal } from './components/SettingsModal';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
@@ -69,6 +70,7 @@ function Chat({ state, setState, storage, notice }: {
   const saveResult = useSyncExternalStore(saver.subscribe, saver.get);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const controllerRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -404,10 +406,21 @@ function Chat({ state, setState, storage, notice }: {
             </button>
           )}
         </div>
-        <button type="button" className="header-action" aria-expanded={settingsOpen} aria-controls="settings" onClick={() => setSettingsOpen((o) => !o)}>
+        <button
+          type="button"
+          className="header-action"
+          aria-expanded={settingsOpen}
+          aria-haspopup="dialog"
+          aria-controls="settings"
+          onClick={() => setSettingsOpen((o) => !o)}
+        >
           {t('settings.open')}
         </button>
       </header>
+      <SettingsModal open={settingsOpen} onClose={closeSettings}>
+        <ServerPanel busy={busy} runningModel={info?.model ?? null} onStarted={onServeStarted} />
+        <SettingsPanel settings={state.settings} onChange={updateSettings} />
+      </SettingsModal>
       <aside id="sidebar" className="side">
         <Sidebar
           conversations={state.conversations}
@@ -436,12 +449,6 @@ function Chat({ state, setState, storage, notice }: {
         />
       </aside>
       <main className="main">
-        {settingsOpen && (
-          <div id="settings" className="panels">
-            <ServerPanel busy={busy} runningModel={info?.model ?? null} onStarted={onServeStarted} />
-            <SettingsPanel settings={state.settings} onChange={updateSettings} />
-          </div>
-        )}
         {storageError && (
           <p className="error banner" role="alert">
             {storageError}

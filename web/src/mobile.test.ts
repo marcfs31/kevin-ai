@@ -24,6 +24,12 @@ describe('phone layout', () => {
     expect(css).toMatch(/\.composer\s*\{[^}]*flex-shrink:\s*0/);
   });
 
+  it('opens settings as a fixed, centred modal above a dimmed backdrop', () => {
+    expect(css).toMatch(/\.modal-root\s*\{[^}]*position:\s*fixed/);
+    expect(css).toMatch(/\.settings-modal\s*\{[^}]*background:\s*var\(--paper\)/);
+    expect(css).toMatch(/\.modal-backdrop\s*\{[^}]*position:\s*absolute/);
+  });
+
   it('pads the header, the composer and the conversation list for the safe area', () => {
     expect(css).toContain('safe-area-inset-top');
     expect(css).toContain('safe-area-inset-bottom');

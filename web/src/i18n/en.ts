@@ -29,6 +29,8 @@ export const en = {
   'sidebar.cancel': 'Cancel',
 
   'settings.open': 'Settings',
+  'settings.close': 'Close',
+  'settings.closeBackdrop': 'Close settings',
   'settings.title': 'Settings',
   'settings.systemPrompt': 'System prompt',
   'settings.systemPromptHint': 'Sent before every conversation. A fixed one lets the server reuse its reading of it.',

@@ -121,8 +121,9 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   delete, delete all. A saved document missing a newer field loads with its default; one that
   cannot be read is copied aside to `lm-chat.unreadable.<time>` rather than overwritten.
   A message is saved as soon as it is sent and its reply once it ends, never once per token.
-- **Settings:** system prompt, temperature, longest reply, image size preset (512, 768 or 1024 px
-  on the longer side), language.
+- **Settings:** a modal (backdrop, Close, Escape) with the model starter and the chat settings:
+  system prompt, temperature, longest reply, image size preset (512, 768 or 1024 px on the longer
+  side), language.
 - **Attachments** by button or drag and drop:
   - text and code (`.txt .md .json .csv .log` and common source files, up to 2 MiB) go in as a
     fenced block named after the file; binary content is refused;
