@@ -259,3 +259,29 @@ describe('toWire with tool calls', () => {
     expect(toWire('', [hi, result])).toEqual([{ role: 'user', content: 'hi' }]);
   });
 });
+
+describe('toWire hardening', () => {
+  const hi = (content: Extract<Message, { role: 'user' }>['content']): Message => ({ id: 'u', role: 'user', content, typed: '', attachmentNames: [], createdAt: 0 });
+  const withCall = (name: string, args: string): Message[] => [
+    { id: 'a', role: 'assistant', content: '', reasoning: '', status: 'done', error: null, stats: null, createdAt: 0, toolCalls: [{ id: 'c', name, arguments: args }] },
+    { id: 't', role: 'tool', toolCallId: 'c', name, content: 'r', isError: true, createdAt: 0 },
+  ];
+
+  it('sends arguments the server accepts and a name it accepts, whatever the model wrote', () => {
+    const sent = (name: string, args: string) => {
+      const a = toWire('', withCall(name, args))[0];
+      return a?.tool_calls?.[0]?.function;
+    };
+    expect(sent('calculator', '{"expression":"1"}')).toEqual({ name: 'calculator', arguments: '{"expression":"1"}' });
+    for (const bad of ['{oops', '', '[1]', 'null', '"x"']) expect(sent('f', bad)?.arguments, bad).toBe('{}');
+    expect(sent('not a name!', '{}')?.name).toBe('unknown_tool');
+    expect(sent('', '{}')?.name).toBe('unknown_tool');
+  });
+
+  it('swaps images for a text note when the model cannot read them', () => {
+    const img = hi([{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }, { type: 'text', text: 'what is this' }]);
+    expect(toWire('', [img])[0]?.content).toEqual([expect.objectContaining({ type: 'image_url' }), { type: 'text', text: 'what is this' }]);
+    expect(toWire('', [img], false)[0]?.content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringContaining('cannot read images') }), { type: 'text', text: 'what is this' }]);
+    expect(toWire('', [hi('plain')], false)[0]?.content).toBe('plain');
+  });
+});

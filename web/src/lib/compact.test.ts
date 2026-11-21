@@ -36,6 +36,14 @@ describe('planCompaction', () => {
     expect(planCompaction([])).toBeNull();
   });
 
+  it('keeps two whole turns however many tool steps they hold', () => {
+    const step = (): Message[] => [bot('', { toolCalls: [{ id: 'c', name: 'f', arguments: '{}' }] }), { id: `t${n++}`, role: 'tool', toolCallId: 'c', name: 'f', content: 'r', isError: false, createdAt: 0 }];
+    const m: Message[] = [...turns(2), user('q2'), ...step(), ...step(), bot('a2'), user('q3'), ...step(), bot('a3')];
+    const plan = mustPlan(m);
+    expect(m[plan.cut]).toMatchObject({ role: 'user', typed: 'q2' });
+    expect(plan.span).toHaveLength(4);
+  });
+
   it('starts a cut on a user message so no turn is split', () => {
     const m = [...turns(2), user('q2'), bot('a2'), bot('a2b'), user('q3'), bot('a3')];
     const plan = planCompaction(m);

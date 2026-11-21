@@ -93,7 +93,6 @@ export const en = {
   'compact.marker.other': 'Compacted: {count} earlier messages replaced by a summary',
   'compact.byAuto': 'Made automatically because the chat was nearly filling the context.',
   'compact.byHand': 'Made with the Compact button.',
-  'compact.earlier': 'Compacted',
 
   'tools.trace': 'Tool calls: {names}',
   'tools.arguments': 'Arguments',

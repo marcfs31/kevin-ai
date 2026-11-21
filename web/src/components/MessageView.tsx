@@ -60,7 +60,8 @@ function StatsLine({ stats }: { stats: Stats }) {
   if (stats.tokensPerSecond !== null) parts.push(t('stats.rate', { rate: num(stats.tokensPerSecond, 1) }));
   if (stats.promptTokens !== null) parts.push(t('stats.prompt', { n: stats.promptTokens }));
   if (stats.cachedTokens !== null) parts.push(t('stats.cached', { n: stats.cachedTokens }));
-  const count = replyCount(stats);
+  const figures = replyCount(stats);
+  const count = figures?.read && figures.written ? { read: figures.read, written: figures.written } : null;
   if (!parts.length && !count) return null;
   return (
     <>
