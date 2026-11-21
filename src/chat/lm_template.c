@@ -109,9 +109,24 @@ static const char *sl_rfind(Sl s, const char *needle)
 typedef struct {
     const LmTok *tok;
     int im_start, im_end, think, think_end, tool_call, tool_call_end;
+    int vis_start, vis_pad, vis_end; /* -1 = vision unset */
     int stop[MAX_STOP];
     int n_stop;
 } Qwen;
+
+static int span_push(const LmRenderOpts *opts, int id_start, int n_ids, int img_index)
+{
+    if (!opts || !opts->spans || !opts->n_spans) return 0;
+    const int n = *opts->n_spans;
+    LmImgSpan *p = (LmImgSpan *)realloc(*opts->spans, (size_t)(n + 1) * sizeof *p);
+    if (!p) return -1;
+    p[n].id_start = id_start;
+    p[n].n_ids = n_ids;
+    p[n].img_index = img_index;
+    *opts->spans = p;
+    *opts->n_spans = n + 1;
+    return 0;
+}
 
 /* ---- builder: text segments between special ids --------------------------------- */
 
@@ -157,6 +172,49 @@ static void b_special(Bld *b, int id)
     if (!b->oom && lm_ids_push(b->out, id)) b->oom = 1;
 }
 
+/* Emit user content: plain text (trimmed) or multimodal parts. *img_i is the running
+ * image index across the conversation. Returns 0, or -1 with a message. */
+static int emit_user_content(Bld *b, const LmMsg *m, int vis_start, int vis_pad, int vis_end,
+                             const LmRenderOpts *opts, int *img_i, char *err, size_t errlen)
+{
+    if (!m->parts || m->n_parts <= 0) {
+        b_sl(b, sl_trim(sl_of(m->content)));
+        return 0;
+    }
+    for (int i = 0; i < m->n_parts; i++) {
+        const LmMsgPart *p = &m->parts[i];
+        if (p->kind == LM_PART_TEXT) {
+            if (p->text) b_text(b, p->text);
+            continue;
+        }
+        if (p->kind != LM_PART_IMAGE) {
+            if (err && errlen) snprintf(err, errlen, "unknown content part kind");
+            return -1;
+        }
+        if (vis_start < 0 || vis_pad < 0 || vis_end < 0) {
+            if (err && errlen) snprintf(err, errlen, "vision tokens are not configured");
+            return -1;
+        }
+        if (p->n_rows < 1) {
+            if (err && errlen) snprintf(err, errlen, "image part has no rows");
+            return -1;
+        }
+        b_flush(b);
+        const int id_start = b->out->n;
+        if (lm_ids_push(b->out, vis_start)) { b->oom = 1; return -1; }
+        for (int k = 0; k < p->n_rows; k++) {
+            if (lm_ids_push(b->out, vis_pad)) { b->oom = 1; return -1; }
+        }
+        if (lm_ids_push(b->out, vis_end)) { b->oom = 1; return -1; }
+        if (span_push(opts, id_start, p->n_rows + 2, *img_i)) {
+            if (err && errlen) snprintf(err, errlen, "out of memory");
+            return -1;
+        }
+        (*img_i)++;
+    }
+    return 0;
+}
+
 /* '<|im_start|>assistant\n' + ('<think>\n' | '<think>\n\n</think>\n\n') -- the generation
  * prompt, and, for verbatim history, the opening of an assistant turn. */
 static void b_assistant_open(Bld *b, const Qwen *q, int thinking)
@@ -179,6 +237,7 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
     const Qwen *q = (const Qwen *)t->impl;
 #define FAIL(m) do { if (err && errlen) snprintf(err, errlen, "%s", m); return -1; } while (0)
     out->n = 0;
+    if (opts && opts->n_spans) *opts->n_spans = 0;
     if (n <= 0) FAIL("No messages provided.");
 
     /* last_query_index: the last user message that is not a tool response. Assistant
@@ -195,8 +254,16 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
     if (last_query < 0) FAIL("No user query found in messages.");
     for (int i = 1; i < n; i++)
         if (msgs[i].role == LM_ROLE_SYSTEM) FAIL("System message must be at the beginning.");
+    for (int i = 0; i < n; i++) {
+        if (msgs[i].role == LM_ROLE_SYSTEM && msgs[i].parts && msgs[i].n_parts > 0) {
+            for (int k = 0; k < msgs[i].n_parts; k++)
+                if (msgs[i].parts[k].kind == LM_PART_IMAGE)
+                    FAIL("System messages may not contain images.");
+        }
+    }
 
     Bld b = { q->tok, out, NULL, 0, 0, 0 };
+    int img_i = 0;
     for (int i = 0; i < n; i++) {
         const LmMsg *m = &msgs[i];
         Sl content = sl_trim(sl_of(m->content));
@@ -209,7 +276,10 @@ static int q_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
         } else if (m->role == LM_ROLE_USER) {
             b_special(&b, q->im_start);
             b_text(&b, "user\n");
-            b_sl(&b, content);
+            if (emit_user_content(&b, m, q->vis_start, q->vis_pad, q->vis_end, opts, &img_i, err, errlen)) {
+                free(b.txt);
+                return -1;
+            }
             b_special(&b, q->im_end);
             b_text(&b, "\n");
         } else {
@@ -461,6 +531,7 @@ LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, 
         return NULL;
     }
     q->tok = tok;
+    q->vis_start = q->vis_pad = q->vis_end = -1;
     if (lm_tok_require(tok, "<|im_start|>", &q->im_start, err, errlen) ||
         lm_tok_require(tok, "<|im_end|>", &q->im_end, err, errlen) ||
         lm_tok_require(tok, "<think>", &q->think, err, errlen) ||
@@ -497,6 +568,7 @@ LmTemplate *lm_template_qwen35(const LmTok *tok, const int *eos_ids, int n_eos, 
 typedef struct {
     const LmTok *tok;
     int bos, turn, turn_end, think, channel, channel_end, tool_call, tool_call_end;
+    int vis_start, vis_pad, vis_end; /* -1 = vision unset */
     int stop[MAX_STOP];
     int n_stop;
 } Gemma;
@@ -533,6 +605,7 @@ static int g_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
     const Gemma *g = (const Gemma *)t->impl;
 #define FAIL(m) do { if (err && errlen) snprintf(err, errlen, "%s", m); return -1; } while (0)
     out->n = 0;
+    if (opts && opts->n_spans) *opts->n_spans = 0;
     if (n <= 0) FAIL("No messages provided.");
     int last_user = -1;
     for (int i = 0; i < n; i++) if (msgs[i].role == LM_ROLE_USER) last_user = i;
@@ -543,9 +616,17 @@ static int g_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
         if (msgs[i].role == LM_ROLE_ASSISTANT && msgs[i - 1].role == LM_ROLE_ASSISTANT)
             FAIL("Consecutive assistant messages are not supported.");
     }
+    for (int i = 0; i < n; i++) {
+        if (msgs[i].role == LM_ROLE_SYSTEM && msgs[i].parts && msgs[i].n_parts > 0) {
+            for (int k = 0; k < msgs[i].n_parts; k++)
+                if (msgs[i].parts[k].kind == LM_PART_IMAGE)
+                    FAIL("System messages may not contain images.");
+        }
+    }
 
     Bld b = { g->tok, out, NULL, 0, 0, 0 };
     int first_sys = msgs[0].role == LM_ROLE_SYSTEM;
+    int img_i = 0;
     b_special(&b, g->bos);
     if (opts->enable_thinking || first_sys) {
         b_special(&b, g->turn);
@@ -561,7 +642,10 @@ static int g_render(const LmTemplate *t, const LmMsg *msgs, int n, const LmRende
         b_special(&b, g->turn);
         b_text(&b, model ? "model\n" : "user\n");
         if (!model) {
-            b_sl(&b, sl_trim(sl_of(m->content)));
+            if (emit_user_content(&b, m, g->vis_start, g->vis_pad, g->vis_end, opts, &img_i, err, errlen)) {
+                free(b.txt);
+                return -1;
+            }
         } else if (opts->verbatim_history && m->gen_ids) {
             b_flush(&b);
             if (!b.oom && lm_ids_append(out, m->gen_ids, m->n_gen_ids)) b.oom = 1;
@@ -622,6 +706,7 @@ LmTemplate *lm_template_gemma4(const LmTok *tok, const int *eos_ids, int n_eos, 
         return NULL;
     }
     g->tok = tok;
+    g->vis_start = g->vis_pad = g->vis_end = -1;
     if (lm_tok_require(tok, "<bos>", &g->bos, err, errlen) ||
         lm_tok_require(tok, "<|turn>", &g->turn, err, errlen) ||
         lm_tok_require(tok, "<turn|>", &g->turn_end, err, errlen) ||
@@ -653,4 +738,22 @@ void lm_template_free(LmTemplate *t)
     if (!t) return;
     if (t->destroy) t->destroy(t);
     free(t);
+}
+
+void lm_template_set_vision(LmTemplate *t, int start, int pad, int end)
+{
+    if (!t || !t->impl) return;
+    if (t->name && !strcmp(t->name, "qwen3.5")) {
+        Qwen *q = (Qwen *)t->impl;
+        q->vis_start = start;
+        q->vis_pad = pad;
+        q->vis_end = end;
+        return;
+    }
+    if (t->name && !strcmp(t->name, "gemma4")) {
+        Gemma *g = (Gemma *)t->impl;
+        g->vis_start = start;
+        g->vis_pad = pad;
+        g->vis_end = end;
+    }
 }

@@ -12,16 +12,20 @@
  *   POST /v1/chat/completions  messages, stream, max_tokens / max_completion_tokens,
  *                              temperature, top_p, top_k, seed, stream_options.include_usage
  *
- * Text chat only: tools, stop strings, n > 1, logprobs, penalties and JSON modes are refused
- * with 400 rather than ignored. The answer is "content"; a think block, when --think is on,
- * comes back as "reasoning_content". Without max_tokens a reply runs until the model stops
- * or the context fills (--max-tokens N sets a server-wide default instead). A reply is
- * stopped as soon as its client goes away, so an abandoned request does not hold the server.
- * A reply that could not be finished (shutdown, a tool call) is an error, never a "stop".
+ * Text and image chat: tools, stop strings, n > 1, logprobs, penalties and JSON modes are
+ * refused with 400 rather than ignored. Message content may be a string or an array of
+ * {"type":"text","text":...} and {"type":"image_url","image_url":{"url":"data:image/..."}}
+ * parts (PNG/JPEG data URLs only; at most 8 images). The answer is "content"; a think block,
+ * when --think is on, comes back as "reasoning_content". Without max_tokens a reply runs
+ * until the model stops or the context fills (--max-tokens N sets a server-wide default
+ * instead). A reply is stopped as soon as its client goes away, so an abandoned request
+ * does not hold the server. A reply that could not be finished (shutdown, a tool call) is
+ * an error, never a "stop".
  *
  * The engine cannot rewind, so the state is reused when the request's history begins with
  * the conversation it last served: a client that sends back the previous answer unchanged
  * only pays for the new message (lm_chat_sync). Anything else re-feeds the whole prompt.
+ * Image SHAs are part of that match, so a different picture never reuses another.
  *
  * Listens on 127.0.0.1 unless --host says otherwise; --port 0 picks a free port. The bound
  * address is printed on stderr. If LM_SERVE_API_KEY is set (in the environment, so it never
@@ -52,15 +56,18 @@
 #include "chat/lm_chat.h"
 #include "chat/lm_profile.h"
 #include "chat/lm_template.h"
+#include "io/lm_image.h"
+#include "io/lm_sha256.h"
 #include "json.h"
 #include "lm/lm.h"
+#include "model/lm_vision.h"
 #include "tokenizer/lm_tok.h"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0 /* macOS: SIGPIPE is ignored process-wide instead */
 #endif
 
-enum { MAX_HEAD = 16 * 1024, MAX_BODY = 4 * 1024 * 1024 };
+enum { MAX_HEAD = 16 * 1024, MAX_BODY = 24 * 1024 * 1024, MAX_IMAGES = 8 };
 
 static volatile sig_atomic_t g_stop = 0;
 static long g_log_max = 1 << 20; /* stderr, when it is a file, is cut back to this */
@@ -349,9 +356,13 @@ static void finish_conn(Conn *c)
 
 typedef struct {
     LmChat *chat;
+    LmModel *model;
+    LmVision *vision;        /* NULL = vision unavailable */
     const char *name;
     const char *api_key;     /* NULL = no key */
     int max_tokens;          /* server default, 0 = until stop or context */
+    int image_max_pixels;    /* default 1048576 */
+    int n_ctx;
     double temperature, top_p;
     int top_k;
     uint64_t seed;
@@ -437,32 +448,203 @@ static int cancelled(void *user)
     return g_reply->conn->broken;
 }
 
-/* message text: a string, an array of {"type":"text","text":...} parts joined, or null (an
- * assistant turn with no text). NULL with a message in err for anything else. */
-static char *msg_text(jval *content, int i, char *err, size_t errlen)
+typedef struct {
+    char *fingerprint;   /* sync/reuse key (text + image SHAs) */
+    LmMsgPart *parts;
+    int n_parts;
+    int n_images;
+    char *err_code;      /* malloc'd OpenAI-style code, or NULL */
+} ParsedMsg;
+
+static void parsed_free(ParsedMsg *p)
 {
-    Buf b = { 0 };
-    buf_str(&b, "");
-    if (!content || content->t == J_NULL) {
-    } else if (content->t == J_STR) {
-        buf_str(&b, content->str);
-    } else if (content->t == J_ARR) {
-        for (int k = 0; k < content->len; k++) {
-            jval *p = content->kids[k], *ty = json_get(p, "type"), *tx = json_get(p, "text");
-            if (!ty || ty->t != J_STR || strcmp(ty->str, "text") || !tx || tx->t != J_STR) {
-                snprintf(err, errlen, "messages[%d].content: only text parts are supported", i);
-                free(b.s);
-                return NULL;
-            }
-            buf_str(&b, tx->str);
+    if (!p) return;
+    if (p->parts) {
+        for (int i = 0; i < p->n_parts; i++) {
+            if (p->parts[i].kind == LM_PART_IMAGE) free((void *)p->parts[i].rows);
+            else free((void *)p->parts[i].text);
         }
-    } else {
-        snprintf(err, errlen, "messages[%d].content must be a string or an array of text parts", i);
-        free(b.s);
-        return NULL;
+        free(p->parts);
     }
-    if (b.oom) { snprintf(err, errlen, "out of memory"); free(b.s); return NULL; }
-    return b.s;
+    free(p->fingerprint);
+    free(p->err_code);
+    memset(p, 0, sizeof *p);
+}
+
+static int encode_image(Server *s, const char *url, LmMsgPart *out, char *err, size_t errlen, char **code)
+{
+    memset(out, 0, sizeof *out);
+    out->kind = LM_PART_IMAGE;
+    if (!s->vision) {
+        snprintf(err, errlen, "this model has no vision encoder");
+        *code = strdup("image_unsupported");
+        return -1;
+    }
+    if (!url || strncmp(url, "data:image/", 11)) {
+        snprintf(err, errlen, "image_url must be a data:image/png|jpeg|jpg;base64,... URL");
+        *code = strdup("image_invalid");
+        return -1;
+    }
+    /* Hash the base64 payload bytes (decoded) for conversation reuse. */
+    uint8_t *rgb = NULL;
+    int w = 0, h = 0;
+    if (lm_image_decode_data_url(url, &rgb, &w, &h, err, errlen)) {
+        *code = strdup("image_invalid");
+        return -1;
+    }
+    /* SHA of the resized? Prefer source compressed bytes: re-decode payload. */
+    {
+        const char *comma = strchr(url, ',');
+        LmSha256 ctx;
+        unsigned char dig[32];
+        lm_sha256_init(&ctx);
+        if (comma) lm_sha256_update(&ctx, comma + 1, strlen(comma + 1));
+        lm_sha256_final(&ctx, dig);
+        lm_sha256_hex(dig, out->sha_hex);
+    }
+    int ow = w, oh = h;
+    const LmVisionInfo *vi = lm_vision_info(s->vision);
+    if (vi->family == LM_VISION_QWEN) {
+        /* factor 32 = patch 16 x merge 2; unit on LmVisionInfo is the patch size. */
+        lm_image_smart_resize(h, w, 32, 65536, s->image_max_pixels, &oh, &ow);
+    } else {
+        const int max_patches = 2520; /* 280 soft tokens * 9 */
+        if (lm_image_gemma_size(h, w, vi->unit, max_patches, &oh, &ow, err, errlen)) {
+            free(rgb);
+            *code = strdup("image_too_large");
+            return -1;
+        }
+        if ((long long)oh * ow > s->image_max_pixels) {
+            free(rgb);
+            snprintf(err, errlen, "image exceeds --image-max-pixels (%d)", s->image_max_pixels);
+            *code = strdup("image_too_large");
+            return -1;
+        }
+    }
+    uint8_t *resized = NULL;
+    if (lm_image_resize(rgb, w, h, ow, oh, &resized, err, errlen)) {
+        free(rgb);
+        *code = strdup("image_invalid");
+        return -1;
+    }
+    free(rgb);
+    const int nt = lm_vision_tokens(s->vision, oh, ow);
+    if (nt < 1) {
+        free(resized);
+        snprintf(err, errlen, "image size %dx%d is not valid for this vision encoder", ow, oh);
+        *code = strdup("image_invalid");
+        return -1;
+    }
+    float *rows = (float *)malloc((size_t)nt * (size_t)vi->out_dim * sizeof(float));
+    if (!rows || lm_vision_encode(s->vision, resized, oh, ow, rows, err, errlen)) {
+        free(resized); free(rows);
+        if (!*err) snprintf(err, errlen, "vision encode failed");
+        *code = strdup("image_invalid");
+        return -1;
+    }
+    free(resized);
+    out->rows = rows;
+    out->n_rows = nt;
+    out->width = vi->out_dim;
+    out->grid_h = oh / vi->unit;
+    out->grid_w = ow / vi->unit;
+    return 0;
+}
+
+/* Parse message content into fingerprint + optional parts. On error sets *code. */
+static int parse_msg_content(Server *s, jval *content, int msg_i, int allow_images,
+                             ParsedMsg *out, char *err, size_t errlen)
+{
+    memset(out, 0, sizeof *out);
+    Buf fp = { 0 };
+    buf_str(&fp, "");
+    if (!content || content->t == J_NULL) {
+        out->fingerprint = fp.s ? fp.s : strdup("");
+        return out->fingerprint ? 0 : -1;
+    }
+    if (content->t == J_STR) {
+        buf_str(&fp, content->str);
+        if (fp.oom) { free(fp.s); snprintf(err, errlen, "out of memory"); return -1; }
+        out->fingerprint = fp.s;
+        return 0;
+    }
+    if (content->t != J_ARR) {
+        snprintf(err, errlen, "messages[%d].content must be a string or an array of parts", msg_i);
+        free(fp.s);
+        return -1;
+    }
+    LmMsgPart *parts = (LmMsgPart *)calloc((size_t)content->len, sizeof *parts);
+    if (!parts) { free(fp.s); snprintf(err, errlen, "out of memory"); return -1; }
+    int np = 0, ni = 0;
+    for (int k = 0; k < content->len; k++) {
+        jval *p = content->kids[k], *ty = json_get(p, "type");
+        if (!ty || ty->t != J_STR) {
+            snprintf(err, errlen, "messages[%d].content[%d]: missing type", msg_i, k);
+            out->err_code = strdup("image_invalid");
+            goto fail;
+        }
+        if (!strcmp(ty->str, "text")) {
+            jval *tx = json_get(p, "text");
+            if (!tx || tx->t != J_STR) {
+                snprintf(err, errlen, "messages[%d].content[%d]: text part needs a string", msg_i, k);
+                goto fail;
+            }
+            char *t = strdup(tx->str);
+            if (!t) { snprintf(err, errlen, "out of memory"); goto fail; }
+            parts[np].kind = LM_PART_TEXT;
+            parts[np].text = t;
+            buf_str(&fp, t);
+            np++;
+        } else if (!strcmp(ty->str, "image_url")) {
+            if (!allow_images) {
+                snprintf(err, errlen, "messages[%d]: images are not allowed in this role", msg_i);
+                out->err_code = strdup("image_unsupported");
+                goto fail;
+            }
+            if (!s->vision) {
+                snprintf(err, errlen, "vision is unavailable for this model");
+                out->err_code = strdup("image_unsupported");
+                goto fail;
+            }
+            if (ni >= MAX_IMAGES) {
+                snprintf(err, errlen, "at most %d images per request", MAX_IMAGES);
+                out->err_code = strdup("too_many_images");
+                goto fail;
+            }
+            jval *iu = json_get(p, "image_url"), *url = iu ? json_get(iu, "url") : NULL;
+            if (!url || url->t != J_STR) {
+                snprintf(err, errlen, "messages[%d].content[%d]: image_url needs a url string", msg_i, k);
+                out->err_code = strdup("image_invalid");
+                goto fail;
+            }
+            char *code = NULL;
+            if (encode_image(s, url->str, &parts[np], err, errlen, &code)) {
+                out->err_code = code;
+                goto fail;
+            }
+            buf_fmt(&fp, "\n<#img:%s>", parts[np].sha_hex);
+            np++;
+            ni++;
+        } else {
+            snprintf(err, errlen, "messages[%d].content[%d]: unsupported part type \"%.32s\"", msg_i, k, ty->str);
+            out->err_code = strdup("image_unsupported");
+            goto fail;
+        }
+    }
+    if (fp.oom) { snprintf(err, errlen, "out of memory"); goto fail; }
+    out->fingerprint = fp.s;
+    out->parts = parts;
+    out->n_parts = np;
+    out->n_images = ni;
+    return 0;
+fail:
+    for (int i = 0; i < np; i++) {
+        if (parts[i].kind == LM_PART_IMAGE) free((void *)parts[i].rows);
+        else free((void *)parts[i].text);
+    }
+    free(parts);
+    free(fp.s);
+    return -1;
 }
 
 static int is_int(const jval *v, double lo, double hi)
@@ -494,33 +676,53 @@ static const char *unsupported(jval *req)
 
 typedef struct { int status, n_prompt, n_cached, n_prefill, n_gen, reprefill; double prefill_s, decode_s; } Log;
 
+static void usage_json(Buf *b, const LmTurn *t)
+{
+    buf_fmt(b, "\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d,"
+               "\"prompt_tokens_details\":{\"cached_tokens\":%d}}",
+            t->n_prompt, t->n_gen, t->n_prompt + t->n_gen, t->n_cached);
+}
+
 static void chat_completions(Server *s, Conn *c, Log *log)
 {
     char err[512] = "";
     jval *req = json_parse(c->body, NULL);
     LmMsg *msgs = NULL;
-    char **texts = NULL;
-    int nm = 0;
+    ParsedMsg *parsed = NULL;
+    int nm = 0, total_images = 0;
     jval *v;
     if (!req || req->t != J_OBJ) { respond_error(c, log->status = 400, NULL, "the body is not a JSON object"); goto out; }
     const char *bad = unsupported(req);
-    if (bad) { respond_error(c, log->status = 400, "unsupported_parameter", "%s is not supported by this server (text chat only)", bad); goto out; }
+    if (bad) { respond_error(c, log->status = 400, "unsupported_parameter", "%s is not supported by this server", bad); goto out; }
 
     jval *jm = json_get(req, "messages");
     if (!jm || jm->t != J_ARR || jm->len == 0) { respond_error(c, log->status = 400, NULL, "messages must be a non-empty array"); goto out; }
     nm = jm->len;
     msgs = (LmMsg *)calloc((size_t)nm, sizeof *msgs);
-    texts = (char **)calloc((size_t)nm, sizeof *texts);
-    if (!msgs || !texts) { respond_error(c, log->status = 500, NULL, "out of memory"); goto out; }
+    parsed = (ParsedMsg *)calloc((size_t)nm, sizeof *parsed);
+    if (!msgs || !parsed) { respond_error(c, log->status = 500, NULL, "out of memory"); goto out; }
     for (int i = 0; i < nm; i++) {
         jval *m = jm->kids[i], *role = json_get(m, "role");
         if (!role || role->t != J_STR) { respond_error(c, log->status = 400, NULL, "messages[%d] needs a role", i); goto out; }
         if (!strcmp(role->str, "system") || !strcmp(role->str, "developer")) msgs[i].role = LM_ROLE_SYSTEM;
         else if (!strcmp(role->str, "user")) msgs[i].role = LM_ROLE_USER;
         else if (!strcmp(role->str, "assistant")) msgs[i].role = LM_ROLE_ASSISTANT;
-        else { respond_error(c, log->status = 400, NULL, "messages[%d]: role \"%.64s\" is not supported (text chat only)", i, role->str); goto out; }
-        if (!(texts[i] = msg_text(json_get(m, "content"), i, err, sizeof err))) { respond_error(c, log->status = 400, NULL, "%s", err); goto out; }
-        msgs[i].content = texts[i];
+        else { respond_error(c, log->status = 400, NULL, "messages[%d]: role \"%.64s\" is not supported", i, role->str); goto out; }
+        const int allow_img = msgs[i].role == LM_ROLE_USER;
+        if (parse_msg_content(s, json_get(m, "content"), i, allow_img, &parsed[i], err, sizeof err)) {
+            respond_error(c, log->status = 400, parsed[i].err_code, "%s", err);
+            goto out;
+        }
+        total_images += parsed[i].n_images;
+        if (total_images > MAX_IMAGES) {
+            respond_error(c, log->status = 400, "too_many_images", "at most %d images per request", MAX_IMAGES);
+            goto out;
+        }
+        msgs[i].content = parsed[i].fingerprint;
+        if (parsed[i].n_parts > 0) {
+            msgs[i].parts = parsed[i].parts;
+            msgs[i].n_parts = parsed[i].n_parts;
+        }
     }
     if (msgs[nm - 1].role != LM_ROLE_USER) { respond_error(c, log->status = 400, NULL, "the last message must be from the user"); goto out; }
 
@@ -532,7 +734,7 @@ static void chat_completions(Server *s, Conn *c, Log *log)
     }
     double temperature = s->temperature, top_p = s->top_p;
     int top_k = s->top_k;
-    uint64_t seed = s->seed + s->requests; /* a different draw per request unless the client fixes it */
+    uint64_t seed = s->seed + s->requests;
     if ((v = json_get(req, "temperature")) && v->t != J_NULL) {
         if (v->t != J_NUM || !(v->num >= 0 && v->num <= 100)) { respond_error(c, log->status = 400, NULL, "temperature must be a number >= 0"); goto out; }
         temperature = v->num;
@@ -570,7 +772,11 @@ static void chat_completions(Server *s, Conn *c, Log *log)
     LmTurnOpts to = { max_tokens, sink, &r, cancelled, NULL };
     LmTurn t;
     g_reply = &r;
-    int rc = lm_chat_turn(s->chat, msgs[nm - 1].content, &to, &t, err, sizeof err);
+    int rc;
+    if (parsed[nm - 1].n_parts > 0)
+        rc = lm_chat_turn_parts(s->chat, parsed[nm - 1].parts, parsed[nm - 1].n_parts, &to, &t, err, sizeof err);
+    else
+        rc = lm_chat_turn(s->chat, msgs[nm - 1].content, &to, &t, err, sizeof err);
     g_reply = NULL;
     log->n_prompt = t.n_prompt;
     log->n_prefill = t.n_prefill;
@@ -580,12 +786,10 @@ static void chat_completions(Server *s, Conn *c, Log *log)
     log->prefill_s = t.prefill_s;
     log->decode_s = t.decode_s;
 
-    /* A reply that could not be finished is an error, never a "stop" that looks complete. An
-     * LM_ERR_CTX after the prompt went in is a reply cut by the window: finish_reason "length". */
     const char *fail = NULL, *code = NULL;
     int fail_status = 500;
     if (rc == LM_OK && t.stop == LM_STOP_CANCEL) {
-        if (c->broken) { log->status = 499; goto out; } /* nobody to answer */
+        if (c->broken) { log->status = 499; goto out; }
         fail = "the server is shutting down; the reply was not finished";
         fail_status = 503;
     } else if (rc == LM_OK && t.stop == LM_STOP_TOOLCALL) {
@@ -614,8 +818,9 @@ static void chat_completions(Server *s, Conn *c, Log *log)
         if (usage_in_stream && !fail) {
             Buf u = { 0 };
             chunk_head(&u, &r);
-            buf_fmt(&u, ",\"choices\":[],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}}",
-                    t.n_prompt, t.n_gen, t.n_prompt + t.n_gen);
+            buf_str(&u, ",\"choices\":[],");
+            usage_json(&u, &t);
+            buf_str(&u, "}");
             sse_send(&r, &u);
         }
         send_all(c, "data: [DONE]\n\n", 14);
@@ -628,28 +833,18 @@ static void chat_completions(Server *s, Conn *c, Log *log)
         buf_str(&b, ",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":");
         buf_jstr(&b, t.answer ? t.answer : "");
         if (t.reasoning && t.reasoning[0]) { buf_str(&b, ",\"reasoning_content\":"); buf_jstr(&b, t.reasoning); }
-        buf_fmt(&b, "},\"finish_reason\":\"%s\"}],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"total_tokens\":%d}}",
-                t.stop == LM_STOP_EOS ? "stop" : "length", t.n_prompt, t.n_gen, t.n_prompt + t.n_gen);
+        buf_fmt(&b, "},\"finish_reason\":\"%s\"}],", t.stop == LM_STOP_EOS ? "stop" : "length");
+        usage_json(&b, &t);
+        buf_str(&b, "}");
         if (b.oom) respond_error(c, log->status = 500, NULL, "out of memory");
         else respond(c, 200, NULL, b.s, b.n);
         free(b.s);
     }
 out:
-    if (texts) for (int i = 0; i < nm; i++) free(texts[i]);
-    free(texts);
+    if (parsed) for (int i = 0; i < nm; i++) parsed_free(&parsed[i]);
+    free(parsed);
     free(msgs);
     json_free_tree(req);
-}
-
-static void respond_name(Conn *c, Log *log, const char *pre, const char *name, const char *post)
-{
-    Buf b = { 0 };
-    buf_str(&b, pre);
-    buf_jstr(&b, name);
-    buf_str(&b, post);
-    if (b.oom) respond_error(c, log->status = 500, NULL, "out of memory");
-    else respond(c, log->status = 200, NULL, b.s, b.n);
-    free(b.s);
 }
 
 static void handle(Server *s, Conn *c, int timeout_s)
@@ -664,15 +859,43 @@ static void handle(Server *s, Conn *c, int timeout_s)
         respond_error(c, log.status = rh, NULL, "%s", reason(rh));
     } else if (!strcmp(c->path, "/health")) {
         if (strcmp(c->method, "GET")) respond_error(c, log.status = 405, NULL, "use GET");
-        else respond_name(c, &log, "{\"status\":\"ok\",\"model\":", s->name, "}");
+        else {
+            Buf b = { 0 };
+            buf_str(&b, "{\"status\":\"ok\",\"model\":");
+            buf_jstr(&b, s->name);
+            buf_fmt(&b, ",\"context_length\":%d,\"capabilities\":{\"vision\":{\"status\":\"%s\",\"max_pixels\":%d",
+                    s->n_ctx, s->vision ? "ok" : "unavailable", s->image_max_pixels);
+            if (s->vision && lm_vision_info(s->vision)->family == LM_VISION_QWEN)
+                buf_str(&b, ",\"pixels_per_token\":1024");
+            else if (s->vision)
+                buf_str(&b, ",\"tokens_per_image\":280");
+            buf_str(&b, "}}}");
+            if (b.oom) respond_error(c, log.status = 500, NULL, "out of memory");
+            else respond(c, log.status = 200, NULL, b.s, b.n);
+            free(b.s);
+        }
     } else if (strncmp(c->path, "/v1/", 4)) {
         respond_error(c, log.status = 404, NULL, "no such endpoint: %s", c->path);
-    } else if (!authorised(s, c)) { /* before the body: no key, no 4 MiB read */
+    } else if (!authorised(s, c)) { /* before the body: no key, no large body read */
         respond_error(c, log.status = 401, "invalid_api_key", "a valid \"Authorization: Bearer <key>\" header is required");
     } else if (!strcmp(c->path, "/v1/models")) {
         if (strcmp(c->method, "GET")) respond_error(c, log.status = 405, NULL, "use GET");
-        else respond_name(c, &log, "{\"object\":\"list\",\"data\":[{\"id\":", s->name,
-                          ",\"object\":\"model\",\"created\":0,\"owned_by\":\"local\"}]}");
+        else {
+            Buf b = { 0 };
+            buf_str(&b, "{\"object\":\"list\",\"data\":[{\"id\":");
+            buf_jstr(&b, s->name);
+            buf_fmt(&b, ",\"object\":\"model\",\"created\":0,\"owned_by\":\"local\",\"context_length\":%d,"
+                        "\"capabilities\":{\"vision\":{\"status\":\"%s\",\"max_pixels\":%d",
+                    s->n_ctx, s->vision ? "ok" : "unavailable", s->image_max_pixels);
+            if (s->vision && lm_vision_info(s->vision)->family == LM_VISION_QWEN)
+                buf_str(&b, ",\"pixels_per_token\":1024");
+            else if (s->vision)
+                buf_str(&b, ",\"tokens_per_image\":280");
+            buf_str(&b, "}}}]}");
+            if (b.oom) respond_error(c, log.status = 500, NULL, "out of memory");
+            else respond(c, log.status = 200, NULL, b.s, b.n);
+            free(b.s);
+        }
     } else if (!strcmp(c->path, "/v1/chat/reset")) {
         if (strcmp(c->method, "POST")) respond_error(c, log.status = 405, NULL, "use POST");
         else {
@@ -718,6 +941,10 @@ static void handle(Server *s, Conn *c, int timeout_s)
 
 static int be_feed(void *ctx, int token, float *logits) { return lm_feed((LmModel *)ctx, token, logits); }
 static int be_prefill(void *ctx, const int *ids, int n, float *logits) { return lm_prefill((LmModel *)ctx, ids, n, logits); }
+static int be_prefill_image(void *ctx, const float *rows, int n, int width, int grid_h, int grid_w, float *logits)
+{
+    return lm_prefill_image((LmModel *)ctx, rows, n, width, grid_h, grid_w, logits, NULL);
+}
 static void be_reset(void *ctx) { lm_reset((LmModel *)ctx); }
 static int be_pos(void *ctx) { return lm_pos((const LmModel *)ctx); }
 static void *be_save(void *ctx) { return lm_snapshot((const LmModel *)ctx); }
@@ -773,7 +1000,7 @@ static void usage(FILE *f)
 {
     fputs("usage: lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]\n"
           "       [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N]\n"
-          "       [--timeout S] [--cache-mb N] [--fast]\n"
+          "       [--timeout S] [--cache-mb N] [--image-max-pixels N] [--fast]\n"
           "       (set LM_SERVE_API_KEY to require a bearer key on /v1 paths)\n", f);
 }
 
@@ -798,6 +1025,7 @@ int main(int argc, char **argv)
     const char *model = NULL, *weights = NULL, *host = "127.0.0.1", *port = "8080", *name = NULL;
     int think = 0, fast = 0;
     long max_tokens = 0, seed = 1, ctx = 0, threads = 0, port_n, timeout_s = 30, cache_mb = 512;
+    long image_max_pixels = 1048576;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
 #define VAL need_value(argc, argv, &i)
@@ -816,6 +1044,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--threads")) { if (parse_long(VAL, 1, 4096, &threads)) BAD; }
         else if (!strcmp(a, "--timeout")) { if (parse_long(VAL, 1, 3600, &timeout_s)) BAD; }
         else if (!strcmp(a, "--cache-mb")) { if (parse_long(VAL, 0, 1L << 20, &cache_mb)) BAD; }
+        else if (!strcmp(a, "--image-max-pixels")) { if (parse_long(VAL, 1, 1L << 28, &image_max_pixels)) BAD; }
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(stdout); return 0; }
         else { fprintf(stderr, "lm-serve: unknown option %s\n", a); usage(stderr); return 2; }
     }
@@ -858,18 +1087,30 @@ int main(int argc, char **argv)
     s.name = name;
     s.api_key = key;
     s.max_tokens = (int)max_tokens;
+    s.image_max_pixels = (int)image_max_pixels;
+    s.model = m;
+    s.n_ctx = lm_n_ctx(m);
     /* the model directory's sampling defaults, else lm-chat's */
     s.temperature = prof.has_temperature ? prof.temperature : think ? 0.6 : 0.7;
     s.top_p = prof.has_top_p ? prof.top_p : think ? 0.95 : 0.8;
     s.top_k = prof.has_top_k ? prof.top_k : 20;
     s.seed = (uint64_t)seed;
 
+    char verr[256] = "";
+    s.vision = lm_vision_open(model, weights, verr, sizeof verr);
+    if (s.vision) {
+        const LmVisionInfo *vi = lm_vision_info(s.vision);
+        lm_template_set_vision(tpl, vi->start_token, vi->image_token, vi->end_token);
+    } else {
+        fprintf(stderr, "lm-serve: vision unavailable (%s)\n", verr[0] ? verr : "no encoder");
+    }
+
     LmChatConfig cc;
     memset(&cc, 0, sizeof cc);
     cc.tok = tok;
     cc.tpl = tpl;
     cc.backend = (LmBackend){ m, lm_n_vocab(m), lm_n_ctx(m), be_feed, be_reset, be_pos, be_prefill,
-                              be_save, be_restore, be_drop, be_snap_bytes };
+                              be_save, be_restore, be_drop, be_snap_bytes, be_prefill_image };
     cc.cache_bytes = (size_t)cache_mb << 20;
     cc.temperature = s.temperature;
     cc.top_p = s.top_p;
@@ -928,6 +1169,7 @@ int main(int argc, char **argv)
     fputs("lm-serve: stopped\n", stderr);
 done:
     lm_chat_free(s.chat);
+    lm_vision_close(s.vision);
     lm_close(m);
     lm_template_free(tpl);
     lm_tok_close(tok);

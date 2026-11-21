@@ -34,8 +34,13 @@
 #include "chat/lm_chat.h"
 #include "chat/lm_profile.h"
 #include "chat/lm_template.h"
+#include "io/lm_image.h"
+#include "io/lm_sha256.h"
 #include "lm/lm.h"
+#include "model/lm_vision.h"
 #include "tokenizer/lm_tok.h"
+
+enum { MAX_CHAT_IMAGES = 8 };
 
 static volatile sig_atomic_t g_cancel = 0;
 static volatile sig_atomic_t g_in_turn = 0;
@@ -55,6 +60,10 @@ static int cancelled(void *user) { (void)user; return g_cancel != 0; }
 
 static int be_feed(void *ctx, int token, float *logits) { return lm_feed((LmModel *)ctx, token, logits); }
 static int be_prefill(void *ctx, const int *ids, int n, float *logits) { return lm_prefill((LmModel *)ctx, ids, n, logits); }
+static int be_prefill_image(void *ctx, const float *rows, int n, int width, int grid_h, int grid_w, float *logits)
+{
+    return lm_prefill_image((LmModel *)ctx, rows, n, width, grid_h, grid_w, logits, NULL);
+}
 static void be_reset(void *ctx) { lm_reset((LmModel *)ctx); }
 static int be_pos(void *ctx) { return lm_pos((const LmModel *)ctx); }
 static void *be_save(void *ctx) { return lm_snapshot((const LmModel *)ctx); }
@@ -87,9 +96,9 @@ static void sink(void *user, LmOutKind kind, const char *s, size_t n)
 static void usage(FILE *f)
 {
     fputs("usage: lm-chat --model DIR [--weights FILE] [--prompt TEXT] [--system TEXT]\n"
-          "       [--think | --no-think] [--show-thinking] [--temperature T] [--top-p P]\n"
-          "       [--top-k K] [--seed N] [--max-tokens N] [--ctx N] [--threads N]\n"
-          "       [--strict-template] [--stats] [--fast]\n", f);
+          "       [--image FILE]... [--think | --no-think] [--show-thinking]\n"
+          "       [--temperature T] [--top-p P] [--top-k K] [--seed N] [--max-tokens N]\n"
+          "       [--ctx N] [--threads N] [--strict-template] [--stats] [--fast]\n", f);
 }
 
 static int parse_double(const char *s, double *out)
@@ -112,7 +121,63 @@ static int parse_long(const char *s, long lo, long hi, long *out)
     return 0;
 }
 
-typedef struct { LmChat *chat; Out out; int stats; int max_tokens; } Session;
+typedef struct {
+    LmChat *chat;
+    Out out;
+    int stats;
+    int max_tokens;
+    LmMsgPart *parts; /* optional first-turn multimodal parts (owned rows) */
+    int n_parts;
+} Session;
+
+static void free_parts(LmMsgPart *parts, int n)
+{
+    if (!parts) return;
+    for (int i = 0; i < n; i++) {
+        if (parts[i].kind == LM_PART_IMAGE) free((void *)parts[i].rows);
+        else free((void *)parts[i].text);
+    }
+    free(parts);
+}
+
+static int load_image_part(LmVision *v, const char *path, int max_pixels, LmMsgPart *out, char *err, size_t errlen)
+{
+    memset(out, 0, sizeof *out);
+    out->kind = LM_PART_IMAGE;
+    uint8_t *rgb = NULL;
+    int w = 0, h = 0;
+    if (lm_image_decode_file(path, &rgb, &w, &h, err, errlen)) return -1;
+    {
+        char hex[65];
+        if (lm_sha256_file(path, hex, err, errlen)) { free(rgb); return -1; }
+        memcpy(out->sha_hex, hex, 65);
+    }
+    const LmVisionInfo *vi = lm_vision_info(v);
+    int ow = w, oh = h;
+    if (vi->family == LM_VISION_QWEN) lm_image_smart_resize(h, w, 32, 65536, max_pixels, &oh, &ow);
+    else if (lm_image_gemma_size(h, w, vi->unit, 2520, &oh, &ow, err, errlen)) { free(rgb); return -1; }
+    uint8_t *resized = NULL;
+    if (lm_image_resize(rgb, w, h, ow, oh, &resized, err, errlen)) { free(rgb); return -1; }
+    free(rgb);
+    const int nt = lm_vision_tokens(v, oh, ow);
+    if (nt < 1) {
+        free(resized);
+        snprintf(err, errlen, "%s: size %dx%d is not valid for this vision encoder", path, ow, oh);
+        return -1;
+    }
+    float *rows = (float *)malloc((size_t)nt * (size_t)vi->out_dim * sizeof(float));
+    if (!rows || lm_vision_encode(v, resized, oh, ow, rows, err, errlen)) {
+        free(resized); free(rows);
+        return -1;
+    }
+    free(resized);
+    out->rows = rows;
+    out->n_rows = nt;
+    out->width = vi->out_dim;
+    out->grid_h = oh / vi->unit;
+    out->grid_w = ow / vi->unit;
+    return 0;
+}
 
 /* One user turn. Returns 0 to go on, 1 on a fatal backend error. */
 static int run_turn(Session *s, const char *text)
@@ -124,7 +189,26 @@ static int run_turn(Session *s, const char *text)
     s->out.wrote_answer = 0;
     g_cancel = 0;
     g_in_turn = 1;
-    int rc = lm_chat_turn(s->chat, text, &to, &t, err, sizeof err);
+    int rc;
+    if (s->parts && s->n_parts > 0) {
+        /* Attach images to the first user message only. */
+        LmMsgPart *parts = (LmMsgPart *)calloc((size_t)s->n_parts + 1, sizeof *parts);
+        if (!parts) { g_in_turn = 0; fprintf(stderr, "lm-chat: out of memory\n"); return 1; }
+        int np = 0;
+        for (int i = 0; i < s->n_parts; i++) parts[np++] = s->parts[i];
+        if (text && text[0]) {
+            parts[np].kind = LM_PART_TEXT;
+            parts[np].text = text;
+            np++;
+        }
+        rc = lm_chat_turn_parts(s->chat, parts, np, &to, &t, err, sizeof err);
+        free(parts);
+        free_parts(s->parts, s->n_parts);
+        s->parts = NULL;
+        s->n_parts = 0;
+    } else {
+        rc = lm_chat_turn(s->chat, text, &to, &t, err, sizeof err);
+    }
     g_in_turn = 0;
     if (s->out.in_reasoning) fputs(s->out.color ? "\n[/thinking]\033[0m\n" : "\n[/thinking]\n", stderr);
     if (s->out.wrote_answer) fputc('\n', stdout);
@@ -177,9 +261,12 @@ static const char *need_value(int argc, char **argv, int *i)
 int main(int argc, char **argv)
 {
     const char *model = NULL, *weights = NULL, *prompt = NULL, *system = NULL;
+    const char *images[MAX_CHAT_IMAGES];
+    int n_images = 0;
     int think = 0, show_thinking = 0, stats = 0, strict = 0, fast = 0;
     double temperature = -1, top_p = -1;
     long top_k = -1, seed = 1, max_tokens = 0, ctx = 0, threads = 0;
+    long image_max_pixels = 1048576;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -189,6 +276,10 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--weights")) weights = VAL;
         else if (!strcmp(a, "--prompt")) { if (!(prompt = take_arg((char *)VAL))) return 1; }
         else if (!strcmp(a, "--system")) { if (!(system = take_arg((char *)VAL))) return 1; }
+        else if (!strcmp(a, "--image")) {
+            if (n_images >= MAX_CHAT_IMAGES) { fprintf(stderr, "lm-chat: at most %d --image flags\n", MAX_CHAT_IMAGES); return 2; }
+            images[n_images++] = VAL;
+        }
         else if (!strcmp(a, "--think")) think = 1;
         else if (!strcmp(a, "--no-think")) think = 0;
         else if (!strcmp(a, "--show-thinking")) show_thinking = 1;
@@ -202,10 +293,12 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--max-tokens")) { if (parse_long(VAL, 1, 1 << 24, &max_tokens)) BAD; }
         else if (!strcmp(a, "--ctx")) { if (parse_long(VAL, 1, 1 << 24, &ctx)) BAD; }
         else if (!strcmp(a, "--threads")) { if (parse_long(VAL, 1, 4096, &threads)) BAD; }
+        else if (!strcmp(a, "--image-max-pixels")) { if (parse_long(VAL, 1, 1L << 28, &image_max_pixels)) BAD; }
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(stdout); return 0; }
         else { fprintf(stderr, "lm-chat: unknown option %s\n", a); usage(stderr); return 2; }
     }
     if (!model) { fputs("lm-chat: --model DIR is required\n", stderr); usage(stderr); return 2; }
+    if (n_images && !prompt) { fputs("lm-chat: --image requires --prompt (attach to the first message)\n", stderr); return 2; }
 
     char err[1024] = "", path[4096];
     LmProfile prof;
@@ -224,6 +317,27 @@ int main(int argc, char **argv)
     LmModel *m = lm_open(model, &lo, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-chat: %s\n", err); lm_template_free(tpl); lm_tok_close(tok); return 1; }
 
+    LmVision *vision = NULL;
+    LmMsgPart *parts = NULL;
+    int n_parts = 0;
+    if (n_images) {
+        vision = lm_vision_open(model, weights, err, sizeof err);
+        if (!vision) { fprintf(stderr, "lm-chat: vision unavailable: %s\n", err); lm_close(m); lm_template_free(tpl); lm_tok_close(tok); return 1; }
+        const LmVisionInfo *vi = lm_vision_info(vision);
+        lm_template_set_vision(tpl, vi->start_token, vi->image_token, vi->end_token);
+        parts = (LmMsgPart *)calloc((size_t)n_images, sizeof *parts);
+        if (!parts) { fprintf(stderr, "lm-chat: out of memory\n"); lm_vision_close(vision); lm_close(m); lm_template_free(tpl); lm_tok_close(tok); return 1; }
+        for (int i = 0; i < n_images; i++) {
+            if (load_image_part(vision, images[i], (int)image_max_pixels, &parts[i], err, sizeof err)) {
+                fprintf(stderr, "lm-chat: %s\n", err);
+                free_parts(parts, i);
+                lm_vision_close(vision); lm_close(m); lm_template_free(tpl); lm_tok_close(tok);
+                return 1;
+            }
+            n_parts++;
+        }
+    }
+
     LmChatConfig cc;
     memset(&cc, 0, sizeof cc);
     cc.tok = tok;
@@ -235,6 +349,7 @@ int main(int argc, char **argv)
     cc.backend.reset = be_reset;
     cc.backend.pos = be_pos;
     cc.backend.prefill = be_prefill;
+    cc.backend.prefill_image = be_prefill_image;
     cc.backend.save = be_save;
     cc.backend.restore = be_restore;
     cc.backend.drop = be_drop;
@@ -247,10 +362,23 @@ int main(int argc, char **argv)
     cc.strict_history = strict;
     cc.system = system;
     LmChat *chat = lm_chat_new(&cc, err, sizeof err);
-    if (!chat) { fprintf(stderr, "lm-chat: %s\n", err); lm_close(m); lm_template_free(tpl); lm_tok_close(tok); return 1; }
+    if (!chat) {
+        fprintf(stderr, "lm-chat: %s\n", err);
+        free_parts(parts, n_parts);
+        lm_vision_close(vision); lm_close(m); lm_template_free(tpl); lm_tok_close(tok);
+        return 1;
+    }
 
     signal(SIGINT, on_sigint);
-    Session s = { chat, { show_thinking, 0, 0, isatty(2) }, stats, (int)max_tokens };
+    Session s;
+    memset(&s, 0, sizeof s);
+    s.chat = chat;
+    s.out.show_thinking = show_thinking;
+    s.out.color = isatty(2);
+    s.stats = stats;
+    s.max_tokens = (int)max_tokens;
+    s.parts = parts;
+    s.n_parts = n_parts;
     if (stats) fprintf(stderr, "[context %d tokens]\n", lm_n_ctx(m));
     int status = 0;
     if (prompt) {
@@ -276,7 +404,9 @@ int main(int argc, char **argv)
         }
         free(line);
     }
+    free_parts(s.parts, s.n_parts);
     lm_chat_free(chat);
+    lm_vision_close(vision);
     lm_close(m);
     lm_template_free(tpl);
     lm_tok_close(tok);

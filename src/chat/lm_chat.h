@@ -60,6 +60,10 @@ typedef struct {
     int   (*restore)(void *ctx, void *snap);
     void  (*drop)(void *ctx, void *snap);
     size_t (*snap_bytes)(void *ctx, void *snap);
+    /* Optional: feed one image block (lm_prefill_image). Required when a turn's prompt has
+     * image spans; without it those turns fail. */
+    int (*prefill_image)(void *ctx, const float *rows, int n, int width, int grid_h, int grid_w,
+                         float *logits);
 } LmBackend;
 
 #define LM_CHAT_CACHE_MIN 16       /* the shortest shared prefix worth a snapshot */
@@ -102,13 +106,16 @@ int lm_chat_cache_slots(const LmChat *c);
 size_t lm_chat_cache_bytes(const LmChat *c);
 
 /* Replace the conversation with msgs[0..n): an optional system message first, then user and
- * assistant messages (content only; reasoning and gen_ids are ignored). This is how a client
- * that sends the whole conversation each time (lm-serve) talks to the chat. Leading messages
- * that equal the chat's own history (same role and text, in order) keep what the chat knows
- * about them, so an answer it generated is rendered from its exact ids and the next turn's
- * prompt still extends the fed state. Returns 0, or -1 with a message in err (a system
- * message that is not first, a message without text, allocation failure); on -1 the
- * conversation is unchanged. The backend is not touched: the next turn decides what to feed. */
+ * assistant messages (content only for assistants; reasoning and gen_ids are ignored). This
+ * is how a client that sends the whole conversation each time (lm-serve) talks to the chat.
+ * Leading messages that equal the chat's own history (same role and content fingerprint,
+ * including image SHAs, in order) keep what the chat knows about them, so an answer it
+ * generated is rendered from its exact ids and the next turn's prompt still extends the fed
+ * state. Multimodal user messages must carry parts with owned-copyable image rows; content
+ * is the fingerprint string (text plus image SHAs). Returns 0, or -1 with a message in err
+ * (a system message that is not first, a message without text, allocation failure); on -1
+ * the conversation is unchanged. The backend is not touched: the next turn decides what to
+ * feed. */
 int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen);
 
 /* New sampling settings from the next turn on, with the random stream re-seeded. Checked
@@ -154,5 +161,10 @@ typedef struct {
  * turn that fails before generating anything leaves the history as it was. */
 int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTurn *res,
                  char *err, size_t errlen);
+
+/* Like lm_chat_turn, but the user message is multimodal parts (text and/or images).
+ * parts must remain valid through the call; image rows are copied into history. */
+int lm_chat_turn_parts(LmChat *c, const LmMsgPart *parts, int n_parts, const LmTurnOpts *opts,
+                       LmTurn *res, char *err, size_t errlen);
 
 #endif
