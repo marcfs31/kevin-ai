@@ -39,5 +39,9 @@ int lm_bind_mat_any(LmBind *b, const char *name, int rows, int cols, int flat, L
 /* Opens path (file, index or directory); with q8 set, checks the lm-q8 group-32 metadata. */
 int lm_bind_open(LmBind *b, const char *path, int q8, char *err, size_t n);
 void lm_bind_free(LmBind *b);
+/* File bytes of the image encoder's tensors in the open set (model.visual.* for Qwen3.5,
+ * model.vision_tower.* and model.embed_vision.* for Gemma 4): what lm_vision_open will make
+ * resident from the same files. 0 when there are none. */
+uint64_t lm_bind_vision_bytes(const LmBind *b);
 
 #endif /* LM_BIND_H */

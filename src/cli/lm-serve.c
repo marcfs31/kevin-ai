@@ -1293,7 +1293,7 @@ int main(int argc, char **argv)
     if (!tok) { fprintf(stderr, "lm-serve: %s\n", err); return 1; }
     LmTemplate *tpl = lm_profile_template(&prof, tok, err, sizeof err);
     if (!tpl) { fprintf(stderr, "lm-serve: %s\n", err); lm_tok_close(tok); return 1; }
-    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0 };
+    LmOpts lo = { weights, (int)ctx, (int)threads, fast, 0, 1 };
     LmModel *m = lm_open(model, &lo, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-serve: %s\n", err); lm_template_free(tpl); lm_tok_close(tok); return 1; }
 

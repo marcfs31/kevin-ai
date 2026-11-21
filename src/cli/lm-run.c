@@ -164,7 +164,7 @@ static int run_image_logits(const char *model, const char *weights, const char *
         free(copy);
         if (ntok == 0) { fprintf(stderr, "lm-run: --tokens is empty\n"); rc = 2; goto done; }
     }
-    LmOpts o = { weights, ctx, threads, fast, 0 };
+    LmOpts o = { weights, ctx, threads, fast, 0, 1 };
     m = lm_open(model, &o, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
     v = lm_vision_open(model, weights, err, sizeof err);
@@ -220,7 +220,7 @@ static int run_image_block(const char *model, const char *weights, const char *t
     LmModel *m = NULL;
     FILE *fl = NULL, *fp = NULL;
     if (parse_tokens(tokstr, &tok, &ntok) != 0) { fprintf(stderr, "lm-run: bad --tokens\n"); return 2; }
-    LmOpts o = { weights, 0, 0, 0, 0 };
+    LmOpts o = { weights, 0, 0, 0, 0, 1 };
     m = lm_open(model, &o, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-run: %s\n", err); goto done; }
     if (ntok) {
@@ -328,7 +328,7 @@ int main(int argc, char **argv)
     if (ntok == 0) { fprintf(stderr, "lm-run: --tokens is empty\n"); free(tok); return 2; }
 
     char err[1024] = "";
-    LmOpts o = { weights, ctx, threads, fast, mtp };
+    LmOpts o = { weights, ctx, threads, fast, mtp, 0 };
     LmModel *m = lm_open(model, &o, err, sizeof err);
     if (!m) { fprintf(stderr, "lm-run: %s\n", err); free(tok); return 1; }
     const int vocab = lm_n_vocab(m);

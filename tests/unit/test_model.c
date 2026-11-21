@@ -29,7 +29,7 @@ static const int TOK[12] = { 5, 17, 383, 0, 42, 99, 7, 250, 31, 2, 311, 64 };
 static LmModel *open_model(const char *weights, int ctx)
 {
     char err[512];
-    LmOpts o = { weights, ctx, 0, 0, 0 };
+    LmOpts o = { weights, ctx, 0, 0, 0, 0 };
     LmModel *m = lm_open(FIX, &o, err, sizeof err);
     CHECK_MSG(m != NULL, "lm_open: %s", err);
     return m;
@@ -93,7 +93,7 @@ static void test_invariants(const char *weights, const char *label)
         uint64_t avail;
         if (lm_mem_available(&avail) == LM_MEM_OK) {
             char err[512] = "";
-            LmOpts big = { weights, 1 << 30, 0, 0, 0 };
+            LmOpts big = { weights, 1 << 30, 0, 0, 0, 0 };
             LmModel *b = lm_open(FIX, &big, err, sizeof err);
             CHECK(b == NULL);
             CHECK_MSG(strstr(err, "-token context needs") != NULL, "%s", err);
@@ -259,7 +259,7 @@ static void test_binding_rejections(void)
     }
 
     /* the bf16 shard passed as the q8 weights file */
-    LmOpts o = { FIX "/model.safetensors-00001-of-00002.safetensors", 0, 0, 0, 0 };
+    LmOpts o = { FIX "/model.safetensors-00001-of-00002.safetensors", 0, 0, 0, 0, 0 };
     expect_open_fail(FIX, &o, "not an lm-q8 group-32 file", "bf16 file as q8");
     /* the q8 file is not a bf16 checkpoint */
     {
@@ -281,10 +281,10 @@ static void test_binding_rejections(void)
         if (m) lm_close(m);
     }
     /* bad ctx */
-    LmOpts bad = { NULL, -1, 0, 0, 0 };
+    LmOpts bad = { NULL, -1, 0, 0, 0, 0 };
     expect_open_fail(FIX, &bad, "ctx", "negative ctx");
     /* a missing weights file */
-    LmOpts miss = { "/nonexistent/model.q8.safetensors", 0, 0, 0, 0 };
+    LmOpts miss = { "/nonexistent/model.q8.safetensors", 0, 0, 0, 0, 0 };
     expect_open_fail(FIX, &miss, "cannot open", "missing weights file");
 }
 

@@ -43,6 +43,9 @@ typedef struct {
                             weights; q8 files from an lm-quant older than the head lack it) for
                             lm_draft / lm_verify / lm_accept. Every fed token then also runs the
                             head's one layer to keep its cache. lm_open fails if there is none */
+    int vision;          /* 1 = the caller will also lm_vision_open the same files: with ctx 0,
+                            the encoder's weights count as resident when the window is chosen,
+                            so the encoder does not push the state out of memory. 0 = text only */
 } LmOpts;
 
 /* model_dir holds config.json in the Hugging Face layout. Every architecture number

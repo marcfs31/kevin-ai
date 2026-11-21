@@ -209,6 +209,8 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
     const int fast = opts ? opts->q8_int8_acts : 0;
     if (fast < 0 || fast > 1) { lm_fail(err, errlen, "q8_int8_acts must be 0 or 1"); free(m); return NULL; }
     if (fast && !weights) { lm_fail(err, errlen, "the int8 fast path needs a q8 weights file (--weights)"); free(m); return NULL; }
+    const int vision = opts ? opts->vision : 0;
+    if (vision < 0 || vision > 1) { lm_fail(err, errlen, "vision must be 0 or 1"); free(m); return NULL; }
 #ifdef _OPENMP
     if (opts && opts->threads > 0) omp_set_num_threads(opts->threads);
 #endif
@@ -220,7 +222,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
         if (lm_config_model_type(model_dir, mt, sizeof mt) == 0) {
             if (!strcmp(mt, "gemma4")) {
                 if (opts && opts->mtp) { lm_fail(err, errlen, "Gemma 4 has no MTP head; mtp is for Qwen3.5"); free(m); return NULL; }
-                m->gemma = lm_gemma_open(model_dir, weights, ctx, fast, err, errlen);
+                m->gemma = lm_gemma_open(model_dir, weights, ctx, fast, vision, err, errlen);
                 if (!m->gemma) { free(m); return NULL; }
                 m->ctx = lm_gemma_n_ctx(m->gemma);
                 return m;
@@ -298,6 +300,7 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
         if (qs.mtp)   /* bind_mtp binds them after the state is sized */
             for (int i = 0; i < m->b.st.nt; i++)
                 if (!strncmp(m->b.st.t[i].name, "mtp.", 4)) weights += (uint64_t)m->b.st.t[i].nbytes;
+        if (vision) weights += lm_bind_vision_bytes(&m->b);   /* lm_vision_open binds it later */
         if (lm_ctx_choose_here(ctx, c->max_pos, weights, qwen_state_bytes, &qs, &ctx, err, errlen) != 0) goto fail;
         m->ctx = ctx;
     }
