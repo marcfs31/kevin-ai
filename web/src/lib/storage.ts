@@ -14,6 +14,9 @@ export interface Stats {
   promptTokens: number | null;
   cachedTokens: number | null;
   completionTokens: number | null;
+  /** What was counted locally, kept when the server sent no usage. */
+  promptEstimate: number | null;
+  completionEstimate: number | null;
 }
 
 export type ReplyStatus = 'done' | 'stopped' | 'error';
@@ -107,6 +110,8 @@ function stats(v: unknown): Stats | null {
     promptTokens: numOrNull(o.promptTokens),
     cachedTokens: numOrNull(o.cachedTokens),
     completionTokens: numOrNull(o.completionTokens),
+    promptEstimate: numOrNull(o.promptEstimate),
+    completionEstimate: numOrNull(o.completionEstimate),
   };
 }
 

@@ -16,6 +16,14 @@ describe('migrate', () => {
     expect(conv?.messages[1]).toMatchObject({ role: 'assistant', content: 'yo', reasoning: '', status: 'done', error: null, stats: null });
   });
 
+  it('loads saved statistics from before estimates were kept with no estimate', () => {
+    const state = migrate({
+      version: 1,
+      conversations: [{ id: 'c', messages: [{ id: 'a', role: 'assistant', content: 'yo', stats: { promptTokens: 4, completionTokens: 2 } }] }],
+    });
+    expect(state?.conversations[0]?.messages[0]).toMatchObject({ stats: { promptTokens: 4, completionTokens: 2, promptEstimate: null, completionEstimate: null } });
+  });
+
   it('drops broken entries and resets invalid settings', () => {
     const state = migrate({
       version: 1,

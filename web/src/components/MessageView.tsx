@@ -3,7 +3,10 @@ import { useI18n, type I18n } from '../i18n';
 import type { ApiError, ContentPart } from '../lib/api';
 import { isAllowedImageDataUrl } from '../lib/attachments';
 import type { AssistantMessage, Message, Stats, UserMessage } from '../lib/storage';
+import { liveCount, replyCount } from '../lib/tokens';
+import type { Usage } from '../lib/sse';
 import { CopyButton, Markdown } from './Markdown';
+import { TokenLine } from './TokenLine';
 
 const KNOWN_CODES = new Set([
   'image_unsupported', 'image_invalid', 'image_too_large', 'too_many_images', 'context_overflow',
@@ -27,6 +30,9 @@ export interface LiveInfo {
   startedAt: number;
   firstAt: number | null;
   chunks: number;
+  /** Estimated prompt tokens, used until the server sends its usage. */
+  promptEstimate: number;
+  usage: Usage | null;
 }
 
 function LiveStatus({ live }: { live: LiveInfo }) {
@@ -36,11 +42,22 @@ function LiveStatus({ live }: { live: LiveInfo }) {
     const id = setInterval(() => setNow(performance.now()), 250);
     return () => clearInterval(id);
   }, []);
+  const counter = <TokenLine className="live" labelKey="tokens.reply" count={liveCount(live.usage, live.promptEstimate, live.chunks)} />;
   if (live.firstAt === null)
-    return <p className="live" aria-live="off">{t('message.readingPrompt', { s: num(Math.max(0, (now - live.startedAt) / 1000)) })}</p>;
+    return (
+      <>
+        <p className="live" aria-live="off">{t('message.readingPrompt', { s: num(Math.max(0, (now - live.startedAt) / 1000)) })}</p>
+        {counter}
+      </>
+    );
   const secs = (now - live.firstAt) / 1000;
   const rate = live.chunks > 1 && secs > 0 ? (live.chunks - 1) / secs : null;
-  return <p className="live" aria-live="off">{rate === null ? t('message.waiting') : t('message.live', { rate: num(rate, 1) })}</p>;
+  return (
+    <>
+      <p className="live" aria-live="off">{rate === null ? t('message.waiting') : t('message.live', { rate: num(rate, 1) })}</p>
+      {counter}
+    </>
+  );
 }
 
 function StatsLine({ stats }: { stats: Stats }) {
@@ -50,11 +67,17 @@ function StatsLine({ stats }: { stats: Stats }) {
   if (stats.tokensPerSecond !== null) parts.push(t('stats.rate', { rate: num(stats.tokensPerSecond, 1) }));
   if (stats.promptTokens !== null) parts.push(t('stats.prompt', { n: stats.promptTokens }));
   if (stats.cachedTokens !== null) parts.push(t('stats.cached', { n: stats.cachedTokens }));
-  if (!parts.length) return null;
+  const count = replyCount(stats);
+  if (!parts.length && !count) return null;
   return (
-    <p className="stats" aria-label={t('stats.label')}>
-      {parts.join(' · ')}
-    </p>
+    <>
+      {parts.length > 0 && (
+        <p className="stats" aria-label={t('stats.label')}>
+          {parts.join(' · ')}
+        </p>
+      )}
+      {count && <TokenLine className="stats" labelKey="tokens.reply" count={count} />}
+    </>
   );
 }
 

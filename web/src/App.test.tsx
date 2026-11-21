@@ -48,6 +48,40 @@ describe('App', () => {
     expect(saved.conversations[0].messages[1].content).toBe('Hello **world**');
   });
 
+  it('counts tokens read and written: estimated while streaming, real once usage arrives, summed per chat', async () => {
+    const usage = (p: number, c: number) => `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: p, completion_tokens: c } })}\n\n`;
+    let n = 0;
+    mockFetch((_url, init) => {
+      n += 1;
+      return n === 1 ? heldReply(init) : sseResponse([delta('ok'), FINISH, usage(30, 5), DONE]);
+    });
+    renderApp();
+    typeAndSend('x'.repeat(35));
+    await screen.findByText('partial');
+    const live = screen.getAllByLabelText('Tokens used by this reply').pop();
+    expect(live?.textContent).toBe('Read ≈10 · written ≈1 tokens · ≈ means estimated');
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await screen.findByText('Stopped.');
+    // A stopped reply is still counted, as an estimate.
+    expect((await screen.findByLabelText('Tokens used in this chat')).textContent).toBe('This chat: read ≈10 · written ≈1 tokens · ≈ means estimated');
+
+    typeAndSend('again');
+    await waitFor(() => expect(screen.getByLabelText('Tokens used in this chat').textContent).toContain('read ≈40 · written ≈6'));
+    // Real usage replaces the estimate for that reply; the chat total stays marked while one estimate remains.
+    const replies = screen.getAllByLabelText('Tokens used by this reply');
+    expect(replies[replies.length - 1]?.textContent).toBe('Read 30 · written 5 tokens');
+  });
+
+  it('shows a chat total without a mark when every reply has real usage, in Spanish', async () => {
+    mockFetch(() => sseResponse([delta('Hola'), FINISH, USAGE, DONE]));
+    renderApp(['es-ES']);
+    const box = screen.getByLabelText('Mensaje');
+    fireEvent.change(box, { target: { value: 'hola' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect((await screen.findByLabelText('Tokens usados en este chat')).textContent).toBe('Este chat: leídos 12 · escritos 3 tokens');
+    expect(screen.getByLabelText('Tokens usados por esta respuesta').textContent).toBe('Leídos 12 · escritos 3 tokens');
+  });
+
   it('re-sends the previous answer exactly as received', async () => {
     const fetchMock = mockFetch(() => sseResponse([delta('A *b*\n\n'), delta('`c`'), FINISH, DONE]));
     renderApp();

@@ -131,6 +131,11 @@ export const en = {
   'stats.rate': '{rate} tokens/s',
   'stats.prompt': '{n} prompt tokens',
   'stats.cached': '{n} from cache',
+  'tokens.reply': 'Read {read} · written {written} tokens',
+  'tokens.session': 'This chat: read {read} · written {written} tokens',
+  'tokens.replyLabel': 'Tokens used by this reply',
+  'tokens.sessionLabel': 'Tokens used in this chat',
+  'tokens.estimated': '≈ means estimated',
 
   'error.image_unsupported': 'This server cannot read images.',
   'error.image_invalid': 'An image could not be read by the server.',
