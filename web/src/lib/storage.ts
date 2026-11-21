@@ -95,6 +95,13 @@ export function lastSummaryIndex(messages: Message[]): number {
   return -1;
 }
 
+/** Drop the message at `index` and everything after it (a rewind). Tool results that
+ * follow an assistant are removed with it. Out-of-range indexes leave the list alone. */
+export function truncateFrom(messages: Message[], index: number): Message[] {
+  if (index < 0 || index >= messages.length) return messages;
+  return messages.slice(0, index);
+}
+
 export interface Conversation {
   id: string;
   title: string;

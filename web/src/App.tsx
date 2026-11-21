@@ -16,7 +16,7 @@ import { assess } from './lib/request';
 import { estimateWireTokens, liveCount } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
 import {
-  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
+  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, truncateFrom, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
   type Message, type UserMessage,
 } from './lib/storage';
 
@@ -258,6 +258,24 @@ function Chat({ state, setState, storage, notice }: {
     void startRun(active.id, prior, prior, 0);
   };
 
+  // After deleting a reply, the chat can end on a user message: regenerate asks again from there.
+  const canRegenerate = !busy && failedLast?.role === 'user';
+  const regenerate = () => {
+    if (controllerRef.current || !active || !canRegenerate) return;
+    stickRef.current = true;
+    void startRun(active.id, active.messages, active.messages, 0);
+  };
+
+  // Rewind: drop this message and everything after, and clear the server's reused state.
+  const deleteFrom = (index: number) => {
+    if (busy || !active) return;
+    const target = active.messages[index];
+    if (!target || target.role === 'tool') return;
+    if (!window.confirm(t('message.confirmDelete'))) return;
+    updateConv(active.id, (c) => ({ ...c, updatedAt: Date.now(), messages: truncateFrom(c.messages, index) }));
+    forgetServer();
+  };
+
   const send = async (typed: string, attachments: Attachment[], target: Conversation | null = active) => {
     if (controllerRef.current) return;
     stickRef.current = true;
@@ -460,6 +478,8 @@ function Chat({ state, setState, storage, notice }: {
                   m={m}
                   results={m.role === 'assistant' ? toolResults(messages, i) : undefined}
                   onRetry={canRetry && i === messages.length - 1 ? retry : undefined}
+                  onRegenerate={canRegenerate && i === messages.length - 1 ? regenerate : undefined}
+                  onDelete={!busy && m.role !== 'tool' ? () => deleteFrom(i) : undefined}
                 />
               </div>
             ))}

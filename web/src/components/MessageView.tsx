@@ -75,7 +75,7 @@ function StatsLine({ stats }: { stats: Stats }) {
   );
 }
 
-function Assistant({ m, live, results, onRetry }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[]; onRetry?: () => void }) {
+function Assistant({ m, live, results, onRetry, onDelete }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[]; onRetry?: () => void; onDelete?: () => void }) {
   const { t } = useI18n();
   return (
     <article className="msg assistant" aria-label={t('message.assistant')}>
@@ -111,6 +111,11 @@ function Assistant({ m, live, results, onRetry }: { m: AssistantMessage; live: L
         <div className="msg-foot">
           {m.stats && <StatsLine stats={m.stats} />}
           {m.content && <CopyButton text={m.content} label={t('message.copy')} />}
+          {onDelete && (
+            <button type="button" className="danger" onClick={onDelete} aria-label={t('message.delete')}>
+              {t('message.delete')}
+            </button>
+          )}
         </div>
       )}
     </article>
@@ -125,7 +130,7 @@ function imageParts(content: string | ContentPart[]): Extract<ContentPart, { typ
   );
 }
 
-function User({ m }: { m: UserMessage }) {
+function User({ m, onDelete, onRegenerate }: { m: UserMessage; onDelete?: () => void; onRegenerate?: () => void }) {
   const { t } = useI18n();
   const images = imageParts(m.content);
   return (
@@ -142,6 +147,23 @@ function User({ m }: { m: UserMessage }) {
       )}
       {m.typed && <p className="typed">{m.typed}</p>}
       {m.attachmentNames.length > 0 && <p className="attached">{t('message.attached', { names: m.attachmentNames.join(', ') })}</p>}
+      {(onDelete || onRegenerate) && (
+        <div className="msg-foot">
+          {onRegenerate && (
+            <p className="retry">
+              <button type="button" onClick={onRegenerate}>
+                {t('message.regenerate')}
+              </button>
+              <span className="hint">{t('message.regenerateHint')}</span>
+            </p>
+          )}
+          {onDelete && (
+            <button type="button" className="danger" onClick={onDelete} aria-label={t('message.delete')}>
+              {t('message.delete')}
+            </button>
+          )}
+        </div>
+      )}
     </article>
   );
 }
@@ -175,7 +197,7 @@ function ToolTrace({ m, results }: { m: AssistantMessage; results: ToolMessage[]
 }
 
 /** The marker where older turns were replaced by a summary; the summary itself folds away. */
-function Summary({ m }: { m: SummaryMessage }) {
+function Summary({ m, onDelete }: { m: SummaryMessage; onDelete?: () => void }) {
   const { t, tp } = useI18n();
   return (
     <aside className="msg summary" aria-label={t('compact.label')}>
@@ -186,15 +208,29 @@ function Summary({ m }: { m: SummaryMessage }) {
           <Markdown text={m.content} />
         </div>
       </details>
+      {onDelete && (
+        <div className="msg-foot">
+          <button type="button" className="danger" onClick={onDelete} aria-label={t('message.delete')}>
+            {t('message.delete')}
+          </button>
+        </div>
+      )}
     </aside>
   );
 }
 
-/** onRetry is passed only for the last message of the chat, when it failed and nothing is running. */
-export function MessageView({ m, live = null, results = [], onRetry }: { m: Message; live?: LiveInfo | null; results?: ToolMessage[]; onRetry?: () => void }) {
-  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} onRetry={onRetry} />;
-  if (m.role === 'summary') return <Summary m={m} />;
+/** onRetry / onRegenerate only for the last message when nothing is running; onDelete rewinds from here. */
+export function MessageView({ m, live = null, results = [], onRetry, onDelete, onRegenerate }: {
+  m: Message;
+  live?: LiveInfo | null;
+  results?: ToolMessage[];
+  onRetry?: () => void;
+  onDelete?: () => void;
+  onRegenerate?: () => void;
+}) {
+  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} onRetry={onRetry} onDelete={onDelete} />;
+  if (m.role === 'summary') return <Summary m={m} onDelete={onDelete} />;
   // A tool result is shown inside the reply that asked for it.
   if (m.role === 'tool') return null;
-  return <User m={m} />;
+  return <User m={m} onDelete={onDelete} onRegenerate={onRegenerate} />;
 }

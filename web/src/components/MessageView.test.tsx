@@ -1,7 +1,7 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../i18n';
-import type { UserMessage } from '../lib/storage';
+import type { AssistantMessage, UserMessage } from '../lib/storage';
 import { MessageView } from './MessageView';
 
 function user(over: Partial<UserMessage> = {}): UserMessage {
@@ -15,6 +15,51 @@ function user(over: Partial<UserMessage> = {}): UserMessage {
     ...over,
   };
 }
+
+function assistant(over: Partial<AssistantMessage> = {}): AssistantMessage {
+  return {
+    id: 'a',
+    role: 'assistant',
+    content: 'hello',
+    reasoning: '',
+    status: 'done',
+    error: null,
+    stats: null,
+    createdAt: 1,
+    ...over,
+  };
+}
+
+describe('MessageView delete and regenerate', () => {
+  it('calls onDelete from a user or assistant message', () => {
+    const onDelete = vi.fn();
+    const { rerender } = render(
+      <I18nProvider locale="en">
+        <MessageView m={user()} onDelete={onDelete} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete from here' }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    rerender(
+      <I18nProvider locale="en">
+        <MessageView m={assistant()} onDelete={onDelete} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete from here' }));
+    expect(onDelete).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers regenerate on a dangling user message', () => {
+    const onRegenerate = vi.fn();
+    render(
+      <I18nProvider locale="en">
+        <MessageView m={user()} onRegenerate={onRegenerate} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('MessageView user images', () => {
   it('shows data-URL image previews with an accessible label', () => {

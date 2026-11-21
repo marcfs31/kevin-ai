@@ -90,6 +90,10 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
 - **Retry.** A reply that failed (server down, stream cut) shows Retry. It drops the failed
   attempt and asks again from the same point, tool steps already run included, so once the
   server is back one click carries on. A failed compaction and a failed cache reset have Retry too.
+- **Delete from here / rewind.** Each saved message offers Delete from here: that message and
+  everything after it are removed, and `POST /v1/chat/reset` clears the server’s reused state so
+  the next reply matches the shorter chat. After deleting a reply, Regenerate asks again from the
+  user message that remains. Not offered while a reply is running.
 - **Compacting.** Auto compact (a checkbox above the composer, on by default, saved with the
   settings) summarises by itself when the next request would fill 80 % of the context (the
   server's own count of the last reply, else an estimate). With it off, only the Compact chat

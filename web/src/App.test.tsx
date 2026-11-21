@@ -864,6 +864,34 @@ describe('App', () => {
     expect(screen.queryByText('Could not reach the server.')).toBeNull();
   });
 
+  it('deletes a message and rewinds, then regenerates from the remaining user message', async () => {
+    let n = 0;
+    const fetchMock = mockFetch(() => {
+      n += 1;
+      return sseResponse([delta(n === 1 ? 'answer one' : n === 2 ? 'answer next' : 'answer two'), FINISH, DONE]);
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+    typeAndSend('first');
+    await screen.findByText('answer one');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    typeAndSend('second');
+    await screen.findByText('answer next');
+    await waitFor(() => expect(screen.getAllByRole('article', { name: 'You' })).toHaveLength(2));
+    const secondYou = screen.getAllByRole('article', { name: 'You' })[1];
+    if (!secondYou) throw new Error('missing second user message');
+    fireEvent.click(within(secondYou).getByRole('button', { name: 'Delete from here' }));
+    expect(screen.getAllByRole('article', { name: 'You' })).toHaveLength(1);
+    expect(screen.queryByText('second')).toBeNull();
+    expect(screen.queryByText('answer next')).toBeNull();
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/v1/chat/reset') && (init as RequestInit | undefined)?.method === 'POST')).toBe(true);
+
+    fireEvent.click(within(screen.getByRole('article', { name: 'Assistant' })).getByRole('button', { name: 'Delete from here' }));
+    expect(screen.queryByRole('article', { name: 'Assistant' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(await screen.findByText('answer two')).toBeTruthy();
+  });
+
   it('renames, deletes and deletes all conversations', async () => {
     const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
