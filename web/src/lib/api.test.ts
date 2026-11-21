@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DONE, FINISH, USAGE, delta, sseResponse } from '../test/helpers';
-import { ApiError, infoForModel, parseModels, requestBody, streamChat } from './api';
+import { ApiError, infoForModel, parseModels, requestBody, resetServer, streamChat } from './api';
 import type { StreamEvent } from './sse';
 
 describe('parseModels', () => {
@@ -49,6 +49,24 @@ describe('model list', () => {
     expect(infoForModel(two, 'gone')).toMatchObject({ model: 'qwen', contextLength: 8192 });
     expect(infoForModel(two, null)?.model).toBe('qwen');
     expect(infoForModel(null, 'rabbit')).toBeNull();
+  });
+});
+
+describe('resetServer', () => {
+  const answer = (status: number) => vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status })));
+
+  it('is done when the server resets, and when it has nothing to reset (llama-server answers 404)', async () => {
+    answer(200);
+    await expect(resetServer()).resolves.toBeUndefined();
+    answer(404);
+    await expect(resetServer()).resolves.toBeUndefined();
+  });
+
+  it('still fails, with the server\'s status, on any other error, and as status 0 when unreachable', async () => {
+    answer(500);
+    await expect(resetServer()).rejects.toMatchObject({ status: 500 });
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    await expect(resetServer()).rejects.toMatchObject({ status: 0 });
   });
 });
 
