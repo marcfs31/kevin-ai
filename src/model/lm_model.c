@@ -313,6 +313,9 @@ LmModel *lm_open(const char *model_dir, const LmOpts *opts, char *err, size_t er
         if (qs.mtp)   /* bind_mtp binds them after the state is sized */
             for (int i = 0; i < m->b.st.nt; i++)
                 if (!strncmp(m->b.st.t[i].name, "mtp.", 4)) weights += (uint64_t)m->b.st.t[i].nbytes;
+        if (opts && opts->vision)   /* open_vision binds the encoder after this: leave room for it */
+            for (int i = 0; i < m->b.st.nt; i++)
+                if (!strncmp(m->b.st.t[i].name, "model.visual.", 13)) weights += (uint64_t)m->b.st.t[i].nbytes;
         if (lm_ctx_choose_here(ctx, c->max_pos, weights, qwen_state_bytes, &qs, &ctx, err, errlen) != 0) goto fail;
         m->ctx = ctx;
     }
