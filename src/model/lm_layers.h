@@ -9,8 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* A row-major [rows][cols] weight matrix in one of three storage forms. */
-typedef enum { LM_MAT_NONE = 0, LM_MAT_F32, LM_MAT_BF16, LM_MAT_Q8 } LmMatKind;
+/* A row-major [rows][cols] weight matrix in one of four storage forms. */
+typedef enum { LM_MAT_NONE = 0, LM_MAT_F32, LM_MAT_BF16, LM_MAT_Q8, LM_MAT_GG } LmMatKind;
 
 typedef struct {
     LmMatKind       kind;
@@ -20,6 +20,8 @@ typedef struct {
     const int8_t   *q;       /* LM_MAT_Q8: int8 [rows][cols] */
     const float    *sc;      /* LM_MAT_Q8: f32 [rows][cols/32]; must be float-aligned */
     int             int8_acts; /* LM_MAT_Q8: 1 = multiply with int8-rounded activations */
+    int             gtype;   /* LM_MAT_GG: ggml block type (io/lm_gguf.h LM_GG_*) */
+    const void     *g;       /* LM_MAT_GG: the type's blocks, [rows][cols/block] (core/lm_gguf_quant.h) */
 } LmMat;
 
 /* The int8 path rounds x into stack buffers of this many inputs; lm_bind_mat refuses a
@@ -78,7 +80,8 @@ void   lm_attn_mixer(float *out, const float *x, const LmAttnW *w, const LmAttnD
 #define LM_PREFILL_CHUNK 32     /* tokens per batch: scratch grows with it, the gain flattens */
 
 /* Y[T][rows] = M X[T][cols]. q8 with exact activations runs lm_matmul_q8; every other kind
- * (f32, bf16, q8 with the int8 fast path) is T single-token multiplies. */
+ * (f32, bf16, q8 with the int8 fast path) is T single-token multiplies; a ggml block type
+ * (LM_MAT_GG) runs lm_gg_matmul, bit-identical to T single-token calls. */
 void   lm_mat_mul_batch(const LmMat *m, float *Y, const float *X, int T);
 
 size_t lm_mlp_batch_scratch(int inter, int T);                       /* floats */
