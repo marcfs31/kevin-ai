@@ -28,6 +28,9 @@ typedef struct {
     LmMsgPart *parts; /* owned part descriptors pointing at content slices / imgs */
     int n_parts;
     char *text_blob; /* owned concatenation of text parts (parts[].text point here) */
+    LmToolCall *calls; /* assistant: the calls it made (owned strings) */
+    int ncalls;
+    char *tool_name;   /* tool: the function whose result this is */
 } Hist;
 
 typedef struct { char *s; size_t n, cap; } Buf;
@@ -50,6 +53,8 @@ struct LmChat {
     size_t slot_bytes;   /* sum of slot[].bytes */
     int reprefills;
     float *logits;
+    const jval *tools;   /* borrowed, see lm_chat_set_tools */
+    int no_pop;          /* lm_chat_continue: a failed turn must not drop the last message */
 };
 
 static void set_err(char *err, size_t n, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
@@ -85,8 +90,40 @@ static void hist_free_imgs(Hist *h)
     h->nimgs = h->n_parts = 0;
 }
 
+static void calls_free(LmToolCall *calls, int n)
+{
+    for (int i = 0; i < n; i++) lm_toolcall_free(&calls[i]);
+    free(calls);
+}
+
+static int calls_equal(const LmToolCall *a, int na, const LmToolCall *b, int nb)
+{
+    if (na != nb) return 0;
+    for (int i = 0; i < na; i++)
+        if (strcmp(a[i].name, b[i].name) || strcmp(a[i].arguments, b[i].arguments)) return 0;
+    return 1;
+}
+
+/* a deep copy of calls[0..n) into h; 0, or -1 on allocation failure */
+static int hist_own_calls(Hist *h, const LmToolCall *calls, int n)
+{
+    if (n <= 0) return 0;
+    LmToolCall *own = (LmToolCall *)calloc((size_t)n, sizeof *own);
+    if (!own) return -1;
+    for (int i = 0; i < n; i++) {
+        own[i].name = strdup(calls[i].name ? calls[i].name : "");
+        own[i].arguments = strdup(calls[i].arguments ? calls[i].arguments : "{}");
+        if (!own[i].name || !own[i].arguments) { calls_free(own, i + 1); return -1; }
+    }
+    h->calls = own;
+    h->ncalls = n;
+    return 0;
+}
+
 static void hist_free_one(Hist *h)
 {
+    calls_free(h->calls, h->ncalls);
+    free(h->tool_name);
     free(h->content);
     free(h->reasoning);
     free(h->gen_ids);
@@ -318,7 +355,10 @@ int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen)
     /* how many leading messages match the history (those entries are kept as they are) */
     int keep = 0;
     while (keep < nh && keep < c->nh && c->h[keep].role == msgs[first + keep].role &&
-           !strcmp(c->h[keep].content, msgs[first + keep].content))
+           !strcmp(c->h[keep].content, msgs[first + keep].content) &&
+           calls_equal(c->h[keep].calls, c->h[keep].ncalls, msgs[first + keep].calls, msgs[first + keep].n_calls) &&
+           !strcmp(c->h[keep].tool_name ? c->h[keep].tool_name : "",
+                   msgs[first + keep].tool_name ? msgs[first + keep].tool_name : ""))
         keep++;
     Hist *h = (Hist *)calloc((size_t)(nh > 0 ? nh : 1), sizeof *h);
     char *sys = first ? dup_str(msgs[0].content) : NULL;
@@ -328,6 +368,8 @@ int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen)
         h[i].role = m->role;
         if (!(h[i].content = dup_str(m->content))) { oom = 1; break; }
         if (m->parts && m->n_parts > 0 && hist_own_parts(&h[i], m->parts, m->n_parts)) oom = 1;
+        if (hist_own_calls(&h[i], m->calls, m->n_calls)) oom = 1;
+        if (m->tool_name && !(h[i].tool_name = dup_str(m->tool_name))) oom = 1;
     }
     if (oom) {
         if (h) for (int i = keep; i < nh; i++) hist_free_one(&h[i]);
@@ -381,13 +423,51 @@ typedef struct {
     void *user;
     Buf reasoning, answer;
     int oom;
+    const LmTemplate *tpl;   /* non-NULL: tool calls are collected (tools were given) */
+    const jval *tools;
+    void (*on_call)(void *user, int index, const LmToolCall *call);
+    LmToolCall *calls;
+    int ncalls, capcalls;
 } Collect;
 
 /* NUL bytes (a model can emit the <0x00> byte token) are left out of the kept text: it is a C
  * string, so a NUL would silently cut it, and history matching compares it with strcmp. */
+/* a tool call the template could not parse: its text is part of the answer, never dropped */
+static void collect_bad_call(Collect *c, const char *s)
+{
+    Buf t = { NULL, 0, 0 };
+    for (const char *p = s; *p; p++) {
+        if (*p == '\x01') { if (buf_add(&t, "<|\"|>", 5)) c->oom = 1; }
+        else if (buf_add(&t, p, 1)) c->oom = 1;
+    }
+    if (!t.s) return;
+    if (c->answer.n && buf_add(&c->answer, "\n", 1)) c->oom = 1;
+    if (buf_add(&c->answer, t.s, t.n)) c->oom = 1;
+    if (c->sink) c->sink(c->user, LM_OUT_ANSWER, t.s, t.n);
+    free(t.s);
+}
+
 static void collect(void *u, LmOutKind kind, const char *s, size_t n)
 {
     Collect *c = (Collect *)u;
+    if (kind == LM_OUT_TOOLCALL && c->tpl) {
+        char perr[160] = "";
+        LmToolCall call = { NULL, NULL };
+        if (c->tpl->parse_call(c->tpl, s, c->tools, &call, perr, sizeof perr)) {
+            collect_bad_call(c, s);
+            return;
+        }
+        if (c->ncalls == c->capcalls) {
+            const int nc = c->capcalls ? 2 * c->capcalls : 4;
+            LmToolCall *p = (LmToolCall *)realloc(c->calls, (size_t)nc * sizeof *p);
+            if (!p) { lm_toolcall_free(&call); c->oom = 1; return; }
+            c->calls = p;
+            c->capcalls = nc;
+        }
+        c->calls[c->ncalls++] = call;
+        if (c->on_call) c->on_call(c->user, c->ncalls - 1, &c->calls[c->ncalls - 1]);
+        return;
+    }
     Buf *b = kind == LM_OUT_REASONING ? &c->reasoning : kind == LM_OUT_ANSWER ? &c->answer : NULL;
     for (size_t i = 0; b && i < n;) {
         size_t j = i;
@@ -400,8 +480,14 @@ static void collect(void *u, LmOutKind kind, const char *s, size_t n)
 
 /* ---- the turn ---------------------------------------------------------------------- */
 
+void lm_chat_set_tools(LmChat *c, const jval *tools)
+{
+    c->tools = tools && tools->t == J_ARR && tools->len > 0 ? tools : NULL;
+}
+
 static void pop_user(LmChat *c)
 {
+    if (c->no_pop) return;
     if (c->nh > 0) hist_free_one(&c->h[--c->nh]);
 }
 
@@ -551,6 +637,9 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
         msgs[nm].gen_thinking = c->h[i].gen_thinking;
         msgs[nm].parts = c->h[i].parts;
         msgs[nm].n_parts = c->h[i].n_parts;
+        msgs[nm].calls = c->h[i].calls;
+        msgs[nm].n_calls = c->h[i].ncalls;
+        msgs[nm].tool_name = c->h[i].tool_name;
         nm++;
     }
 
@@ -570,6 +659,7 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
     ro.verbatim_history = !c->cfg.strict_history;
     ro.spans = &spans;
     ro.n_spans = &n_spans;
+    ro.tools = c->tools;
     LmIds prompt = { 0 };
     int rc = c->cfg.tpl->render(c->cfg.tpl, msgs, nm, &ro, &prompt, err, errlen);
     free(msgs);
@@ -695,7 +785,9 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
     lm_ids_free(&prompt);
 
     LmParser *parser = c->cfg.tpl->parser_new(c->cfg.tpl, c->cfg.thinking);
-    Collect col = { opts->sink, opts->user, { NULL, 0, 0 }, { NULL, 0, 0 }, 0 };
+    Collect col = { opts->sink, opts->user, { NULL, 0, 0 }, { NULL, 0, 0 }, 0,
+                    c->tools ? c->cfg.tpl : NULL, c->tools, opts->on_call, NULL, 0, 0 };
+    if (parser) parser->collect_calls = c->tools != NULL;
     LmIds gen = { 0 };
     int result = LM_OK, internal = 0;
     if (!parser) { pop_user(c); set_err(err, errlen, "out of memory"); return -1; }
@@ -727,6 +819,7 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
     res->decode_s = now_s() - t0;
     res->n_gen = gen.n;
     res->tool_calls = parser->tool_calls;
+    res->n_calls = col.ncalls;
     res->thinking_open = parser->thinking_open;
     parser->destroy(parser);
 
@@ -734,6 +827,7 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
         lm_ids_free(&gen);
         free(col.reasoning.s);
         free(col.answer.s);
+        calls_free(col.calls, col.ncalls);
         pop_user(c);
         if (!internal && col.oom) set_err(err, errlen, "out of memory");
         return internal || col.oom ? -1 : result;
@@ -747,15 +841,35 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
     a.content = col.answer.s ? col.answer.s : dup_str("");
     a.reasoning = col.reasoning.s ? col.reasoning.s : dup_str("");
     a.gen_ids = gen.ids ? gen.ids : (int *)malloc(sizeof(int));
+    a.calls = col.calls;
+    a.ncalls = col.ncalls;
     if (!a.content || !a.reasoning || !a.gen_ids || hist_push(c, &a)) {
-        free(a.content); free(a.reasoning); free(a.gen_ids);
+        free(a.content); free(a.reasoning); free(a.gen_ids); calls_free(col.calls, col.ncalls);
         pop_user(c);
         set_err(err, errlen, "out of memory");
         return -1;
     }
     res->answer = c->h[c->nh - 1].content;
     res->reasoning = c->h[c->nh - 1].reasoning;
+    res->calls = c->h[c->nh - 1].calls;
     return result;
+}
+
+int lm_chat_continue(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, size_t errlen)
+{
+    LmTurn local;
+    if (!res) res = &local;
+    memset(res, 0, sizeof *res);
+    static const LmTurnOpts none;
+    if (!opts) opts = &none;
+    if (c->nh == 0 || c->h[c->nh - 1].role == LM_ROLE_ASSISTANT) {
+        set_err(err, errlen, "the conversation must end with a user or tool message");
+        return -1;
+    }
+    c->no_pop = 1;
+    int rc = turn_core(c, opts, res, err, errlen);
+    c->no_pop = 0;
+    return rc;
 }
 
 int lm_chat_turn(LmChat *c, const char *user_text, const LmTurnOpts *opts, LmTurn *res,
