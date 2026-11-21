@@ -146,6 +146,121 @@ describe('App', () => {
     });
   });
 
+  describe('compacting', () => {
+    const SUMMARY_TEXT = 'The user asked about apples and pears.';
+    const PAD = ' lorem ipsum dolor sit amet';
+    /** A saved chat of `count` turns; the second reply was stopped part way. */
+    function seed(count: number, model: string | null = null) {
+      const messages = Array.from({ length: count }, (_, i) => [
+        { id: `u${i}`, role: 'user', content: `question ${i}${PAD}`, typed: `question ${i}${PAD}`, attachmentNames: [], createdAt: 1 },
+        { id: `a${i}`, role: 'assistant', content: i === 1 ? `partial answ${PAD}` : `answer ${i}${PAD}`, reasoning: '', status: i === 1 ? 'stopped' : 'done', error: null, stats: null, createdAt: 1 },
+      ]).flat();
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ version: 1, activeId: 'c', settings: {}, conversations: [{ id: 'c', title: 'Fruit', createdAt: 1, updatedAt: 1, model, messages }] }),
+      );
+    }
+    const isSummary = (init?: RequestInit) => String(JSON.parse(String(init?.body)).messages[0].content).startsWith('You compress');
+    const reply = (init: RequestInit | undefined, text = 'ok') =>
+      isSummary(init) ? sseResponse([delta(SUMMARY_TEXT), FINISH, DONE]) : sseResponse([delta(text), FINISH, DONE]);
+
+    it('the Compact button replaces older turns with a summary, keeps the last two turns and the old messages on screen', async () => {
+      seed(4);
+      const fetchMock = mockFetch((_u, init) => reply(init));
+      renderApp();
+      fireEvent.click(await screen.findByRole('button', { name: 'Compact chat' }));
+      expect(await screen.findByText('Compacted: 4 earlier messages replaced by a summary')).toBeTruthy();
+      const summaryBody = bodyOf(fetchMock, 0);
+      expect(summaryBody.messages[1].content).toContain('question 0');
+      // The stopped partial reply is in what was summarised, marked as stopped, never dropped silently.
+      expect(summaryBody.messages[1].content).toContain('partial answ lorem');
+      expect(summaryBody.messages[1].content).toContain('[this reply was stopped by the user before it ended]');
+      // Nothing is removed from the saved chat.
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
+      expect(saved).toHaveLength(9);
+      expect(saved[4]).toMatchObject({ role: 'summary', content: SUMMARY_TEXT, covered: 4, auto: false });
+      expect(screen.getByText(`question 0${PAD}`)).toBeTruthy();
+
+      typeAndSend('next');
+      await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(2));
+      const body = bodyOf(fetchMock, 1);
+      expect(body.messages[0]).toMatchObject({ role: 'system' });
+      expect(body.messages[0].content).toContain(SUMMARY_TEXT);
+      expect(body.messages.slice(1).map((m: { content: string }) => m.content)).toEqual([`question 2${PAD}`, `answer 2${PAD}`, `question 3${PAD}`, `answer 3${PAD}`, 'next']);
+    });
+
+    it('is off when there is little to compact or a reply is streaming', async () => {
+      seed(2);
+      mockFetch((_u, init) => heldReply(init));
+      renderApp();
+      expect((await screen.findByRole('button', { name: 'Compact chat' })).hasAttribute('disabled')).toBe(true);
+    });
+
+    it('compacts by itself before sending when the next request would fill the context', async () => {
+      seed(4);
+      const fetchMock = mockFetch(
+        (_u, init) => reply(init, 'sure'),
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      typeAndSend('x');
+      expect(await screen.findByText('sure')).toBeTruthy();
+      const chats = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
+      expect(chats).toHaveLength(2);
+      expect(isSummary(chats[0]?.[1])).toBe(true);
+      expect(bodyOf(fetchMock, 1).messages[0].content).toContain(SUMMARY_TEXT);
+      expect(screen.getByText('Compacted: 4 earlier messages replaced by a summary')).toBeTruthy();
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
+      expect(saved.find((m: { role: string }) => m.role === 'summary')).toMatchObject({ auto: true });
+    });
+
+    it('does not compact by itself while the chat fits, or when the server gives no context length', async () => {
+      seed(4);
+      const fetchMock = mockFetch((_u, init) => reply(init, 'fine'));
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      typeAndSend('x');
+      await screen.findByText('fine');
+      expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(1);
+    });
+
+    it('keeps every message and says why when the summary fails, then still sends', async () => {
+      seed(4);
+      const fetchMock = mockFetch(
+        (_u, init) => (isSummary(init) ? sseResponse([FINISH, DONE]) : sseResponse([delta('sure'), FINISH, DONE])),
+        () => modelsResponse({ context_length: 100 }),
+      );
+      renderApp();
+      await screen.findByText('Context: 100 tokens');
+      typeAndSend('x');
+      expect(await screen.findByText('sure')).toBeTruthy();
+      expect(screen.getByText('The chat was not compacted: The model wrote no summary.')).toBeTruthy();
+      expect(screen.queryByText(/Compacted:/)).toBeNull();
+      expect(bodyOf(fetchMock, 1).messages).toHaveLength(9);
+    });
+
+    it('stopping while it summarises leaves the chat as it was', async () => {
+      seed(4);
+      mockFetch((_u, init) => heldReply(init));
+      renderApp();
+      fireEvent.click(await screen.findByRole('button', { name: 'Compact chat' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+      await waitFor(() => expect((screen.getByRole('button', { name: 'Compact chat' }) as HTMLButtonElement).disabled).toBe(false));
+      expect(screen.queryByText(/Compacted:/)).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages).toHaveLength(8);
+    });
+
+    it('is in Spanish', async () => {
+      seed(4);
+      mockFetch((_u, init) => reply(init));
+      renderApp(['es-ES']);
+      fireEvent.click(await screen.findByRole('button', { name: 'Compactar chat' }));
+      expect(await screen.findByText('Compactado: 4 mensajes anteriores sustituidos por un resumen')).toBeTruthy();
+    });
+  });
+
   it('re-sends the previous answer exactly as received', async () => {
     const fetchMock = mockFetch(() => sseResponse([delta('A *b*\n\n'), delta('`c`'), FINISH, DONE]));
     renderApp();

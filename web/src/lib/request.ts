@@ -2,16 +2,23 @@
 import { requestBody, type ContentPart, type ServerInfo, type WireMessage } from './api';
 import { MAX_BODY_BYTES, MAX_IMAGES, contentText, countImages, type Attachment, estimateAttachment } from './attachments';
 import { checkContext, estimateTextTokens, estimateWaitSeconds } from './estimate';
-import type { Message, Settings } from './storage';
+import { lastSummaryIndex, type Message, type Settings } from './storage';
+
+/** Heads the summary inside the system message. */
+export const SUMMARY_PREFIX = 'Summary of the earlier part of this conversation (it was compacted to save space):';
 
 /** The messages to send: each earlier answer exactly as received; failed replies are left out,
  * even when they streamed some text, so the model never sees a truncated answer as its own. */
 export function toWire(systemPrompt: string, history: Message[]): WireMessage[] {
   const out: WireMessage[] = [];
-  if (systemPrompt.trim()) out.push({ role: 'system', content: systemPrompt });
-  for (const m of history) {
+  // Only what follows the last summary is sent; the summary rides in the system message.
+  const s = lastSummaryIndex(history);
+  const summary = s >= 0 ? history[s] : null;
+  const system = [systemPrompt.trim() ? systemPrompt : '', summary ? `${SUMMARY_PREFIX}\n${summary.content}` : ''].filter(Boolean).join('\n\n');
+  if (system) out.push({ role: 'system', content: system });
+  for (const m of history.slice(s + 1)) {
     if (m.role === 'user') out.push({ role: 'user', content: m.content });
-    else if (m.content && m.status !== 'error') out.push({ role: 'assistant', content: m.content });
+    else if (m.role === 'assistant' && m.content && m.status !== 'error') out.push({ role: 'assistant', content: m.content });
   }
   return out;
 }

@@ -516,3 +516,9 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 
 .chat-model { display: inline-flex; align-items: center; gap: 0.4rem; }
 .chat-model select { font: inherit; font-size: 0.8125rem; max-inline-size: 16rem; }
+
+.chat-tools { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.chat-tools .spacer { flex: 1; }
+.compacted { border-inline-start: 2px dashed var(--border); padding-inline-start: 0.5rem; }
+.msg.summary { border-inline-start: 3px solid var(--border, currentColor); padding-inline-start: 0.75rem; }
+.msg.summary summary { cursor: pointer; font-size: 0.875rem; }
