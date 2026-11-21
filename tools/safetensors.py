@@ -177,9 +177,12 @@ class Tensors:
     def shape(self, name):
         return self.info[name][1]
 
-    def raw(self, name):
+    def view(self, name):
         _, _, lo, hi = self.info[name]
-        return bytes(self.buf[self.data_start + lo:self.data_start + hi])
+        return self.buf[self.data_start + lo:self.data_start + hi]
+
+    def raw(self, name):
+        return bytes(self.view(name))
 
     def floats(self, name):
         dt = self.dtype(name)
@@ -238,6 +241,9 @@ class Checkpoint:
     def shape(self, name):
         return self._t(name).shape(name)
 
+    def view(self, name):
+        return self._t(name).view(name)
+
     def raw(self, name):
         return self._t(name).raw(name)
 
@@ -287,34 +293,45 @@ class MemoryCheckpoint(Checkpoint):
 
 # --------------------------------------------------------------------------- writing
 
-def serialize(tensors, metadata=None, order=None):
-    """tensors: dict name -> (dtype, shape, raw bytes). Returns the file bytes.
-
-    `order` defaults to sorted(names) (bytewise). `metadata` is an ordered dict of str -> str.
-    """
-    names = list(order) if order is not None else sorted(tensors)
-    if sorted(names) != sorted(tensors):
+def header_bytes(specs, metadata=None, order=None):
+    """specs: dict name -> (dtype, shape). Returns the 8-byte length prefix plus the padded
+    header, so a caller can stream the tensor bytes (in `order`) after it."""
+    names = list(order) if order is not None else sorted(specs)
+    if sorted(names) != sorted(specs):
         raise SafetensorsError("order does not match the tensor names")
     header = {}
     if metadata is not None:
         if not all(isinstance(k, str) and isinstance(v, str) for k, v in metadata.items()):
             raise SafetensorsError("metadata must map strings to strings")
         header["__metadata__"] = dict(metadata)
-    offset, blobs = 0, []
+    offset = 0
     for name in names:
-        dt, shape, raw = tensors[name]
+        dt, shape = specs[name]
         if dt not in DTYPE_BYTES:
             raise SafetensorsError("unsupported dtype %r for %r" % (dt, name))
+        size = numel(shape) * DTYPE_BYTES[dt]
+        header[name] = {"dtype": dt, "shape": list(shape), "data_offsets": [offset, offset + size]}
+        offset += size
+    h = json.dumps(header, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    h += b" " * ((-len(h)) % 8)
+    return struct.pack("<Q", len(h)) + h
+
+
+def serialize(tensors, metadata=None, order=None):
+    """tensors: dict name -> (dtype, shape, raw bytes). Returns the file bytes.
+
+    `order` defaults to sorted(names) (bytewise). `metadata` is an ordered dict of str -> str.
+    """
+    names = list(order) if order is not None else sorted(tensors)
+    head = header_bytes({n: (t[0], t[1]) for n, t in tensors.items()}, metadata, names)
+    blobs = []
+    for name in names:
+        dt, shape, raw = tensors[name]
         raw = bytes(raw)
         if len(raw) != numel(shape) * DTYPE_BYTES[dt]:
             raise SafetensorsError("size mismatch for %r" % name)
-        header[name] = {"dtype": dt, "shape": list(shape),
-                        "data_offsets": [offset, offset + len(raw)]}
-        offset += len(raw)
         blobs.append(raw)
-    h = json.dumps(header, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    h += b" " * ((-len(h)) % 8)
-    return struct.pack("<Q", len(h)) + h + b"".join(blobs)
+    return head + b"".join(blobs)
 
 
 def write_file(path, tensors, metadata=None, order=None):
