@@ -59,6 +59,26 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   reason is shown as cut short, never as complete.
 - **Statistics per reply:** time to first token, tokens per second, prompt tokens and, when the
   server reports it, tokens taken from its cache.
+- **Token counter.** While a reply streams: tokens read (prompt) and written, with `≈` and a note
+  while they are estimates (prompt by characters / 3.5 plus images at the server's size, written
+  by streamed chunks). Real `usage` from `stream_options.include_usage` replaces them when it
+  arrives. The final figures stay under each reply and a chat total sums every reply (marked
+  estimated while any reply lacks usage).
+- **Compacting.** When the next request would fill 80 % of the context (the server's own count
+  of the last reply, else an estimate), or with the Compact button, the older turns are
+  summarised by the model into one summary message and the last two turns stay verbatim. The
+  summary goes in the system message; the old messages stay saved and on screen, marked
+  compacted. Images in the summarised turns become a text note, and a stopped or failed partial
+  reply is passed to the summary marked as such. If the summary fails, the chat is untouched and
+  the message is sent as it was.
+- **Model picker.** When `/v1/models` lists more than one model, each chat chooses its model
+  (sent as `model`), with the context length the server reports for it. The context check,
+  compaction and vision follow that choice.
+- **Tools (off by default, Settings).** Offers a calculator and the current time through the
+  OpenAI `tools` / `tool_calls` shape (a server with tool support, e.g. lm-serve on Qwen3.5 or
+  Gemma 4). Calls and results are shown in a collapsible trace; the loop is capped at 1–20 steps
+  (default 8), the last step sends `tool_choice: "none"`, and Stop ends it at once. Tools run in
+  the page and touch nothing outside it.
 - **Server state reuse.** Every earlier answer is re-sent exactly as received (no reasoning, no
   edits), because lm-serve reuses its state only then. Stopped replies are re-sent as far as
   they got; failed replies are left out, even when they streamed some text.
