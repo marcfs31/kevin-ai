@@ -96,8 +96,9 @@ whiterabbitneo-2.5-7b-q4km` fetches the pinned file (4,683,072,032 bytes, sha256
 `~/models/whiterabbitneo-2.5-7b-q4km/`; any path to a `.gguf`, or a directory with exactly one and
 no `config.json`, is a GGUF model for `lm-run`, `lm-chat` and `lm-serve`. The file carries the
 tokenizer and the chat template (bare ChatML, no default system prompt); `--weights` does not apply.
-In the web app, Settings and the header picker start it as "WhiteRabbitNeo 2.5 Coder 7B"
-(`start-remote-lm-serve.sh --id whiterabbitneo`).
+The web picker's `whiterabbitneo` target currently starts llama.cpp's `llama-server` on the Q8_0
+file in `whiterabbitneo-2.5-7b`; to serve the Q4_K_M with this engine instead run
+`bin/lm-serve --model ~/models/whiterabbitneo-2.5-7b-q4km` (the model id is the directory name).
 
 **Quantisation: Q4_K_M.** The KV cache is f32 (112 KiB per token, 3.5 GiB at the model's 32k
 window) and decode reads every weight once per token, at about 11 GB/s here. Q6_K (6.25 GB) and
