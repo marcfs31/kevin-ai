@@ -31,12 +31,13 @@ export function estimateWireTokens(wire: WireMessage[], info: ServerInfo | null)
 const figure = (real: number | null, estimate: number | null): Figure | null =>
   real !== null ? { n: real, estimated: false } : estimate !== null ? { n: estimate, estimated: true } : null;
 
-/** One reply's figures, or null when neither a usage nor an estimate was kept. */
-export function replyCount(s: Stats | null): Count | null {
+/** One reply's figures; a figure the reply never had is left out rather than dropping the reply. */
+export function replyCount(s: Stats | null): Partial<Count> | null {
   if (!s) return null;
   const read = figure(s.promptTokens, s.promptEstimate);
   const written = figure(s.completionTokens, s.completionEstimate);
-  return read && written ? { read, written } : null;
+  if (!read && !written) return null;
+  return { ...(read && { read }), ...(written && { written }) };
 }
 
 /** What a reply that is still streaming has used so far: usage as soon as it arrives. */
@@ -49,20 +50,18 @@ export function liveCount(usage: Usage | null, promptEstimate: number, chunks: n
 
 /** The sum over every reply of a conversation; estimated as soon as one figure is. */
 export function sessionTotals(messages: Message[]): Count | null {
-  let read = 0;
-  let written = 0;
-  let readEst = false;
-  let writtenEst = false;
+  const total: Count = { read: { n: 0, estimated: false }, written: { n: 0, estimated: false } };
   let any = false;
   for (const m of messages) {
     if (m.role !== 'assistant') continue;
     const c = replyCount(m.stats);
     if (!c) continue;
     any = true;
-    read += c.read.n;
-    written += c.written.n;
-    readEst ||= c.read.estimated;
-    writtenEst ||= c.written.estimated;
+    for (const k of ['read', 'written'] as const) {
+      const f = c[k];
+      if (!f) continue;
+      total[k] = { n: total[k].n + f.n, estimated: total[k].estimated || f.estimated };
+    }
   }
-  return any ? { read: { n: read, estimated: readEst }, written: { n: written, estimated: writtenEst } } : null;
+  return any ? total : null;
 }

@@ -8,8 +8,8 @@ import { toWire } from './request';
 import { lastSummaryIndex, type Message, type SummaryMessage } from './storage';
 import { estimateWireTokens } from './tokens';
 
-/** Messages kept word for word at the end: the last two turns. */
-export const KEEP_RECENT = 4;
+/** User turns kept word for word at the end. */
+export const KEEP_TURNS = 2;
 /** Compact when the next request would fill this share of the context window. */
 export const AUTO_RATIO = 0.8;
 /** The summary request may use this share of the context window for the transcript. */
@@ -27,9 +27,10 @@ export interface Plan {
 /** What to summarise, or null when too little is older than the kept turns. */
 export function planCompaction(messages: Message[]): Plan | null {
   const start = lastSummaryIndex(messages) + 1;
-  let cut = messages.length - KEEP_RECENT;
-  // Keep whole turns: the first kept message is a user message.
-  while (cut > start && messages[cut]?.role !== 'user') cut -= 1;
+  // Keep the last two turns whole, however many tool steps they hold: the first kept message is
+  // the second-to-last user message.
+  const users = messages.flatMap((m, i) => (m.role === 'user' ? [i] : []));
+  const cut = users[users.length - KEEP_TURNS] ?? -1;
   if (cut - start < 2) return null;
   const previous = start > 0 ? (messages[start - 1] as SummaryMessage) : null;
   return { cut, previous, span: messages.slice(start, cut) };

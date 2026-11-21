@@ -97,7 +97,6 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'compact.marker.other': 'Compactado: {count} mensajes anteriores sustituidos por un resumen',
   'compact.byAuto': 'Hecho automáticamente porque el chat casi llenaba el contexto.',
   'compact.byHand': 'Hecho con el botón Compactar.',
-  'compact.earlier': 'Compactado',
 
   'tools.trace': 'Llamadas a herramientas: {names}',
   'tools.arguments': 'Argumentos',

@@ -129,7 +129,7 @@ export async function runAgent(o: AgentOptions): Promise<void> {
       return;
     }
     const last = useTools && step >= cap;
-    await streamReply(o, toWire(o.settings.systemPrompt, history), message, useTools, last);
+    await streamReply(o, toWire(o.settings.systemPrompt, history, o.info?.vision === 'ok'), message, useTools, last);
     const calls = useTools && message.status === 'done' ? (message.toolCalls ?? []) : [];
     if (!calls.length) {
       commit(message);

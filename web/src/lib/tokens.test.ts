@@ -28,6 +28,7 @@ describe('tokens', () => {
     expect(replyCount(stats({ promptEstimate: 40, completionEstimate: 7 }))).toEqual({
       read: { n: 40, estimated: true }, written: { n: 7, estimated: true },
     });
+    expect(replyCount(stats({ promptTokens: 40 }))).toEqual({ read: { n: 40, estimated: false } });
     expect(replyCount(stats({}))).toBeNull();
     expect(replyCount(null)).toBeNull();
   });
@@ -44,6 +45,8 @@ describe('tokens', () => {
     const est = reply(stats({ promptEstimate: 30, completionEstimate: 6 }));
     expect(sessionTotals([real, real])).toEqual({ read: { n: 20, estimated: false }, written: { n: 4, estimated: false } });
     expect(sessionTotals([real, est])).toEqual({ read: { n: 40, estimated: true }, written: { n: 8, estimated: true } });
+    // A reply saved before completions were estimated still counts what it has.
+    expect(sessionTotals([reply(stats({ promptTokens: 40 })), real])).toEqual({ read: { n: 50, estimated: false }, written: { n: 2, estimated: false } });
     expect(sessionTotals([reply(null)])).toBeNull();
     expect(sessionTotals([])).toBeNull();
   });

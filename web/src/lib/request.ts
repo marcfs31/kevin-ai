@@ -9,7 +9,29 @@ export const SUMMARY_PREFIX = 'Summary of the earlier part of this conversation 
 
 /** The messages to send: each earlier answer exactly as received; failed replies are left out,
  * even when they streamed some text, so the model never sees a truncated answer as its own. */
-export function toWire(systemPrompt: string, history: Message[]): WireMessage[] {
+/** The server's rule for a tool name; a call the model named otherwise is sent under a safe one. */
+const TOOL_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** Arguments must be a JSON object string on the wire; whatever else the model wrote is sent as {}. */
+function wireArguments(text: string): string {
+  try {
+    const v: unknown = JSON.parse(text);
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? text : '{}';
+  } catch {
+    return '{}';
+  }
+}
+
+function withoutImages(content: string | ContentPart[]): string | ContentPart[] {
+  if (typeof content === 'string' || countImages(content) === 0) return content;
+  return content.map((p): ContentPart => (p.type === 'image_url' ? { type: 'text', text: NO_IMAGE_NOTE } : p));
+}
+
+const NO_IMAGE_NOTE = '[an image was attached here; the model now chosen cannot read images]';
+
+/** `keepImages` false (a model without vision) swaps every image for a text note, so a chat that
+ * had images can still be continued on another model. */
+export function toWire(systemPrompt: string, history: Message[], keepImages = true): WireMessage[] {
   const out: WireMessage[] = [];
   // Only what follows the last summary is sent; the summary rides in the system message.
   const s = lastSummaryIndex(history);
@@ -18,7 +40,7 @@ export function toWire(systemPrompt: string, history: Message[]): WireMessage[] 
   if (system) out.push({ role: 'system', content: system });
   const kept = history.slice(s + 1);
   for (const [i, m] of kept.entries()) {
-    if (m.role === 'user') out.push({ role: 'user', content: m.content });
+    if (m.role === 'user') out.push({ role: 'user', content: keepImages ? m.content : withoutImages(m.content) });
     else if (m.role === 'assistant') {
       // Calls go back only with every result: the server refuses a call that nothing answered.
       const results = m.status === 'done' && m.toolCalls?.length ? toolResults(kept, i) : [];
@@ -27,7 +49,7 @@ export function toWire(systemPrompt: string, history: Message[]): WireMessage[] 
         out.push({
           role: 'assistant',
           content: m.content || null,
-          tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
+          tool_calls: m.toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: TOOL_NAME.test(c.name) ? c.name : 'unknown_tool', arguments: wireArguments(c.arguments) } })),
         });
         for (const c of m.toolCalls) {
           const r = results.find((x) => x.toolCallId === c.id);
@@ -98,7 +120,7 @@ export function assess(
     if (e.tokens === null) imagesUnknown = true;
     else newTokens += e.tokens;
   }
-  const wire = [...toWire(settings.systemPrompt, history), { role: 'user' as const, content: draftContent }];
+  const wire = [...toWire(settings.systemPrompt, history, info?.vision === 'ok'), { role: 'user' as const, content: draftContent }];
   // Earlier images are re-sent too; count them at the server's fixed size when it gives one.
   const perImage = info?.tokensPerImage ?? null;
   let promptTokens = newTokens;
