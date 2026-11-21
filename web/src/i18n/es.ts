@@ -45,6 +45,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'serve.startQwen': 'Arrancar Qwen3.5-4B',
   'serve.startQwenUncensored': 'Arrancar Qwen3.5-4B sin censura',
   'serve.startGemma': 'Arrancar Gemma 4 E4B',
+  'serve.startWhiteRabbitNeo': 'Arrancar WhiteRabbitNeo 2.5 7B',
   'serve.confirm': '¿Detener el modelo actual y arrancar {model}?',
   'serve.starting': 'Arrancando {model}…',
   'serve.started': 'En marcha: {model}.',

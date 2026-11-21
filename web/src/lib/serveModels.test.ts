@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ctxPresetsFor, formatCtxPreset, matchServeModel } from './serveModels';
+import { ctxPresetsFor, formatCtxPreset, isServeModelRunning, matchServeModel } from './serveModels';
 
 describe('formatCtxPreset', () => {
   it('formats ladder sizes as k labels', () => {
@@ -55,6 +55,14 @@ describe('ctxPresetsFor', () => {
   it('does not cap the plain Qwen target by a running uncensored model', () => {
     expect(ctxPresetsFor('qwen', 'qwen3.5-4b-uncensored', 8192)).toHaveLength(7);
     expect(ctxPresetsFor('qwen-uncensored', 'qwen3.5-4b-uncensored', 8192)).toEqual([null, 4096, 8192]);
+  });
+
+  it('maps the llama-server WhiteRabbitNeo model and caps its window at 16k', () => {
+    expect(matchServeModel('whiterabbitneo-2.5-7b')).toBe('whiterabbitneo');
+    // NEGATIVE: its name has no "qwen", so the Qwen targets stay off
+    expect(isServeModelRunning('whiterabbitneo-2.5-7b', 'qwen')).toBe(false);
+    expect(isServeModelRunning('qwen3.5-4b', 'whiterabbitneo')).toBe(false);
+    expect(ctxPresetsFor('whiterabbitneo', null, null)).toEqual([null, 4096, 8192, 16384]);
   });
 
   it('includes a running ctx value that is not on the ladder', () => {
