@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useI18n } from '../i18n';
@@ -16,6 +16,13 @@ export function remarkHtmlAsText() {
     node.children?.forEach(walk);
   };
   return (tree: MdNode) => walk(tree);
+}
+
+/** Prefers a second Copy when the block is taller than one viewport thumb-reach. */
+export const DUAL_COPY_MIN_HEIGHT_PX = 320;
+
+export function needsDualCopy(heightPx: number): boolean {
+  return heightPx >= DUAL_COPY_MIN_HEIGHT_PX;
 }
 
 function textOf(node: ReactNode): string {
@@ -43,10 +50,27 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
 
 function Pre({ children }: { children?: ReactNode }) {
   const { t } = useI18n();
+  const preRef = useRef<HTMLPreElement>(null);
+  const [dual, setDual] = useState(false);
+  const text = textOf(children).replace(/\n$/, '');
+  const label = t('message.copyCode');
+
+  useEffect(() => {
+    const pre = preRef.current;
+    if (!pre) return;
+    const measure = () => setDual(needsDualCopy(pre.getBoundingClientRect().height));
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(pre);
+    return () => ro.disconnect();
+  }, [children]);
+
   return (
     <div className="code-block">
-      <CopyButton text={textOf(children).replace(/\n$/, '')} label={t('message.copyCode')} />
-      <pre>{children}</pre>
+      <CopyButton text={text} label={label} />
+      <pre ref={preRef}>{children}</pre>
+      {dual && <CopyButton text={text} label={label} />}
     </div>
   );
 }

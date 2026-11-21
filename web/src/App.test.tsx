@@ -432,6 +432,77 @@ describe('App', () => {
   });
 });
 
+describe('live scroll stickiness', () => {
+  it('stops following while scrolled up, then follows again after Send', async () => {
+    type Ctrl = { push: (chunk: string) => void; close: () => void };
+    const ctrls: Ctrl[] = [];
+    mockFetch((_url, init) => {
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      const enc = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          controller = c;
+          controller.enqueue(enc.encode(delta('start')));
+          init?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+        },
+      });
+      ctrls.push({
+        push: (chunk) => controller.enqueue(enc.encode(chunk)),
+        close: () => controller.close(),
+      });
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    });
+    renderApp();
+    typeAndSend('one');
+    await screen.findByText('start');
+
+    const log = screen.getByRole('region', { name: 'Conversation' });
+    expect(log.tabIndex).toBe(0);
+    let scrollTop = 0;
+    Object.defineProperty(log, 'clientHeight', { configurable: true, get: () => 400 });
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, get: () => 2000 });
+    Object.defineProperty(log, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v;
+      },
+    });
+    scrollTop = 0;
+    fireEvent.scroll(log);
+
+    const first = ctrls[0];
+    expect(first).toBeDefined();
+    await act(async () => {
+      first.push(delta(' more'));
+    });
+    await screen.findByText(/more/);
+    expect(scrollTop).toBe(0);
+
+    await act(async () => {
+      first.push(FINISH);
+      first.push(DONE);
+      first.close();
+    });
+    await screen.findByRole('button', { name: 'Send' });
+
+    scrollTop = 50;
+    typeAndSend('two');
+    await screen.findByText('start');
+    expect(ctrls).toHaveLength(2);
+    // Send re-arms stickiness; the next live token may follow to the bottom.
+    expect(scrollTop).toBe(2000);
+
+    const second = ctrls[1];
+    expect(second).toBeDefined();
+    await act(async () => {
+      second.push(FINISH);
+      second.push(DONE);
+      second.close();
+    });
+  });
+});
+
 describe('accessibility', () => {
   it('has no axe violations on the empty screen, a conversation and the settings', async () => {
     mockFetch(() => sseResponse([delta('think', 'reasoning_content'), delta('# Title\n\n```js\nx()\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |'), FINISH, USAGE, DONE]));
