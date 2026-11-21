@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { BACKUP_KEY, STORAGE_KEY } from './lib/storage';
-import { DONE, FINISH, USAGE, axeViolations, delta, mockFetch, modelsResponse, sseResponse } from './test/helpers';
+import { DONE, FINISH, FINISH_TOOLS, USAGE, axeViolations, delta, mockFetch, modelsResponse, sseResponse, toolCallDelta } from './test/helpers';
 
 function renderApp(languages: readonly string[] = ['en-US']) {
   return render(<App storage={localStorage} languages={languages} />);
@@ -258,6 +258,105 @@ describe('App', () => {
       renderApp(['es-ES']);
       fireEvent.click(await screen.findByRole('button', { name: 'Compactar chat' }));
       expect(await screen.findByText('Compactado: 4 mensajes anteriores sustituidos por un resumen')).toBeTruthy();
+    });
+  });
+
+  describe('tools', () => {
+    function enableTools(maxSteps = 8) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: { tools: true, maxSteps } }));
+    }
+    const asks = (id = 'c1', expr = '6*7') => sseResponse([toolCallDelta(id, 'calculator', JSON.stringify({ expression: expr })), FINISH_TOOLS, DONE]);
+
+    it('runs the tool the model asks for, shows a collapsible trace and sends the result back', async () => {
+      enableTools();
+      let n = 0;
+      const fetchMock = mockFetch(() => (++n === 1 ? asks() : sseResponse([delta('It is 42.'), FINISH, DONE])));
+      renderApp();
+      typeAndSend('what is 6*7?');
+      expect(await screen.findByText('It is 42.')).toBeTruthy();
+      const summary = screen.getByText('Tool calls: calculator');
+      const trace = summary.closest('details') as HTMLDetailsElement;
+      expect(trace.open).toBe(false);
+      expect(within(trace).getByText('{"expression":"6*7"}')).toBeTruthy();
+      expect(within(trace).getByText('42')).toBeTruthy();
+      expect(bodyOf(fetchMock, 0)).toMatchObject({ tool_choice: 'auto', tools: [{ function: { name: 'calculator' } }, { function: { name: 'current_time' } }] });
+      expect(bodyOf(fetchMock, 1).messages.slice(-2)).toMatchObject([{ role: 'assistant', content: null, tool_calls: [{ id: 'c1' }] }, { role: 'tool', tool_call_id: 'c1', content: '42' }]);
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
+      expect(saved.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+      // The next question re-sends the whole exchange, calls and results included.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+      typeAndSend('thanks');
+      await waitFor(() => expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'))).toHaveLength(3));
+      expect(bodyOf(fetchMock, 2).messages.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant', 'user']);
+    });
+
+    it('stops at the step cap with a note, and the last request forbids tool calls', async () => {
+      enableTools(2);
+      const fetchMock = mockFetch(() => asks());
+      renderApp();
+      typeAndSend('loop');
+      expect(await screen.findByText('Stopped at the limit of 2 steps; the tool calls above were not run.')).toBeTruthy();
+      const chats = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
+      expect(chats).toHaveLength(2);
+      expect(bodyOf(fetchMock, 1).tool_choice).toBe('none');
+      expect(screen.getByText('Not run')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+    });
+
+    it('can be stopped with the Stop button between the steps of a long run', async () => {
+      enableTools();
+      let n = 0;
+      mockFetch((_u, init) => (++n === 1 ? asks() : heldReply(init)));
+      renderApp();
+      typeAndSend('go');
+      await screen.findByText('partial');
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      expect(await screen.findByText('Stopped.')).toBeTruthy();
+      expect(screen.getByText('Tool calls: calculator')).toBeTruthy();
+      expect(n).toBe(2);
+    });
+
+    it('does not offer tools unless they are turned on in Settings, and the cap is set there', async () => {
+      const fetchMock = mockFetch(() => sseResponse([delta('hi'), FINISH, DONE]));
+      renderApp();
+      typeAndSend('x');
+      await screen.findByText('hi');
+      expect(bodyOf(fetchMock, 0)).not.toHaveProperty('tools');
+      fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+      const box = screen.getByLabelText('Let the model use tools') as HTMLInputElement;
+      const steps = screen.getByLabelText('Most steps per message') as HTMLInputElement;
+      expect(box.checked).toBe(false);
+      expect(steps.disabled).toBe(true);
+      fireEvent.click(box);
+      expect(steps.disabled).toBe(false);
+      expect(steps.value).toBe('8');
+      fireEvent.change(steps, { target: { value: '3' } });
+      fireEvent.change(steps, { target: { value: '99' } });
+      expect(steps.value).toBe('3');
+      await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings).toMatchObject({ tools: true, maxSteps: 3 }));
+    });
+
+    it('shows a rejected tool request in the user’s language', async () => {
+      enableTools();
+      mockFetch(() => new Response(JSON.stringify({ error: { message: 'tools must be an array', type: 'invalid_request_error', code: 'invalid_tools' } }), { status: 400 }));
+      renderApp(['es-ES']);
+      const box = screen.getByLabelText('Mensaje');
+      fireEvent.change(box, { target: { value: 'hola' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      expect((await screen.findByRole('alert')).textContent).toBe('El servidor rechazó la petición de herramientas: tools must be an array');
+    });
+
+    it('labels the trace in Spanish and has no accessibility violations', async () => {
+      enableTools();
+      let n = 0;
+      mockFetch(() => (++n === 1 ? asks() : sseResponse([delta('Son 42.'), FINISH, DONE])));
+      const { container } = renderApp(['es-ES']);
+      const box = screen.getByLabelText('Mensaje');
+      fireEvent.change(box, { target: { value: 'cuánto es' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await screen.findByText('Son 42.');
+      expect(screen.getByText('Llamadas a herramientas: calculator')).toBeTruthy();
+      expect(await axeViolations(container)).toEqual([]);
     });
   });
 

@@ -235,3 +235,27 @@ describe('toWire and assess', () => {
     expect(a.problems.map((p) => p.kind)).toContain('too_large');
   });
 });
+
+describe('toWire with tool calls', () => {
+  const asks = (over: Partial<Extract<Message, { role: 'assistant' }>> = {}): Message => ({
+    id: 'a', role: 'assistant', content: '', reasoning: '', status: 'done', error: null, stats: null, createdAt: 0,
+    toolCalls: [{ id: 'c1', name: 'calculator', arguments: '{"expression":"1"}' }], ...over,
+  });
+  const result: Message = { id: 't', role: 'tool', toolCallId: 'c1', name: 'calculator', content: '1', isError: false, createdAt: 0 };
+  const hi: Message = { id: 'u', role: 'user', content: 'hi', typed: 'hi', attachmentNames: [], createdAt: 0 };
+
+  it('sends a call with its result straight after it', () => {
+    expect(toWire('', [hi, asks(), result])).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'calculator', arguments: '{"expression":"1"}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: '1' },
+    ]);
+  });
+
+  it('never sends a call nothing answered, a stopped or failed call, or a stray result', () => {
+    expect(toWire('', [hi, asks()])).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(toWire('', [hi, asks({ content: 'text' })])).toEqual([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'text' }]);
+    expect(toWire('', [hi, asks({ status: 'stopped' }), result])).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(toWire('', [hi, result])).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+});

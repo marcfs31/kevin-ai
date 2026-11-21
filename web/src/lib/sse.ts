@@ -15,6 +15,8 @@ export interface ApiErrorBody {
 export type StreamEvent =
   | { kind: 'content'; text: string }
   | { kind: 'reasoning'; text: string }
+  /** One streamed piece of a tool call; id and name come once, arguments may arrive in pieces. */
+  | { kind: 'tool_call'; index: number; id: string | null; name: string | null; arguments: string }
   | { kind: 'finish'; reason: string }
   | { kind: 'usage'; usage: Usage }
   | { kind: 'error'; error: ApiErrorBody }
@@ -104,6 +106,20 @@ export function parsePayload(data: string): StreamEvent[] {
       if (typeof delta.reasoning_content === 'string' && delta.reasoning_content)
         events.push({ kind: 'reasoning', text: delta.reasoning_content });
       if (typeof delta.content === 'string' && delta.content) events.push({ kind: 'content', text: delta.content });
+      if (Array.isArray(delta.tool_calls)) {
+        for (const [i, raw] of delta.tool_calls.entries()) {
+          const call = obj(raw);
+          const fn = obj(call?.function);
+          if (!call) continue;
+          events.push({
+            kind: 'tool_call',
+            index: typeof call.index === 'number' && Number.isInteger(call.index) && call.index >= 0 ? call.index : i,
+            id: typeof call.id === 'string' && call.id ? call.id : null,
+            name: typeof fn?.name === 'string' && fn.name ? fn.name : null,
+            arguments: typeof fn?.arguments === 'string' ? fn.arguments : '',
+          });
+        }
+      }
     }
     if (typeof choice?.finish_reason === 'string') events.push({ kind: 'finish', reason: choice.finish_reason });
   }

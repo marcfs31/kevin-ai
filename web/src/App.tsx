@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Composer } from './components/Composer';
-import { MessageView, errorText, type LiveInfo } from './components/MessageView';
+import { MessageView, errorText } from './components/MessageView';
 import { TokenLine } from './components/TokenLine';
 import { ChatModelSelect } from './components/ChatModelSelect';
 import { ModelCtxPicker } from './components/ModelCtxPicker';
@@ -11,12 +11,12 @@ import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type ServerInfo } from './lib/api';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
-import { assess, toWire } from './lib/request';
+import { runAgent, type LiveInfo } from './lib/agent';
+import { assess } from './lib/request';
 import { estimateWireTokens, sessionTotals } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
-import type { Usage } from './lib/sse';
 import {
-  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
+  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
   type Message, type UserMessage,
 } from './lib/storage';
 
@@ -215,56 +215,21 @@ function Chat({ state, setState, storage, notice }: {
       const plan = planCompaction(conv.messages);
       if (plan) history = (await compact(convId, history, plan, true, controller.signal)) ?? history;
     }
-    const message: AssistantMessage = {
-      id: newId(), role: 'assistant', content: '', reasoning: '', status: 'done', error: null, stats: null, createdAt: now,
-    };
-    const wire = toWire(state.settings.systemPrompt, history);
-    const promptEstimate = estimateWireTokens(wire, info);
-    const liveInfo: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate, usage: null };
-    let usage: Usage | null = null;
-    const publish = () => setLive({ convId, message: { ...message }, info: { ...liveInfo } });
-    publish();
     try {
-      await streamChat(
-        { messages: wire, temperature: state.settings.temperature, maxTokens: state.settings.maxTokens, model: requestModel },
-        controller.signal,
-        (e) => {
-          if (e.kind === 'content' || e.kind === 'reasoning') {
-            if (liveInfo.firstAt === null) liveInfo.firstAt = performance.now();
-            liveInfo.chunks += 1;
-            if (e.kind === 'content') message.content += e.text;
-            else message.reasoning += e.text;
-            publish();
-          } else if (e.kind === 'usage') {
-            usage = e.usage;
-            liveInfo.usage = e.usage;
-            publish();
-          }
+      await runAgent({
+        history,
+        settings: state.settings,
+        model: requestModel,
+        info,
+        signal: controller.signal,
+        stream: streamChat,
+        onLive: (message, liveInfo) => setLive({ convId, message, info: liveInfo }),
+        onCommit: (m) => {
+          updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, m] }));
+          setLive(null);
         },
-      );
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') message.status = 'stopped';
-      else {
-        const err = e instanceof ApiError ? e : new ApiError(0, null);
-        message.status = 'error';
-        message.error = { code: err.code, message: err.serverMessage, status: err.status };
-      }
+      });
     } finally {
-      const end = performance.now();
-      const u = usage as Usage | null;
-      const generated = u?.completionTokens ?? liveInfo.chunks;
-      const decodeSecs = liveInfo.firstAt === null ? 0 : (end - liveInfo.firstAt) / 1000;
-      message.stats = {
-        ttftMs: liveInfo.firstAt === null ? null : liveInfo.firstAt - liveInfo.startedAt,
-        tokensPerSecond: generated > 1 && decodeSecs > 0 ? (generated - 1) / decodeSecs : null,
-        promptTokens: u?.promptTokens ?? null,
-        cachedTokens: u?.cachedTokens ?? null,
-        completionTokens: u?.completionTokens ?? null,
-        promptEstimate,
-        completionEstimate: liveInfo.chunks,
-      };
-      const done = { ...message };
-      updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, done] }));
       controllerRef.current = null;
       setLive(null);
       setBusy(false);
@@ -422,7 +387,7 @@ function Chat({ state, setState, storage, notice }: {
             {messages.length === 0 && !live && <p className="empty">{t('app.empty')}</p>}
             {messages.map((m, i) => (
               <div key={m.id} className={i < lastSummary ? 'compacted' : undefined}>
-                <MessageView m={m} />
+                <MessageView m={m} results={m.role === 'assistant' ? toolResults(messages, i) : undefined} />
               </div>
             ))}
           </div>
