@@ -169,6 +169,22 @@ describe('projectCompaction', () => {
   });
 });
 
+describe('the compaction point', () => {
+  // Six turns of 70 characters each: about 250 tokens of a 400-token window, 60% of it.
+  const long: Message[] = Array.from({ length: 6 }, (_, i) => [user('q'.repeat(70) + i), bot('a'.repeat(70) + i)]).flat().slice(0, 12);
+
+  it('moves with the ratio: a fast chat compacts where a balanced one has room, a thorough one waits', () => {
+    const used = usedTokens(long, '', info(400)) / 400;
+    expect(used).toBeGreaterThan(0.5);
+    expect(used).toBeLessThan(0.8);
+    expect(shouldCompact(long, '', 0, info(400), 0.5)).toBe(true);
+    expect(shouldCompact(long, '', 0, info(400))).toBe(false);        // default: AUTO_RATIO
+    expect(shouldCompact(long, '', 0, info(400), 0.9)).toBe(false);
+    expect(projectCompaction(long, '', 0, info(400), 0.5).length).not.toBe(long.length);
+    expect(projectCompaction(long, '', 0, info(400)).length).toBe(long.length);
+  });
+});
+
 describe('contextUse', () => {
   it('splits the server count into what is re-sent and the last reply', () => {
     const m = [user('q'), bot('a', { stats: stats({ promptTokens: 120, completionTokens: 30 }) })];

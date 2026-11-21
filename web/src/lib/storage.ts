@@ -2,6 +2,7 @@
 // Versioned schema: a saved document missing a newer field loads with its default.
 import type { ContentPart } from './api';
 import { IMAGE_PRESETS, type ImagePreset } from './attachments';
+import { DEFAULT_EFFORT, DEFAULT_SPEED, isEffort, isSpeed, type Effort, type Speed } from './modes';
 import { obj } from './sse';
 
 export const STORAGE_KEY = 'lm-chat';
@@ -109,6 +110,9 @@ export interface Conversation {
   updatedAt: number;
   /** The model this conversation is sent to; null = the server's first. */
   model: string | null;
+  /** Per-chat switches next to the model picker (see lib/modes.ts). */
+  effort: Effort;
+  speed: Speed;
   messages: Message[];
 }
 
@@ -242,7 +246,10 @@ function conversation(v: unknown): Conversation | null {
   if (!o || typeof o.id !== 'string') return null;
   const messages = Array.isArray(o.messages) ? o.messages.map(message).filter((m): m is Message => m !== null) : [];
   const model = typeof o.model === 'string' && o.model ? o.model : null;
-  return { id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), model, messages };
+  return {
+    id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), model,
+    effort: isEffort(o.effort) ? o.effort : DEFAULT_EFFORT, speed: isSpeed(o.speed) ? o.speed : DEFAULT_SPEED, messages,
+  };
 }
 
 function settings(v: unknown): Settings {

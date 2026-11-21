@@ -124,6 +124,83 @@ describe('App', () => {
     expect(boxValue(screen.getByLabelText('Totals for this chat'), 'Read')).toBe('≈10');
   });
 
+  describe('effort and speed', () => {
+    const pick = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    const chatCalls = (fetchMock: ReturnType<typeof mockFetch>) => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
+
+    it('sit next to the model picker with the middle values, and choosing a speed sets the effort it starts from', async () => {
+      mockFetch(() => sseResponse([FINISH]));
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('medium');
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).value).toBe('balanced');
+      pick('Speed', 'fast');
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('low');
+      pick('Speed', 'thorough');
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('high');
+      // The effort can then be moved on its own, and the speed stays.
+      pick('Effort', 'medium');
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).value).toBe('thorough');
+    });
+
+    it('shape the request: low caps the answer and does not think, high thinks and may run long, medium keeps your length', async () => {
+      const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      pick('Effort', 'low');
+      typeAndSend('one');
+      await screen.findByText('ok');
+      expect(bodyOf(fetchMock, 0)).toMatchObject({ max_tokens: 512, chat_template_kwargs: { enable_thinking: false } });
+      pick('Effort', 'high');
+      typeAndSend('two');
+      await waitFor(() => expect(chatCalls(fetchMock)).toHaveLength(2));
+      expect(bodyOf(fetchMock, 1)).toMatchObject({ max_tokens: 4096, chat_template_kwargs: { enable_thinking: true } });
+      pick('Effort', 'medium');
+      typeAndSend('three');
+      await waitFor(() => expect(chatCalls(fetchMock)).toHaveLength(3));
+      expect(bodyOf(fetchMock, 2).chat_template_kwargs).toEqual({ enable_thinking: false });
+      expect('max_tokens' in bodyOf(fetchMock, 2)).toBe(false);
+    });
+
+    it('belong to the chat: saved with it, the pick carries to the next new chat, and each chat keeps its own', async () => {
+      mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+      renderApp();
+      await screen.findByText('Model: qwen3.5-4b');
+      pick('Speed', 'fast');
+      typeAndSend('first');
+      await screen.findByText('ok');
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0]).toMatchObject({ effort: 'low', speed: 'fast' });
+      fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+      // Before its first message a new chat starts from the last pick, like the model.
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).value).toBe('fast');
+      pick('Speed', 'balanced');
+      typeAndSend('second');
+      await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations).toHaveLength(2));
+      fireEvent.click(screen.getByRole('button', { name: /^first/ }));
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).value).toBe('fast');
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('low');
+      // NEGATIVE: the second chat was saved as balanced and did not change the first
+      fireEvent.click(screen.getByRole('button', { name: /^second/ }));
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).value).toBe('balanced');
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('medium');
+    });
+
+    it('move the compaction mark with the speed, and are locked while a reply is written', async () => {
+      mockFetch((_u, init) => heldReply(init), () => modelsResponse({ context_length: 1000 }));
+      renderApp();
+      await screen.findByText('Context: 1,000 tokens');
+      pick('Speed', 'fast');
+      typeAndSend('hello');
+      await screen.findByText('partial');
+      expect(screen.getByLabelText('This chat').textContent).toContain('The mark at 50%');
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).disabled).toBe(true);
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).disabled).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+      await screen.findByText('Stopped.');
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).disabled).toBe(false);
+    });
+  });
+
   describe('redirecting a reply in progress', () => {
     it('stops it, keeps what was written, and sends the new message next', async () => {
       let n = 0;

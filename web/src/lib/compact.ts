@@ -4,6 +4,7 @@
 import type { ServerInfo, WireMessage } from './api';
 import { contentText, countImages } from './attachments';
 import { CHARS_PER_TOKEN } from './estimate';
+import { AUTO_COMPACT_AT } from './modes';
 import { toWire } from './request';
 import { lastSummaryIndex, type Message, type SummaryMessage } from './storage';
 import { estimateWireTokens } from './tokens';
@@ -11,7 +12,7 @@ import { estimateWireTokens } from './tokens';
 /** User turns kept word for word at the end. */
 export const KEEP_TURNS = 2;
 /** Compact when the next request would fill this share of the context window. */
-export const AUTO_RATIO = 0.8;
+export const AUTO_RATIO = AUTO_COMPACT_AT;
 /** The summary request may use this share of the context window for the transcript. */
 const TRANSCRIPT_RATIO = 0.6;
 
@@ -65,10 +66,10 @@ export function usedTokens(messages: Message[], systemPrompt: string, info: Serv
 }
 
 /** True when sending `newTokens` more would pass AUTO_RATIO of the context and there is something to compact. */
-export function shouldCompact(messages: Message[], systemPrompt: string, newTokens: number, info: ServerInfo | null): boolean {
+export function shouldCompact(messages: Message[], systemPrompt: string, newTokens: number, info: ServerInfo | null, ratio: number = AUTO_RATIO): boolean {
   const limit = info?.contextLength ?? null;
   if (limit === null || planCompaction(messages) === null) return false;
-  return usedTokens(messages, systemPrompt, info) + newTokens >= limit * AUTO_RATIO;
+  return usedTokens(messages, systemPrompt, info) + newTokens >= limit * ratio;
 }
 
 /** A summary is assumed to take at most this share of the context when judging whether a draft fits. */
@@ -76,8 +77,8 @@ const SUMMARY_SHARE = 0.15;
 
 /** The history as it will be sent once the automatic compaction has run, for the checks made
  * before sending: without it a long chat that compaction would rescue would be refused as too long. */
-export function projectCompaction(messages: Message[], systemPrompt: string, newTokens: number, info: ServerInfo | null): Message[] {
-  const plan = shouldCompact(messages, systemPrompt, newTokens, info) ? planCompaction(messages) : null;
+export function projectCompaction(messages: Message[], systemPrompt: string, newTokens: number, info: ServerInfo | null, ratio: number = AUTO_RATIO): Message[] {
+  const plan = shouldCompact(messages, systemPrompt, newTokens, info, ratio) ? planCompaction(messages) : null;
   if (!plan || !info?.contextLength) return messages;
   const text = 'x'.repeat(Math.floor(info.contextLength * SUMMARY_SHARE * CHARS_PER_TOKEN));
   return applyCompaction(messages, plan, text, 'projected', 0, true);
