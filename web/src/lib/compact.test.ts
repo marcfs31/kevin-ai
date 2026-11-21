@@ -14,7 +14,7 @@ const bot = (text: string, o: Partial<AssistantMessage> = {}): AssistantMessage 
   id: `a${n++}`, role: 'assistant', content: text, reasoning: '', status: 'done', error: null, stats: null, createdAt: 0, ...o,
 });
 const turns = (count: number): Message[] => Array.from({ length: count }, (_, i) => [user(`q${i}`), bot(`a${i}`)]).flat();
-const plan = (m: Message[]) => {
+const mustPlan = (m: Message[]) => {
   const p = planCompaction(m);
   if (!p) throw new Error('no plan');
   return p;
@@ -43,7 +43,7 @@ describe('planCompaction', () => {
   });
 
   it('builds on the previous summary and only counts what came after it', () => {
-    const once = plan(turns(5));
+    const once = mustPlan(turns(5));
     const m = applyCompaction(turns(5), once, 'first', 's1', 0, false);
     expect(planCompaction(m)).toBeNull();
     const more = [...m, ...turns(3)];
@@ -57,7 +57,7 @@ describe('planCompaction', () => {
 describe('applyCompaction', () => {
   it('inserts the summary before the kept turns and drops nothing', () => {
     const m = turns(5);
-    const out = applyCompaction(m, plan(m), '  the summary \n', 's', 7, true);
+    const out = applyCompaction(m, mustPlan(m), '  the summary \n', 's', 7, true);
     expect(out).toHaveLength(m.length + 1);
     expect(out[6]).toMatchObject({ role: 'summary', content: 'the summary', covered: 6, auto: true });
     expect(out.filter((x) => x.role !== 'summary')).toEqual(m);
@@ -67,7 +67,7 @@ describe('applyCompaction', () => {
 describe('toWire after a summary', () => {
   it('sends the summary in the system message and only the turns after it', () => {
     const m = turns(5);
-    const out = applyCompaction(m, plan(m), 'S', 's', 0, false);
+    const out = applyCompaction(m, mustPlan(m), 'S', 's', 0, false);
     const wire = toWire('Be brief.', out);
     expect(wire[0]).toMatchObject({ role: 'system' });
     expect(String(wire[0]?.content)).toContain('Be brief.');
@@ -84,7 +84,7 @@ describe('transcript', () => {
       bot('The picture shows a ca', { status: 'stopped' }),
       user('and'), bot('done'), ...turns(2),
     ];
-    const text = transcript(plan(m), null);
+    const text = transcript(mustPlan(m), null);
     expect(text).toContain('[1 image attached here; the picture itself is not available]');
     expect(text).not.toContain('base64');
     expect(text).toContain('The picture shows a ca');
@@ -92,20 +92,20 @@ describe('transcript', () => {
   });
 
   it('carries the previous summary forward', () => {
-    const m = applyCompaction(turns(5), plan(turns(5)), 'old facts', 's', 0, false);
-    const text = transcript(plan([...m, ...turns(3)]), null);
+    const m = applyCompaction(turns(5), mustPlan(turns(5)), 'old facts', 's', 0, false);
+    const text = transcript(mustPlan([...m, ...turns(3)]), null);
     expect(text.startsWith('Earlier summary:\nold facts')).toBe(true);
   });
 
   it('cuts long messages evenly to fit the context, with a mark', () => {
     const m = [user('x'.repeat(20000)), bot('y'.repeat(20000)), ...turns(3)];
-    const text = transcript(plan(m), info(1000));
+    const text = transcript(mustPlan(m), info(1000));
     expect(text.length).toBeLessThan(2 * 1000 * 3.5);
     expect(text).toContain('[… cut to fit]');
   });
 
   it('asks for a plain summary in the system message', () => {
-    const req = summaryRequest(plan(turns(5)), null);
+    const req = summaryRequest(mustPlan(turns(5)), null);
     expect(req.map((r) => r.role)).toEqual(['system', 'user']);
   });
 });
