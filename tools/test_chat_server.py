@@ -120,12 +120,15 @@ class ProxyTest(unittest.TestCase):
         with open(os.path.join(self.tmp.name, "secret.txt"), "w") as f:
             f.write("outside")
         self.upstream = start(FakeUpstream())
+        self.tools_upstream = start(FakeUpstream())
         url = "http://127.0.0.1:%d" % self.upstream.server_address[1]
-        self.proxy = start(chat_server.Server(("127.0.0.1", 0), self.dist, url, self.password, self.api_key))
+        tools_url = "http://127.0.0.1:%d" % self.tools_upstream.server_address[1]
+        self.proxy = start(chat_server.Server(("127.0.0.1", 0), self.dist, url, self.password, self.api_key,
+                                              tools_upstream=tools_url))
         self.port = self.proxy.server_address[1]
 
     def tearDown(self):
-        for s in (self.proxy, self.upstream):
+        for s in (self.proxy, self.upstream, self.tools_upstream):
             s.shutdown()
             s.server_close()
         self.tmp.cleanup()
@@ -300,8 +303,64 @@ class ApiTest(ProxyTest):
         self.assertEqual(seen, {"connect": chat_server.CONNECT_TIMEOUT_S, "request": self.proxy.upstream_timeout})
 
 
+class ToolsTest(ProxyTest):
+    def test_tools_paths_go_to_the_tool_service_and_not_to_lm_serve(self):
+        resp, data = self.request("GET", "/tools/status?x=1")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.tools_upstream.requests[-1][:2], ("GET", "/tools/status?x=1"))
+        self.assertEqual(self.upstream.requests, [])
+        self.request("GET", "/health")
+        self.assertEqual(self.upstream.requests[-1][1], "/health")
+        self.assertEqual(len(self.tools_upstream.requests), 1)
+
+    def test_post_body_and_the_browsers_origin_reach_the_tool_service_but_not_its_credentials(self):
+        self.request("POST", "/tools/search", body=b'{"query":"x"}', headers={
+            "Content-Type": "application/json", "Origin": "http://127.0.0.1:5173", "Sec-Fetch-Site": "same-origin",
+            "Authorization": "Bearer from-browser", "Cookie": "a=b"})
+        method, path, headers, body = self.tools_upstream.requests[-1]
+        self.assertEqual((method, path, body), ("POST", "/tools/search", b'{"query":"x"}'))
+        self.assertEqual(headers["Origin"], "http://127.0.0.1:5173")
+        self.assertEqual(headers["Sec-Fetch-Site"], "same-origin")
+        self.assertNotIn("Authorization", headers)
+        self.assertNotIn("Cookie", headers)
+
+    def test_the_origin_is_not_passed_to_lm_serve(self):
+        self.request("GET", "/health", headers={"Origin": "http://127.0.0.1:5173", "Sec-Fetch-Site": "same-origin"})
+        headers = self.upstream.requests[-1][2]
+        self.assertNotIn("Origin", headers)
+        self.assertNotIn("Sec-Fetch-Site", headers)
+
+    def test_a_tool_service_that_is_down_is_a_502_that_names_it(self):
+        self.tools_upstream.shutdown()
+        self.tools_upstream.server_close()
+        resp, data = self.request("GET", "/tools/status")
+        self.assertEqual(resp.status, 502)
+        err = json.loads(data)["error"]
+        self.assertEqual(err["code"], "upstream_unreachable")
+        self.assertIn("tool service", err["message"])
+        self.tools_upstream = start(FakeUpstream())  # for tearDown
+
+    def test_without_a_tool_service_configured_the_paths_are_404(self):
+        proxy = start(chat_server.Server(("127.0.0.1", 0), self.dist, "http://127.0.0.1:1", None, None))
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", proxy.server_address[1], timeout=10)
+            conn.request("GET", "/tools/status")
+            resp = conn.getresponse()
+            self.assertEqual((resp.status, json.loads(resp.read())["error"]["code"]), (404, "tools_not_configured"))
+            conn.close()
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+
+
 class KeyTest(ProxyTest):
     api_key = "sk-test"
+
+    def test_the_key_is_for_lm_serve_only_and_is_not_sent_to_the_tool_service(self):
+        self.request("GET", "/tools/status")
+        self.assertNotIn("Authorization", self.tools_upstream.requests[-1][2])
+        self.request("GET", "/health")
+        self.assertIn("Authorization", self.upstream.requests[-1][2])
 
     def test_key_added_upstream_never_to_browser(self):
         resp, data = self.request("GET", "/v1/models", headers={"Authorization": "Bearer wrong"})
