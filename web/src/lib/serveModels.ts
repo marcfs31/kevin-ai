@@ -3,17 +3,20 @@ import type { ServeModelId } from './serveControl';
 /** Fixed start targets Settings / the header picker can launch. */
 export const SERVE_MODEL_OPTIONS: { id: ServeModelId; label: string }[] = [
   { id: 'qwen', label: 'Qwen3.5-4B' },
+  { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored' },
   { id: 'gemma', label: 'Gemma 4 E4B' },
 ];
 
 export const SERVE_MODEL_LABEL: Record<ServeModelId, string> = {
   qwen: 'Qwen3.5-4B',
+  'qwen-uncensored': 'Qwen3.5-4B Uncensored',
   gemma: 'Gemma 4 E4B',
 };
 
 /** Upper bound used when /v1/models has not reported context_length for this target. */
 export const SERVE_MODEL_MAX_CTX: Record<ServeModelId, number> = {
   qwen: 131072,
+  'qwen-uncensored': 131072,
   gemma: 131072,
 };
 
@@ -21,7 +24,11 @@ const CTX_LADDER = [4096, 8192, 16384, 32768, 65536, 131072] as const;
 
 export function isServeModelRunning(runningModel: string | null | undefined, id: ServeModelId): boolean {
   if (!runningModel) return false;
-  return runningModel.toLowerCase().includes(id);
+  const name = runningModel.toLowerCase();
+  // The uncensored model's name also contains "qwen"; keep the two targets apart.
+  if (id === 'qwen') return name.includes('qwen') && !name.includes('uncensored');
+  if (id === 'qwen-uncensored') return name.includes('qwen') && name.includes('uncensored');
+  return name.includes(id);
 }
 
 /** Map a /v1/models id (e.g. qwen3.5-4b) to a serve start target when possible. */

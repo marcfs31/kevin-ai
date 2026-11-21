@@ -18,8 +18,14 @@ describe('parseServeOptions', () => {
     });
   });
 
+  it('accepts qwen-uncensored and passes it to the script', () => {
+    expect(parseServeOptions({ model: 'qwen-uncensored' })).toMatchObject({ model: 'qwen-uncensored' });
+    expect(serveScriptArgs({ model: 'qwen-uncensored' })).toEqual(['--id', 'qwen-uncensored']);
+  });
+
   it('rejects unknown models and bad integers', () => {
     expect(parseServeOptions({ model: 'llama' })).toBeNull();
+    expect(parseServeOptions({ model: 'qwen-uncensored-x' })).toBeNull();
     expect(parseServeOptions({ model: 'gemma', maxTokens: 1.5 })).toBeNull();
     expect(parseServeOptions({ model: 'gemma', ctx: 0 })).toBeNull();
   });

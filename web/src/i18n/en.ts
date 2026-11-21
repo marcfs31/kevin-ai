@@ -41,6 +41,7 @@ export const en = {
   'serve.title': 'Model on the server',
   'serve.hint': 'Click to stop the current lm-serve on the machine and start the chosen model. The local tunnel stays up.',
   'serve.startQwen': 'Start Qwen3.5-4B',
+  'serve.startQwenUncensored': 'Start Qwen3.5-4B Uncensored',
   'serve.startGemma': 'Start Gemma 4 E4B',
   'serve.confirm': 'Stop the current model and start {model}?',
   'serve.starting': 'Starting {model}…',

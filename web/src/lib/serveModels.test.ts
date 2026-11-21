@@ -17,6 +17,7 @@ describe('matchServeModel', () => {
   it('maps /v1/models ids to serve targets', () => {
     expect(matchServeModel('qwen3.5-4b')).toBe('qwen');
     expect(matchServeModel('gemma-4-e4b')).toBe('gemma');
+    expect(matchServeModel('qwen3.5-4b-uncensored')).toBe('qwen-uncensored');
   });
 
   it('returns null when unknown or missing', () => {
@@ -49,6 +50,11 @@ describe('ctxPresetsFor', () => {
       65536,
       131072,
     ]);
+  });
+
+  it('does not cap the plain Qwen target by a running uncensored model', () => {
+    expect(ctxPresetsFor('qwen', 'qwen3.5-4b-uncensored', 8192)).toHaveLength(7);
+    expect(ctxPresetsFor('qwen-uncensored', 'qwen3.5-4b-uncensored', 8192)).toEqual([null, 4096, 8192]);
   });
 
   it('includes a running ctx value that is not on the ladder', () => {

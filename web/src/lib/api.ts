@@ -91,7 +91,7 @@ export async function fetchServerInfo(signal?: AbortSignal): Promise<ServerInfo>
   return info;
 }
 
-/** Starts Qwen or Gemma on the remote host via the Vite /control/serve middleware. */
+/** Starts Qwen, Qwen uncensored or Gemma on the remote host via the Vite /control/serve middleware. */
 export async function startRemoteServe(opts: ServeOptions, signal?: AbortSignal): Promise<ServeResult> {
   const res = await send('/control/serve', {
     method: 'POST',
