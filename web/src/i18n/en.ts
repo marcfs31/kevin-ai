@@ -154,6 +154,7 @@ export const en = {
   'message.assistant': 'Assistant',
   'message.thinking': 'Thinking',
   'message.readingPrompt': 'Reading the prompt… {s} s',
+  'message.readingPromptEta': 'Reading the prompt… {elapsed} s · about {m} min {s} s left',
   'message.live': '{rate} tokens/s',
   'message.waiting': 'Waiting for the reply…',
   'message.stopped': 'Stopped.',

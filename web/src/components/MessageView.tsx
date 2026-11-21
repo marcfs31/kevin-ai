@@ -5,6 +5,7 @@ import { isAllowedImageDataUrl } from '../lib/attachments';
 import type { AssistantMessage, Message, Stats, SummaryMessage, ToolMessage, UserMessage } from '../lib/storage';
 import { liveCount, replyCount } from '../lib/tokens';
 import type { LiveInfo } from '../lib/agent';
+import { estimateWaitSeconds, etaParts } from '../lib/estimate';
 import { CopyButton, Markdown } from './Markdown';
 import { TokenLine } from './TokenLine';
 
@@ -36,13 +37,23 @@ function LiveStatus({ live }: { live: LiveInfo }) {
     return () => clearInterval(id);
   }, []);
   const counter = <TokenLine className="live" count={liveCount(live.usage, live.promptEstimate, live.chunks)} />;
-  if (live.firstAt === null)
+  if (live.firstAt === null) {
+    const elapsed = Math.max(0, (now - live.startedAt) / 1000);
+    const promptTokens = live.usage?.promptTokens ?? live.promptEstimate;
+    const left = Math.max(0, estimateWaitSeconds(promptTokens) - elapsed);
+    const eta = etaParts(left);
+    // While the estimate still has time left, show minutes and seconds remaining.
+    const line =
+      left >= 1
+        ? t('message.readingPromptEta', { elapsed: num(elapsed), m: num(eta.m), s: num(eta.s) })
+        : t('message.readingPrompt', { s: num(elapsed) });
     return (
       <>
-        <p className="live" aria-live="off">{t('message.readingPrompt', { s: num(Math.max(0, (now - live.startedAt) / 1000)) })}</p>
+        <p className="live" aria-live="off">{line}</p>
         {counter}
       </>
     );
+  }
   const secs = (now - live.firstAt) / 1000;
   const rate = live.chunks > 1 && secs > 0 ? (live.chunks - 1) / secs : null;
   return (
