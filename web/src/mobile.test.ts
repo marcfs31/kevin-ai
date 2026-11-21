@@ -30,6 +30,10 @@ describe('phone layout', () => {
     expect(css).toMatch(/\.modal-backdrop\s*\{[^}]*position:\s*absolute/);
   });
 
+  it('keeps setting checkboxes at their natural width inside .field', () => {
+    expect(css).toMatch(/\.field input\[type=['"]checkbox['"]\]\s*,\s*\.check input\[type=['"]checkbox['"]\]\s*\{[^}]*inline-size:\s*auto/);
+  });
+
   it('pads the header, the composer and the conversation list for the safe area', () => {
     expect(css).toContain('safe-area-inset-top');
     expect(css).toContain('safe-area-inset-bottom');
