@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stop the remote model server (if any) and start one model: Qwen, Qwen uncensored or Gemma on
-# lm-serve, or WhiteRabbitNeo 2.5 (Qwen2.5-Coder-7B, a GGUF the engine cannot run) on llama.cpp's
-# llama-server. One model at a time: the 11 GB host cannot hold two. For lm-serve, extra flags
+# lm-serve, or a GGUF the engine cannot run on llama.cpp's llama-server: WhiteRabbitNeo 2.5
+# (Qwen2.5-Coder-7B) and Gemma 4 E4B Uncensored (with its vision projector). One model at a time: the 11 GB host cannot hold two. For lm-serve, extra flags
 # are forwarded as-is; for llama-server the lm-serve flags it has an equivalent for are
 # translated and the others refused. Omit a flag to keep the server's own default.
 # The local SSH tunnel to port 8080 is left alone — only the remote process is replaced.
@@ -9,13 +9,14 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF' >&2
-usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma|whiterabbitneo [flags…]
+usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma|whiterabbitneo|gemma-uncensored [flags…]
 
-  --id qwen|qwen-uncensored|gemma|whiterabbitneo
+  --id qwen|qwen-uncensored|gemma|whiterabbitneo|gemma-uncensored
                     which model under ~/models on the remote host
   Remaining arguments are lm-serve flags (for example --ctx 8192 --think).
-  whiterabbitneo runs on llama-server and takes only --ctx (default 8192), --threads, --seed,
-  --max-tokens, --timeout and --name.
+  whiterabbitneo and gemma-uncensored run on llama-server and take only --ctx (default 8192),
+  --threads, --seed, --max-tokens, --timeout, --name and --think / --no-think (--reasoning on / off;
+  Gemma thinks before it answers unless told not to).
   --host and --port are always 127.0.0.1 and 8080 so the local tunnel keeps working.
 
 Environment (optional):
@@ -58,6 +59,8 @@ translate_for_llama() {
         esac
         shift 2
         ;;
+      --think) LLAMA_ARGS+=(--reasoning on); shift ;;
+      --no-think) LLAMA_ARGS+=(--reasoning off); shift ;;
       *)
         echo "start-remote-lm-serve.sh: $1 is not supported for the llama-server model" >&2
         exit 2
@@ -68,7 +71,7 @@ translate_for_llama() {
 }
 
 main() {
-  local ID="" DIR_NAME RUNTIME WEIGHTS SSH_TARGET REMOTE_BIN REMOTE_ROOT quoted
+  local ID="" DIR_NAME RUNTIME WEIGHTS MMPROJ="" SSH_TARGET REMOTE_BIN REMOTE_ROOT quoted
   local -a EXTRA=() args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -105,7 +108,14 @@ main() {
       RUNTIME=llama-server
       WEIGHTS=WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-Q8_0.gguf
       ;;
-    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored, gemma or whiterabbitneo" >&2; usage ;;
+    gemma-uncensored)
+      # Q6_K_P: about Q8 quality in 5.8 GB, so the window and the 1 GB projector fit in 11 GB.
+      DIR_NAME=gemma-4-e4b-uncensored
+      RUNTIME=llama-server
+      WEIGHTS=Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
+      MMPROJ=mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf
+      ;;
+    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored, gemma, whiterabbitneo or gemma-uncensored" >&2; usage ;;
   esac
   if [[ "$RUNTIME" == llama-server ]]; then
     translate_for_llama ${EXTRA[@]+"${EXTRA[@]}"}
@@ -138,7 +148,8 @@ ROOT=$(expand_home "$2")
 DIR_NAME=$3
 RUNTIME=$4
 WEIGHTS_NAME=$5
-shift 5
+MMPROJ_NAME=$6
+shift 6
 DIR="$ROOT/$DIR_NAME"
 WEIGHTS="$DIR/$WEIGHTS_NAME"
 LOG=${HOME}/logs/$RUNTIME.log
@@ -146,6 +157,11 @@ mkdir -p "$(dirname "$LOG")"
 if [[ ! -x "$BIN" ]]; then echo "missing $RUNTIME at $BIN" >&2; exit 1; fi
 if [[ ! -d "$DIR" ]]; then echo "missing model dir $DIR" >&2; exit 1; fi
 if [[ ! -f "$WEIGHTS" ]]; then echo "missing weights $WEIGHTS" >&2; exit 1; fi
+MM=()
+if [[ -n "$MMPROJ_NAME" ]]; then
+  if [[ ! -f "$DIR/$MMPROJ_NAME" ]]; then echo "missing vision projector $DIR/$MMPROJ_NAME" >&2; exit 1; fi
+  MM=(--mmproj "$DIR/$MMPROJ_NAME")
+fi
 # Stop whichever server holds port 8080 (and its memory) before starting the new one.
 for proc in lm-serve llama-server; do
   if pgrep -x "$proc" >/dev/null; then
@@ -161,7 +177,7 @@ for proc in lm-serve llama-server; do
   fi
 done
 if [[ "$RUNTIME" == llama-server ]]; then
-  nohup "$BIN" -m "$WEIGHTS" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
+  nohup "$BIN" -m "$WEIGHTS" ${MM[@]+"${MM[@]}"} --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
 else
   nohup "$BIN" --model "$DIR" --weights "$WEIGHTS" --host 127.0.0.1 --port 8080 "$@" >"$LOG" 2>&1 &
 fi
@@ -190,7 +206,7 @@ echo
 EOS
 )
 
-  args=("$REMOTE_BIN" "$REMOTE_ROOT" "$DIR_NAME" "$RUNTIME" "$WEIGHTS")
+  args=("$REMOTE_BIN" "$REMOTE_ROOT" "$DIR_NAME" "$RUNTIME" "$WEIGHTS" "$MMPROJ")
   if [[ ${#EXTRA[@]} -gt 0 ]]; then
     args+=("${EXTRA[@]}")
   fi

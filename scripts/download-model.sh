@@ -11,7 +11,8 @@ Usage: scripts/download-model.sh [--model NAME] [--allow-hdd] [--help] [MODEL_DI
 
 Downloads the pinned checkpoint files for one model into MODEL_DIR.
 
-  --model NAME  qwen3.5-4b (default), gemma-4-e4b or whiterabbitneo-2.5-7b-q4km
+  --model NAME  qwen3.5-4b (default), gemma-4-e4b, whiterabbitneo-2.5-7b-q4km or
+                gemma-4-e4b-uncensored
   --allow-hdd   Continue when MODEL_DIR is on a rotational disk. Not recommended: the
                 engine reads the weights from this directory and an HDD is far too slow.
   --help        Show this help and exit.
@@ -45,6 +46,16 @@ whiterabbitneo-2.5-7b-q4km (GGUF Qwen2.5-Coder 7B fine-tune, Apache-2.0)
   The file carries the tokenizer and the chat template; nothing else is needed. Keep exactly
   one .gguf in the directory: the engine treats a directory with one .gguf and no config.json
   as a GGUF model.
+
+gemma-4-e4b-uncensored (GGUF Gemma 4 E4B fine-tune, Gemma Terms of Use; for llama-server)
+  HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive at revision 45b6a334b4bcd1d7f37179df58b3b1d66a184e5d
+  (base model google/gemma-4-e4b-it; the licence tag on the repo is "gemma"). The Q6_K_P quant,
+  about Q8 quality in 5.8 GB, chosen so an 11 GB machine keeps room for the context window and
+  the vision projector. llama-server needs both files, the second one for images (--mmproj):
+    Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf         6249794528 bytes, sha256 pinned
+    mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf      990288832 bytes, sha256 pinned
+  scripts/start-remote-lm-serve.sh --id gemma-uncensored starts them. The engine cannot read this
+  GGUF (two .gguf files, no Gemma 4 GGUF loader), so lm-serve is not used.
 
 Behaviour:
   - Requires curl and sha256sum, and free space of the checkpoint size plus 1 GB.
@@ -120,8 +131,16 @@ case "$MODEL" in
       "WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-Q4_K_M.gguf|4683072032|3790b0bf2c505fcbd144b6b69354fe45a83ac09238a87469db0082027c127de4"
     )
     ;;
+  gemma-4-e4b-uncensored)
+    BASE_URL="https://huggingface.co/HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive/resolve/45b6a334b4bcd1d7f37179df58b3b1d66a184e5d"
+    CHECKPOINT_BYTES=7240082912   # both files
+    FILES=(
+      "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf|6249794528|f28b0ae262158af10d847c3f01bfdb943161dd31320f3aed20775ee2ad6c67a6"
+      "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf|990288832|debad39ab9c1152ab67695a674fb35e8375b2320c57bfd5075835d3ccb16c7db"
+    )
+    ;;
   *)
-    usage_error "unknown model: $MODEL (use qwen3.5-4b, gemma-4-e4b or whiterabbitneo-2.5-7b-q4km)"
+    usage_error "unknown model: $MODEL (use qwen3.5-4b, gemma-4-e4b, whiterabbitneo-2.5-7b-q4km or gemma-4-e4b-uncensored)"
     ;;
 esac
 
