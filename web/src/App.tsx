@@ -223,6 +223,7 @@ function Chat({ state, setState, storage, notice }: {
         info,
         signal: controller.signal,
         stream: streamChat,
+        compact: (h, plan) => compact(convId, h, plan, true, controller.signal),
         onLive: (message, liveInfo) => setLive({ convId, message, info: liveInfo }),
         onCommit: (m) => {
           updateConv(convId, (c) => ({ ...c, updatedAt: Date.now(), messages: [...c.messages, m] }));

@@ -77,7 +77,7 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   summarised by the model into one summary message and the last two turns stay verbatim. The
   summary goes in the system message; the old messages stay saved and on screen, marked
   compacted. Images in the summarised turns become a text note, and a stopped or failed partial
-  reply is passed to the summary marked as such. If the summary fails, the chat is untouched and
+  reply is passed to the summary marked as such. During a tool run the same check repeats before every step, since tool results grow the chat. If the summary fails, the chat is untouched and
   the message is sent as it was.
 - **Model picker.** When `/v1/models` lists more than one model, each chat chooses its model
   (sent as `model`), with the context length the server reports for it. The context check,
