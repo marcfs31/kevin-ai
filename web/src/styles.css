@@ -158,6 +158,45 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   text-align: end;
 }
 .server span + span::before { content: '·'; margin-inline: 0.4rem; }
+.server .model-picker + span::before { content: '·'; margin-inline: 0.4rem; }
+.model-picker { position: relative; display: inline-flex; align-items: center; }
+.model-picker-trigger {
+  font: inherit;
+  font-size: inherit;
+  color: inherit;
+  min-block-size: 2.25rem;
+  padding-inline: 0.35rem;
+  border-radius: var(--radius);
+}
+.model-picker-panel {
+  position: absolute;
+  inset-block-start: calc(100% + 0.35rem);
+  inset-inline-end: 0;
+  z-index: 20;
+  min-inline-size: min(18rem, calc(100vw - 2rem));
+  max-inline-size: min(22rem, calc(100vw - 1.5rem));
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  text-align: start;
+  color: var(--text);
+}
+.model-picker-title { margin: 0; font-size: 0.875rem; font-weight: 650; }
+.model-picker-section { display: flex; flex-direction: column; gap: 0.4rem; }
+.model-picker-section h3 { margin: 0; font-size: 0.75rem; font-weight: 650; color: var(--muted); }
+.model-picker-choices { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.model-picker-choices button[aria-pressed='true'],
+.model-picker-choices button[aria-checked='true'] {
+  background: var(--surface-2);
+  border-color: var(--border);
+  font-weight: 650;
+}
+.model-picker-panel .error { margin: 0; }
 .server-ok::before, .server-error::before {
   content: '';
   inline-size: 0.45rem;
@@ -436,6 +475,11 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 @media (max-width: 48rem), (pointer: coarse) {
   .serve-actions { flex-direction: column; align-items: stretch; gap: 0.75rem; }
   .serve-actions button { inline-size: 100%; min-block-size: 2.75rem; }
+  .model-picker-choices button { min-block-size: 2.75rem; }
+}
+
+@media (max-width: 48rem) {
+  .model-picker-panel { inset-inline-start: 0; inset-inline-end: auto; }
 }
 
 @media (pointer: coarse) {

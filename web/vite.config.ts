@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { serveControl } from './serve-control-plugin.ts';
+import { serveControl } from './serve-control-plugin';
 
 const upstream = process.env.LM_SERVE_URL ?? 'http://127.0.0.1:8080';
 

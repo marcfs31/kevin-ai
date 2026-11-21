@@ -67,6 +67,15 @@ export const en = {
   'server.down': 'The server is not reachable.',
   'server.context': 'Context: {n} tokens',
   'server.retry': 'Retry',
+
+  'picker.open': 'Choose model and context window',
+  'picker.title': 'Model and context',
+  'picker.model': 'Model',
+  'picker.ctx': 'Context window',
+  'picker.ctxAuto': 'Auto (server default)',
+  'picker.ctxSize': '{label}',
+  'picker.start': 'Start',
+
   'vision.ok': 'Images: available',
   'vision.unavailable': 'Images: this model cannot read images.',
   'vision.unknown': 'Images: off, because this server does not say whether it can read them.',
