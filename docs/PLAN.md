@@ -376,8 +376,9 @@ happens when the input already has the target size, which is what the web client
   `embedding_projection` 768->2560 without bias. Not multiplied by the text embedding scale.
 - **Into the LM.** `<|image>` (255999), `<|image|>` (258880) x N, `<image|>` (258882); the
   template writes `<|image|>` once and the processor expands it. At image positions the
-  per-layer input uses the pad token (id 0) for the table lookup and the pad token's scaled
-  embedding for the projection part (`Gemma4Model.forward`). Positions stay sequential, and
+  per-layer input uses the pad token (id 0) for the table lookup, and the projection part
+  projects the vision row itself: `Gemma4Model.forward` scatters the vision features into
+  `inputs_embeds` before `project_per_layer_inputs`. Positions stay sequential, and
   attention stays causal (`use_bidirectional_attention` is null for E4B; the config check
   already refuses a non-null value).
 
