@@ -120,6 +120,30 @@ Measured on the target machine (2026-11-21, 2.5 GHz, 4 threads, another `lm-serv
 The kernels keep activations in float and are bit-identical between scalar and AVX2. An int8-activation
 path like `--fast` for q8 would read the same bytes with far fewer instructions; it is not implemented.
 
+## Gemma 4 E4B Uncensored (GGUF, on llama-server)
+
+`HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive` (revision `45b6a334…`, a fine-tune of
+`google/gemma-4-e4b-it`; the repo's licence tag is `gemma`, see NOTICE) ships only GGUF files, and the
+engine has no Gemma 4 GGUF loader, so the web picker's `gemma-uncensored` target runs it on
+llama.cpp's `llama-server`, with the vision projector (`--mmproj`) so it reads images.
+`scripts/download-model.sh --model gemma-4-e4b-uncensored` fetches the two pinned files (sizes and
+sha256 checked) into `~/models/gemma-4-e4b-uncensored/`; `scripts/start-remote-lm-serve.sh --id
+gemma-uncensored` starts them.
+
+**Quantisation: Q6_K_P** (HauhauCS's "K_P" quants keep the sensitive tensors a level higher, about
+Q8 quality at 5.8 GiB). Q8_K_P (7.6 GiB) plus the 0.9 GiB projector leaves an 11 GB machine little
+for the window, and the engine's own q8 file is the same 8 bits per weight anyway.
+
+Measured on the target machine (2026-11-21, 4 threads, llama.cpp v1.0.0 CPU build):
+
+| | |
+|---|---|
+| resident after start | 7.1 GiB with `--ctx 8192`, 7.5 GiB with `--ctx 32768` (the KV cache is small: most layers use a 512-token window) |
+| generating | 4.3 to 4.9 tokens/s |
+| prompt | 15 to 17 tokens/s |
+| a 64x64 test image | read correctly (a red, green and blue gradient was described as such), through the web chat |
+| thinking | on by default, so an answer can take minutes at this speed; `--no-think` skips it (an image answer in 9 s) |
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
