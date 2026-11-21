@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "core/lm_bf16.h"
+#include "core/lm_gguf_quant.h"
 #include "core/lm_kernels.h"
 #include "core/lm_ops.h"
 #include "model/lm_layers.h"
@@ -23,6 +24,7 @@ static void mat_mul(const LmMat *m, float *y, const float *x)
             (void)lm_matvec_q8(y, x, m->q, m->sc, m->cols, m->rows);
         }
         break;
+    case LM_MAT_GG:   (void)lm_gg_matmul(y, x, 1, m->gtype, m->g, m->cols, m->rows); break;
     default: break;
     }
 }
@@ -45,6 +47,7 @@ void lm_mat_row(const LmMat *m, int r, float *out)
         for (int i = 0; i < c; i++)
             out[i] = (float)m->q[(size_t)r * c + i] * m->sc[(size_t)r * ng + i / LM_Q8_GROUP];
     } break;
+    case LM_MAT_GG: (void)lm_gg_row(out, m->gtype, m->g, c, r); break;
     default: break;
     }
 }
@@ -150,6 +153,8 @@ void lm_mat_mul_batch(const LmMat *m, float *Y, const float *X, int T)
     LM_TIMES_T0(t0);
     if (m->kind == LM_MAT_Q8 && !m->int8_acts)
         (void)lm_matmul_q8(Y, X, T, m->q, m->sc, m->cols, m->rows);
+    else if (m->kind == LM_MAT_GG)
+        (void)lm_gg_matmul(Y, X, T, m->gtype, m->g, m->cols, m->rows);
     else
         for (int t = 0; t < T; t++) mat_mul(m, Y + (size_t)t * m->rows, X + (size_t)t * m->cols);
     LM_TIMES_ADD(matmul, t0);
