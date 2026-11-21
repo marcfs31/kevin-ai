@@ -78,6 +78,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'server.retry': 'Reintentar',
 
   'picker.open': 'Elegir modelo y ventana de contexto',
+  'picker.startNone': 'Arrancar un modelo',
   'picker.title': 'Modelo y contexto',
   'picker.model': 'Modelo',
   'picker.ctx': 'Ventana de contexto',

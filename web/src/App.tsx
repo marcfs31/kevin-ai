@@ -62,7 +62,7 @@ function Chat({ state, setState, storage, notice }: {
   const { t, tp } = useI18n();
   const [hold, setHold] = useState(notice);
   const [copies, setCopies] = useState(() => backupKeys(storage));
-  const [forgetFailed, setForgetFailed] = useState(false);
+  const [forgetFailed, setForgetFailed] = useState<ApiError | null>(null);
   const [server, setServer] = useState<ServerState>({ kind: 'loading' });
   const [live, setLive] = useState<Live | null>(null);
   const [saver] = useState(() => createSaver(storage));
@@ -268,8 +268,8 @@ function Chat({ state, setState, storage, notice }: {
 
   const forgetServer = () => {
     void resetServer().then(
-      () => setForgetFailed(false),
-      () => setForgetFailed(true),
+      () => setForgetFailed(null),
+      (e: unknown) => setForgetFailed(e instanceof ApiError ? e : new ApiError(0, null)),
     );
   };
 
@@ -333,6 +333,7 @@ function Chat({ state, setState, storage, notice }: {
           ) : (
             serverLine && <span>{serverLine}</span>
           )}
+          {server.kind === 'error' && <ModelCtxPicker modelName={null} contextLength={null} busy={busy} onStarted={onServeStarted} />}
           {serverInfo && serverInfo.models.length > 1 && (
             <ChatModelSelect
               models={serverInfo.models}
@@ -398,7 +399,7 @@ function Chat({ state, setState, storage, notice }: {
         )}
         {forgetFailed && (
           <p className="error banner" role="alert">
-            {t('error.network')}
+            {errorText(t, forgetFailed)}
             <button type="button" onClick={forgetServer} disabled={busy}>
               {t('server.retry')}
             </button>
