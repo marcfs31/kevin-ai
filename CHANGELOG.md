@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] - 2026-11-23
+
+### Added
+- Tool service: `GET /tools/projects` lists the registered projects (ids, titles, branch rules, command names; no paths).
+- A **Project** picker per chat, stored with the conversation (`projectId`, `null` for older chats). With a project chosen the model is told the project's rules and commands, every project tool call carries that project's id whatever the model wrote, and a chip shows the branch and the changed files.
+- The approval card shows what the tool does; for an allowlisted command that is the exact command that will run.
+
 ## [0.3.12] - 2026-11-22
 
 ### Added
