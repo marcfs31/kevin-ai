@@ -265,6 +265,27 @@ class StdinWrites(Base):
         client.proc.stdin = real
 
 
+class Reaper(Base):
+    def test_an_error_in_one_pass_is_logged_and_does_not_end_the_reaper(self):
+        class Broken:
+            calls = 0
+
+            def reap(self):
+                Broken.calls += 1
+                raise OSError("odd child")
+
+        with mock.patch.object(sys, "stderr") as err:
+            self.assertEqual(chat_tools.reap_safely(Broken()), [])
+            self.assertEqual(chat_tools.reap_safely(Broken()), [])
+        self.assertEqual(Broken.calls, 2)
+        self.assertIn("odd child", "".join(c.args[0] for c in err.write.call_args_list))
+        self.write_config({"fake": stdio()})
+        m = self.manager(idle=0)
+        m._ensure("fake", False)
+        time.sleep(0.05)
+        self.assertEqual(chat_tools.reap_safely(m), ["fake"])
+
+
 class Pagination(Base):
     def test_every_page_of_tools_is_collected(self):
         self.write_config({"fake": stdio("--pages")})
