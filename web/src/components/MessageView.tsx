@@ -94,7 +94,9 @@ function Assistant({ m, live, results, onRetry, onDelete }: { m: AssistantMessag
       {m.reasoning && (
         <details className="think" open={live !== null && !m.content}>
           <summary>{t('message.thinking')}</summary>
-          <div className="think-body">{m.reasoning}</div>
+          <div className="think-body md">
+            <Markdown text={m.reasoning} />
+          </div>
         </details>
       )}
       {m.content && (
