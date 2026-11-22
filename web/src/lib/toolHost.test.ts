@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type ToolsConfig } from './storage';
 import { MAX_TOOLS_PER_STEP, builtinHost, createToolHost, needsApproval, toolGuidance } from './toolHost';
-import { mcpSpecs, type McpTool, type ToolSpec } from './toolRegistry';
+import { allowKey, mcpSpecs, type McpTool, type ToolSpec } from './toolRegistry';
 
 const config = (over: Partial<ToolsConfig> = {}): ToolsConfig => ({ ...DEFAULT_SETTINGS.toolsConfig, servers: { fs: { on: true, disabledTools: [] } }, ...over });
 const internet = (on = false, searchUrl = '') => ({ on, searchUrl });
@@ -29,13 +29,31 @@ describe('needsApproval', () => {
 
   it('asks for everything in "always", except what the user stopped being asked about', () => {
     expect([needsApproval(ro, config({ approval: 'always' })), needsApproval(rw, config({ approval: 'always' }))]).toEqual([true, true]);
-    expect(needsApproval(rw, config({ approval: 'always', alwaysAllow: [rw.name] }))).toBe(false);
+    expect(needsApproval(rw, config({ approval: 'always', alwaysAllow: [allowKey(rw)] }))).toBe(false);
   });
 
   it('never asks in "never", and an always-allow entry lifts only that tool', () => {
     expect(needsApproval(rw, config({ approval: 'never' }))).toBe(false);
-    expect(needsApproval(rw, config({ alwaysAllow: [rw.name] }))).toBe(false);
+    expect(needsApproval(rw, config({ alwaysAllow: [allowKey(rw)] }))).toBe(false);
+    // The model-facing name is not the key: it can change when names collide.
+    expect(needsApproval(rw, config({ alwaysAllow: [rw.name] }))).toBe(true);
     expect(needsApproval(rw, config({ alwaysAllow: ['other'] }))).toBe(true);
+  });
+});
+
+describe('allowKey', () => {
+  it('is the server and the tool, so a collision suffix on the model-facing name cannot move a permission to another tool', () => {
+    const taken = new Set<string>();
+    const [a] = mcpSpecs('a', [tool('x__y', false)], taken) as [ToolSpec];
+    const [b] = mcpSpecs('a__x', [tool('y', false)], taken) as [ToolSpec];
+    expect([a.name, b.name]).toEqual(['a__x__y', 'a__x__y_2']);
+    expect([allowKey(a), allowKey(b)]).toEqual(['a/x__y', 'a__x/y']);
+    expect([needsApproval(a, config({ alwaysAllow: ['a__x/y'] })), needsApproval(b, config({ alwaysAllow: ['a__x/y'] }))]).toEqual([true, false]);
+    // Loaded in the other order, the same entry still means the same tool.
+    const again = new Set<string>();
+    const [b2] = mcpSpecs('a__x', [tool('y', false)], again) as [ToolSpec];
+    expect(b2.name).toBe('a__x__y');
+    expect(needsApproval(b2, config({ alwaysAllow: ['a__x/y'] }))).toBe(false);
   });
 });
 
@@ -90,7 +108,7 @@ describe('createToolHost: approval', () => {
     const h = createToolHost({ mcp: specs(tool('read', true), tool('write', false)), config: config(), internet: internet() });
     expect(h.approval(call('fs__read'))).toBeNull();
     expect(h.approval(call('fs__write', { path: '/x', text: 'hi' }, 'k'))).toEqual({
-      callId: 'k', tool: 'fs__write', title: 'fs · write', server: 'fs', args: JSON.stringify({ path: '/x', text: 'hi' }, null, 2), readOnly: false,
+      callId: 'k', tool: 'fs__write', allowKey: 'fs/write', title: 'fs · write', server: 'fs', args: JSON.stringify({ path: '/x', text: 'hi' }, null, 2), readOnly: false,
     });
   });
 

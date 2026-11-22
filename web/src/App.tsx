@@ -119,7 +119,7 @@ function Chat({ state, setState, storage, notice }: {
         request,
         answer: (a) => {
           if (a === 'always')
-            setState((st) => ({ ...st, settings: { ...st.settings, toolsConfig: { ...st.settings.toolsConfig, alwaysAllow: [...new Set([...st.settings.toolsConfig.alwaysAllow, request.tool])] } } }));
+            setState((st) => ({ ...st, settings: { ...st.settings, toolsConfig: { ...st.settings.toolsConfig, alwaysAllow: [...new Set([...st.settings.toolsConfig.alwaysAllow, request.allowKey])] } } }));
           done(a === 'deny' ? 'deny' : 'allow');
         },
       });

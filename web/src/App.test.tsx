@@ -205,7 +205,7 @@ describe('App', () => {
       typeAndSend('please write a file');
       fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Always allow this tool' }));
       await screen.findByText('all done');
-      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.toolsConfig.alwaysAllow).toEqual(['fs__write_file']);
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.toolsConfig.alwaysAllow).toEqual(['fs/write_file']);
       expect(calls(f)).toHaveLength(1);
     });
 
@@ -390,7 +390,7 @@ describe('App', () => {
     });
 
     it('sets the budget with a cost, the approval mode, and forgets an always-allowed tool', async () => {
-      open({ saved: { tools: true, toolsConfig: { servers: { fs: { on: true, disabledTools: [] } }, alwaysAllow: ['fs__write_file'] } } });
+      open({ saved: { tools: true, toolsConfig: { servers: { fs: { on: true, disabledTools: [] } }, alwaysAllow: ['fs/write_file'] } } });
       const panel = await settings();
       await within(panel).findByText('Tool definitions per step: up to 1,500 tokens');
       expect(within(panel).getByText(/add up to ≈\d+ tokens/)).toBeTruthy();
@@ -398,7 +398,7 @@ describe('App', () => {
       expect(saved().toolsConfig.budgetTokens).toBe(3000);
       fireEvent.change(within(panel).getByLabelText('Ask before running a tool'), { target: { value: 'always' } });
       expect(saved().toolsConfig.approval).toBe('always');
-      fireEvent.click(within(panel).getByRole('button', { name: 'Ask again about fs__write_file' }));
+      fireEvent.click(within(panel).getByRole('button', { name: 'Ask again about fs/write_file' }));
       expect(saved().toolsConfig.alwaysAllow).toEqual([]);
       expect(within(panel).queryByText('Tools you stopped being asked about')).toBeNull();
     });
@@ -415,7 +415,7 @@ describe('App', () => {
 
     it('has no axe violations with the panel open, servers listed and a tool list expanded', async () => {
       mockFetch((url) => (url === '/tools/status' ? json(STATUS) : url.includes('/tools/servers/fs/tools') ? json(LIST) : json({ ok: true })));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: { tools: true, internet: { on: true, searchUrl: 'http://127.0.0.1:8888' }, toolsConfig: { servers: { fs: { on: true, disabledTools: [] } }, alwaysAllow: ['fs__write_file'] } } }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: { tools: true, internet: { on: true, searchUrl: 'http://127.0.0.1:8888' }, toolsConfig: { servers: { fs: { on: true, disabledTools: [] } }, alwaysAllow: ['fs/write_file'] } } }));
       const { container } = renderApp();
       const panel = await settings();
       fireEvent.click(await within(panel).findByText('2 tools'));

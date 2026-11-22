@@ -3,7 +3,7 @@
 // failure is a result the model can read.
 import { ApiError, toolsCall, toolsSearch, type WireTool } from './api';
 import type { ToolCall, InternetConfig, ToolsConfig } from './storage';
-import { builtinSpecs, findToolsSpec, toWire, webSearchSpec, type ToolSpec } from './toolRegistry';
+import { allowKey, builtinSpecs, findToolsSpec, toWire, webSearchSpec, type ToolSpec } from './toolRegistry';
 import { searchSpecs, selectTools } from './toolSelect';
 import { parseArguments, runTool, toolDefinitions, type ToolResult } from './tools';
 
@@ -14,6 +14,8 @@ export interface ApprovalRequest {
   callId: string;
   /** The name the model called. */
   tool: string;
+  /** What "always allow" stores for it (see allowKey). */
+  allowKey: string;
   title: string;
   server: string | null;
   /** The arguments as the model wrote them, pretty-printed and cut. */
@@ -35,7 +37,7 @@ export interface ToolHost {
 const fail = (text: string): ToolResult => ({ content: `error: ${text}`, isError: true });
 
 export function needsApproval(spec: ToolSpec, config: Pick<ToolsConfig, 'approval' | 'alwaysAllow'>): boolean {
-  if (config.approval === 'never' || config.alwaysAllow.includes(spec.name)) return false;
+  if (config.approval === 'never' || config.alwaysAllow.includes(allowKey(spec))) return false;
   if (config.approval === 'always') return true;
   return !spec.readOnly;
 }
@@ -128,7 +130,7 @@ export function createToolHost(i: HostInput): ToolHost {
       if (!spec || !needsApproval(spec, i.config)) return null;
       const server = spec.source.kind === 'mcp' ? spec.source.server : null;
       return {
-        callId: call.id, tool: spec.name, title: spec.source.kind === 'mcp' ? `${spec.source.server} · ${spec.source.tool}` : spec.name,
+        callId: call.id, tool: spec.name, allowKey: allowKey(spec), title: spec.source.kind === 'mcp' ? `${spec.source.server} · ${spec.source.tool}` : spec.name,
         server, args: prettyArguments(call.arguments), readOnly: spec.readOnly,
       };
     },
