@@ -157,7 +157,7 @@ export async function runAgent(o: AgentOptions): Promise<void> {
   const host = o.tools ?? builtinHost();
   const unlocked = new Set<string>();
   const unlock = (names: string[]) => names.forEach((n) => unlocked.add(n));
-  const system = useTools && host.external ? `${o.settings.systemPrompt ? `${o.settings.systemPrompt}\n\n` : ''}${TOOL_NOTE}` : o.settings.systemPrompt;
+  const system = useTools ? [o.settings.systemPrompt, host.guidance, host.external ? TOOL_NOTE : ''].filter(Boolean).join('\n\n') : o.settings.systemPrompt;
   let history = [...o.history];
   const commit = (m: Message) => {
     history.push(m);

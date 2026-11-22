@@ -24,6 +24,8 @@ export interface ApprovalRequest {
 export interface ToolHost {
   /** Tools from outside this page are in play: the model is told to treat their results as data. */
   external: boolean;
+  /** Said to the model once, in the system message: when to reach for the tools. Empty for none. */
+  guidance: string;
   definitions(query: string, unlocked: ReadonlySet<string>): WireTool[];
   /** A request when the user must say yes first; null when the call may run. */
   approval(call: ToolCall): ApprovalRequest | null;
@@ -42,6 +44,7 @@ export function needsApproval(spec: ToolSpec, config: Pick<ToolsConfig, 'approva
 export function builtinHost(): ToolHost {
   return {
     external: false,
+    guidance: '',
     definitions: () => toolDefinitions(),
     approval: () => null,
     run: async (call) => runTool(call.name, call.arguments),
@@ -71,6 +74,23 @@ export interface HostInput {
   internet: InternetConfig;
 }
 
+/** When to use the tools, for a small model that otherwise answers from memory. Short: every word is prompt the server must read once. */
+export function toolGuidance(o: { search: boolean; mcp: boolean }): string {
+  // The built-in tools alone describe themselves well enough; no extra words in every request.
+  if (!o.search && !o.mcp) return '';
+  const lines = [
+    'You can call tools. Answer from your own knowledge when you are confident: well-known facts, definitions, explanations, writing and code need no tool (for example the capital of France, who wrote Hamlet, what a loop is).',
+  ];
+  if (o.search)
+    lines.push(
+      'Call web_search only when the answer depends on recent or changing information (news, latest versions, prices, scores, current events) or on something specific you do not know or are unsure of.',
+    );
+  lines.push('Use calculator for arithmetic and current_time for the date or time.');
+  if (o.search) lines.push('After a search, answer from the results and name the source address.');
+  if (o.mcp) lines.push('For anything else a tool could do, such as files, notes or git, call find_tools to see what is available.');
+  return lines.join(' ');
+}
+
 export function createToolHost(i: HostInput): ToolHost {
   const enabled = i.mcp.filter((s) => {
     if (s.source.kind !== 'mcp') return false;
@@ -82,6 +102,7 @@ export function createToolHost(i: HostInput): ToolHost {
   const byName = new Map([...pinned, ...enabled].map((s) => [s.name, s]));
   return {
     external: enabled.length > 0 || searchOn,
+    guidance: toolGuidance({ search: searchOn, mcp: enabled.length > 0 }),
     definitions: (query, unlocked) =>
       selectTools({ pinned, candidates: enabled, query, budgetTokens: i.config.budgetTokens, maxTools: MAX_TOOLS_PER_STEP, unlocked }).map(toWire),
     approval(call) {

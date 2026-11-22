@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type ToolsConfig } from './storage';
-import { MAX_TOOLS_PER_STEP, builtinHost, createToolHost, needsApproval } from './toolHost';
+import { MAX_TOOLS_PER_STEP, builtinHost, createToolHost, needsApproval, toolGuidance } from './toolHost';
 import { mcpSpecs, type McpTool, type ToolSpec } from './toolRegistry';
 
 const config = (over: Partial<ToolsConfig> = {}): ToolsConfig => ({ ...DEFAULT_SETTINGS.toolsConfig, servers: { fs: { on: true, disabledTools: [] } }, ...over });
@@ -165,5 +165,28 @@ describe('createToolHost: running', () => {
     const fetchMock = stubFetch(() => json({}));
     expect((await host().run(call('calculator', { expression: '2+2' }), signal(), noUnlock)).content).toBe('4');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('toolGuidance', () => {
+  it('tells the model to search when unsure, and not for what it knows, only when search is on, and says nothing for the built-ins alone', () => {
+    expect(toolGuidance({ search: false, mcp: false })).toBe('');
+    expect(builtinHost().guidance).toBe('');
+    const withSearch = toolGuidance({ search: true, mcp: false });
+    expect(withSearch).toContain('web_search');
+    expect(withSearch).toContain('unsure');
+    expect(withSearch).toContain('capital of France');
+    expect(withSearch).not.toContain('find_tools');
+    const mcpOnly = toolGuidance({ search: false, mcp: true });
+    expect(mcpOnly).toContain('find_tools');
+    expect(mcpOnly).not.toContain('web_search');
+    // Always bounded: it is prompt the server reads on the first message of every chat.
+    expect(toolGuidance({ search: true, mcp: true }).length).toBeLessThan(900);
+  });
+
+  it('follows what the host really offers', () => {
+    expect(createToolHost({ mcp: [], config: config(), internet: internet(true, 'http://127.0.0.1:8888') }).guidance).toContain('web_search');
+    expect(createToolHost({ mcp: [], config: config(), internet: internet(true, '') }).guidance).toBe('');
+    expect(createToolHost({ mcp: [], config: config(), internet: internet(false, 'http://127.0.0.1:8888') }).guidance).toBe('');
   });
 });
