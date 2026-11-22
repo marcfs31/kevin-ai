@@ -52,7 +52,9 @@ reached 100 only after four fixes, and a header change dropped mobile to 92 unti
 | Chat UI, styles, strings (en and es together) | `web/src` (`styles.css`, `i18n/en.ts` and `es.ts`) |
 | Tools, MCP, web search | `tools/chat_tools.py` (service), `web/src/lib/tool*.ts` (page) |
 | The proxy and static server (CSP, gzip) | `tools/chat_server.py` |
-| Server scripts (paths use `~/kevin-ai`) | `scripts/` |
+| Project tools: files, git, commands, remote and pull requests, audit | `tools/chat_projects.py` (registry, dispatch), `chat_jail.py`, `chat_git.py`, `chat_commands.py`, `chat_remote.py`, `chat_audit.py`; a test beside each |
+| Project picker, git chip, project rules for the model | `web/src/components/ProjectBar.tsx`, `lib/toolHost.ts`, `lib/projectGit.ts` |
+| Server scripts (paths use `~/kevin-ai`) | `scripts/` (the two `start-*-chat-tools.sh` pass the projects base and load the token file) |
 
 ## Do not
 
@@ -60,6 +62,18 @@ reached 100 only after four fixes, and a header change dropped mobile to 92 unti
   go in their own PR that the owner merges.
 - Rename the repository, move the checkout on the model server or restart the loaded model unasked.
 - Add a stylesheet, font, image URL or script from another origin: the CSP is `'self'` only.
+- Loosen what the agent can do in a project. Rule (owner, 2026-11-23). Why: the project tools run with the owner's
+  rights on a machine that also holds the models, so the registry, not the agent, decides everything. Keep:
+  paths relative and jailed (no `..`, no symlink out, nothing under `.git`); no force, no delete, no branch
+  other than the current one on push; no commit on the default branch unless `allowMain`; the token only through
+  the `GIT_ASKPASS` helper, scrubbed from every result; commands with a fixed argv and no shell; an audit line for
+  every change. A tool never takes a URL, a remote, a token or a command line from the model. A new project tool
+  ships a negative test for what it must refuse, in the same PR.
+- Make the page ask for something that can fail on load. Why: asking `/tools/projects` while no tool service ran
+  logged a console error and dropped Lighthouse Best Practices to 96. Ask only while the feature is switched on,
+  and add any new `/tools` path to the list in `web/src/privacy.test.ts`.
+- Write the project registry, the token file (`~/.config/kevin-ai/tool-service.env`) or a token into the
+  repository, a log, a test fixture or a message: they are the owner's. Tests use fake tokens and temp registries.
 
 ## Before you finish
 
