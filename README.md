@@ -207,6 +207,21 @@ the registry's `identity` (default Kevin AI, developer@marcfors.com). Per projec
  "projects": {"demo": {"title": "Demo", "root": "demo", "defaultBranch": "main", "allowMain": false}}}
 ```
 
+Commands are an allowlist you write in the registry, per project (the agent cannot edit it):
+
+```json
+"commands": {"test": {"argv": ["make", "test"], "timeout": 120, "safe": false, "cwd": "web", "env": {"CI": "1"}}}
+```
+
+Each command becomes its own tool, `run_<project>_<name>`, with the argv in its description, so the approval card
+says what will run and a command marked `"safe": true` runs without asking. The argv is fixed (the agent cannot
+add arguments), run without a shell in the project folder, with a minimal environment (none of the service's
+secrets), a private HOME removed afterwards, no stdin, a time limit that stops the whole process group, and only
+the tail of the output. It is an allowlist, not a sandbox: a command still has the network and whatever its own
+program can reach. Everything the agent changes (file writes and edits, git add, commit, restore, branches,
+commands) is appended to `<state-dir>/audit.jsonl` (`--audit-log` to move it), a private file with the time,
+project, tool, a short summary and the first words of the result, never file contents.
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
