@@ -21,7 +21,8 @@ chat_server.py forwards them), so the page's CSP stays 'self' only.
 - It listens on 127.0.0.1. A --host that is not loopback needs CHAT_PASSWORD in the environment,
   as chat_server.py does; without a password requests must name a loopback Host.
 
-Endpoints (JSON; every POST needs Content-Type: application/json and a loopback Origin):
+Endpoints (JSON; every request but /tools/status needs a loopback Origin or none, and a POST needs
+Content-Type: application/json):
   GET  /tools/status                          the servers, the catalog and the limits
   GET  /tools/servers/<id>/tools[?internet=1] the tools of a configured server (starts it)
   POST /tools/servers/<id>/call               {"name", "arguments", "internet"}
@@ -814,7 +815,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return False
 
     def same_origin(self):
-        """A page from another site must not drive this service: a POST must come from a loopback
+        """A page from another site must not drive this service: a request must come from a loopback
         origin (or none, for a command-line client) and not be marked cross-site."""
         site = (self.headers.get("Sec-Fetch-Site") or "").lower()
         if site and site not in ("same-origin", "none"):
@@ -854,7 +855,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if method != self.command:
                 return self.fail(405, "method_not_allowed", f"use {method}", [("Allow", method)])
             try:
-                if method == "POST" and not self.same_origin():
+                # Listing a server starts it, so a GET is checked too; only the harmless status is open.
+                if name != "status" and not self.same_origin():
                     return self.fail(403, "forbidden", "cross-site request")
                 return self.reply(200, self.dispatch(name, m.groups(), url.query))
             except ToolError as e:
