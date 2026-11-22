@@ -17,6 +17,8 @@ chat_server.py forwards them), so the page's CSP stays 'self' only.
   this process's secrets.
 - Servers and tools that reach the network only run when the request says the internet is on.
   The first start of a catalog package also needs it, because the package is downloaded then.
+- With --projects-base the service also has a built-in server "project" (tools/chat_projects.py): file tools
+  on the projects listed in the owner-edited registry, each folder under that base. It runs in this process.
 - POST /tools/search asks a SearXNG instance (its URL comes with the request) and returns text. The
   instance may be on loopback (not this service's own port); a private address needs --search-allow.
 - It listens on 127.0.0.1. A --host that is not loopback needs CHAT_PASSWORD in the environment,
@@ -58,6 +60,7 @@ import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import chat_projects  # noqa: E402  (the native "project" server: files of the projects on this host)
 import chat_server  # noqa: E402  (loopback and password checks shared with the proxy)
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -530,8 +533,9 @@ class Manager:
     """The configured servers: start on first use, stop when idle, never more than a few at once."""
 
     def __init__(self, cfg_path, catalog, env, state_dir, max_running=MAX_RUNNING, idle=IDLE_SECONDS,
-                 memory_floor=MEMORY_FLOOR_MB, memory_fn=memory_available_mb):
+                 memory_floor=MEMORY_FLOOR_MB, memory_fn=memory_available_mb, projects=None):
         self.cfg_path = cfg_path
+        self.projects = projects     # a chat_projects.ProjectHost, or None: no "project" server on this host
         self.catalog = catalog
         self.env = env
         self.state_dir = state_dir
@@ -546,8 +550,15 @@ class Manager:
 
     # -- configuration
 
+    def _native(self):
+        """The built-in servers of this host: just "project", when the service was given a projects base."""
+        if self.projects is None:
+            return {}
+        return {"project": {"id": "project", "title": "Projects", "catalog": None, "kind": "native", "network": False,
+                            "install": False, "version": chat_projects.TOOLS_VERSION}}
+
     def servers(self):
-        return load_config(self.cfg_path)
+        return {**load_config(self.cfg_path), **self._native()}
 
     def spec(self, sid):
         try:
@@ -565,7 +576,7 @@ class Manager:
             servers = self.servers()
             error = None
         except ConfigError as e:
-            servers, error = {}, str(e)
+            servers, error = self._native(), str(e)
         listed = []
         for sid, spec in sorted(servers.items()):
             with self.lock:
@@ -573,7 +584,8 @@ class Manager:
             listed.append({
                 "id": sid, "title": spec["title"], "kind": spec["kind"], "network": spec["network"], "catalog": spec["catalog"],
                 "state": "ready" if run and not run["client"].dead else ("failed" if sid in self.failures else "stopped"),
-                "error": self.failures.get(sid), "tools": len(run["tools"]) if run and run["tools"] is not None else None,
+                "error": self.failures.get(sid) or (self.projects.problem() if spec["kind"] == "native" else None),
+                "tools": len(run["tools"]) if run and run["tools"] is not None else None,
             })
         catalog = [{"id": c["id"], "title": c["title"], "description": c["description"], "runtime": c["runtime"],
                     "network": c["network"], "verified": c["verified"], "added": c["id"] in servers}
@@ -604,11 +616,14 @@ class Manager:
                 if run and not run["client"].dead:
                     return run
                 self.running.pop(sid, None)
-            self._make_room(sid)
-            avail = self.memory_fn()
-            if avail is not None and avail < self.memory_floor:
-                raise ToolError("low_memory", f"{avail} MiB available, under the {self.memory_floor} MiB floor: not starting {sid}", 503)
-            client = (StdioClient if spec["kind"] == "stdio" else HttpClient)(sid, spec, self.env)
+            if spec["kind"] == "native":
+                client = chat_projects.NativeProjectClient(sid, spec, self.env, self.projects)    # in this process: no room or memory needed
+            else:
+                self._make_room(sid)
+                avail = self.memory_fn()
+                if avail is not None and avail < self.memory_floor:
+                    raise ToolError("low_memory", f"{avail} MiB available, under the {self.memory_floor} MiB floor: not starting {sid}", 503)
+                client = (StdioClient if spec["kind"] == "stdio" else HttpClient)(sid, spec, self.env)
             try:
                 client.request("initialize", {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
                                               "clientInfo": {"name": "lm-chat-tools", "version": "1"}}, START_TIMEOUT_S)
@@ -629,7 +644,8 @@ class Manager:
 
     def _make_room(self, sid):
         with self.lock:
-            live = {k: v for k, v in self.running.items() if not v["client"].dead and k != sid}
+            live = {k: v for k, v in self.running.items()
+                    if not v["client"].dead and k != sid and not isinstance(v["client"], chat_projects.NativeProjectClient)}
             if len(live) < self.max_running:
                 return
             idle = [(v["last"], k) for k, v in live.items() if v["busy"] == 0]
@@ -671,7 +687,7 @@ class Manager:
     @staticmethod
     def _fingerprint(spec):
         """What the tool list depends on: how the server is started (its pinned package or address)."""
-        return json.dumps([spec["kind"], spec.get("command"), spec.get("args"), spec.get("url")])
+        return json.dumps([spec["kind"], spec.get("command"), spec.get("args"), spec.get("url"), spec.get("version")])
 
     def _cached_tools(self, sid, spec):
         try:
@@ -982,6 +998,12 @@ def main(argv=None, env=None):
                     help="the one directory the filesystem server may touch (default ~/chat-files)")
     ap.add_argument("--search-allow", action="append", default=[], metavar="HOST:PORT",
                     help="a private (not loopback) address the web search may use; repeat for several")
+    ap.add_argument("--projects-base", default=None, metavar="DIR",
+                    help="the folder whose subfolders are the projects of this host; without it there is no \"project\" server")
+    ap.add_argument("--projects-registry", default=os.path.join(os.path.expanduser("~"), ".config", "lm-chat", "projects.json"),
+                    help="the owner-edited list of projects (default ~/.config/lm-chat/projects.json)")
+    ap.add_argument("--projects-min-free-gb", type=float, default=5.0,
+                    help="writes are refused when the disk would drop under this many GB (default 5)")
     ap.add_argument("--max-running", type=int, default=MAX_RUNNING)
     ap.add_argument("--idle-seconds", type=float, default=IDLE_SECONDS)
     args = ap.parse_args(argv)
@@ -990,7 +1012,14 @@ def main(argv=None, env=None):
         catalog = load_catalog(args.catalog)
     except (OSError, ValueError, KeyError, ConfigError) as e:
         sys.exit(f"chat_tools: catalog {args.catalog}: {e}")
-    manager = Manager(args.config, catalog, dict(env), args.state_dir, args.max_running, args.idle_seconds)
+    projects = None
+    if args.projects_base:
+        try:
+            os.makedirs(args.projects_base, exist_ok=True)
+        except OSError as e:
+            sys.exit(f"chat_tools: --projects-base {args.projects_base}: {e}")
+        projects = chat_projects.ProjectHost(args.projects_base, args.projects_registry, args.projects_min_free_gb)
+    manager = Manager(args.config, catalog, dict(env), args.state_dir, args.max_running, args.idle_seconds, projects=projects)
     try:
         server = Server((args.host, args.port), manager, password, args.scratch, args.search_allow)
     except OSError as e:
