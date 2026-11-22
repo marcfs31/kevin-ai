@@ -254,6 +254,12 @@ through a `GIT_ASKPASS` helper that is deleted afterwards, and is scrubbed from 
 rewrites URLs in its own config is refused, and its proxy, header and TLS settings are overridden. These tools
 always ask for approval.
 
+In the chat, a **Project** picker under the header (shown when the tool service lists projects, read from
+`GET /tools/projects`: ids, titles and rules, never paths) chooses the project a chat works in. The page then tells
+the model the project's rules and commands, always sends that project's id to the project tools whatever the model
+wrote, shows the branch and the number of changed files (read with `git_status`), and shows the exact command on the
+approval card.
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
