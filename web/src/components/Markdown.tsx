@@ -45,6 +45,22 @@ export function remarkEmphasisAsBold() {
   return (tree: MdNode) => walk(tree);
 }
 
+/** Models write maths as \( x \) and \[ x \] as often as $x$ and $$x$$; the parser only knows the dollar forms, so
+ * the others are rewritten to them, outside code spans and fences. */
+export function normalizeMathDelimiters(text: string): string {
+  if (!text.includes('\\(') && !text.includes('\\[')) return text;
+  return text
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/)
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part
+            .replace(/\\\[([\s\S]+?)\\\]/g, (_m, body: string) => '\n$$\n' + body.trim() + '\n$$\n')
+            .replace(/\\\(([\s\S]+?)\\\)/g, (_m, body: string) => '$' + body.trim() + '$'),
+    )
+    .join('');
+}
+
 // MathML only: the browser draws it, so no stylesheet and no fonts are needed and the strict CSP stays as it is.
 const KATEX = { output: 'mathml', throwOnError: false, strict: 'ignore', trust: false } as const;
 
@@ -119,7 +135,7 @@ const components: Components = {
 export function Markdown({ text, emphasisAsBold = false }: { text: string; emphasisAsBold?: boolean }) {
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkMathGuard, remarkHtmlAsText, ...(emphasisAsBold ? [remarkEmphasisAsBold] : [])]} rehypePlugins={[[rehypeKatex, KATEX]]} components={components}>
-      {text}
+      {normalizeMathDelimiters(text)}
     </ReactMarkdown>
   );
 }
