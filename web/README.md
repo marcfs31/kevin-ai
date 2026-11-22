@@ -149,6 +149,7 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   edits), because lm-serve reuses its state only then. Stopped replies are re-sent as far as
   they got; failed replies are left out, even when they streamed some text.
 - **Thinking.** `reasoning_content` (lm-serve `--think`) goes in a collapsible block.
+- **Lighthouse 100** in all categories, desktop and mobile, on the production build as `tools/chat_server.py` serves it (gzip, strict CSP): `scripts/lighthouse.sh` checks it. Measure that, not the Vite dev server, which sends about 78 unbundled files.
 - **Markdown** with GitHub tables and code blocks with a copy button. Raw HTML in a reply is shown
   as text; images in a reply are never loaded (they could be remote trackers). LaTeX (`$...$`
   inline, `$$...$$` as a block) is drawn as MathML, which the browser renders itself, so there is no

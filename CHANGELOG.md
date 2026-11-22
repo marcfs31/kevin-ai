@@ -6,12 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `scripts/lighthouse.sh`: builds the web chat, serves it with `tools/chat_server.py` and runs Lighthouse (desktop and mobile, pinned version); it fails unless every category is 100.
+- `tools/chat_server.py` gzips text files (HTML, JS, CSS, JSON, SVG) for browsers that accept it and keeps the compressed bytes until the file changes: the 791 kB script is 237 kB on the wire.
+
 ### Changed
 - Type scale with real steps (13 px interface text, 16 px section titles, 20 px dialog titles, 25 px for the Kevin AI name), the Settings dialog is set apart by its border and the backdrop without a wide shadow, and the model button has 8 px of side padding.
 
 ### Fixed
-- The page no longer jumps down when the model row loads (the header keeps the height it needs), which a Lighthouse run scored as a 0.2 layout shift.
-- The page has a description for search engines and a robots.txt that keeps crawlers out.
+- The page no longer jumps down when the model row loads (the header keeps the height it needs; on a phone the model row keeps its stacked height), which Lighthouse scored as a layout shift of 0.2 on desktop and 0.17 on mobile.
+- The page has a description for search engines.
 
 ## [0.3.1] - 2026-11-22
 

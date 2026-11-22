@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { en } from './i18n/en';
@@ -15,9 +15,10 @@ describe('Kevin AI branding', () => {
     expect([en['app.title'], es['app.title']]).toEqual(['Kevin AI', 'Kevin AI']);
   });
 
-  it('describes itself for search and keeps crawlers out of a private chat', () => {
+  it('describes itself for search, and ships no robots.txt that would mark the page as blocked from indexing', () => {
     expect(read('index.html')).toMatch(/<meta name="description" content="[^"]{40,}" \/>/);
-    expect(read('public/robots.txt')).toBe('User-agent: *\nDisallow: /\n');
+    expect(existsSync(join(root, 'public', 'robots.txt'))).toBe(false);
+    expect(read('index.html')).not.toMatch(/name="robots"/i);
   });
 
   it('reserves the header height the loaded model row needs, so the page does not jump when the model answers', () => {
@@ -25,6 +26,10 @@ describe('Kevin AI branding', () => {
     expect(css).toMatch(/\.top \{[^}]*min-block-size: 4\.75rem;/);
     // The settings dialog is set apart by its border and the backdrop, not by a border plus a wide shadow too.
     expect(css.match(/\.settings-modal \{[^}]*\}/)?.[0]).not.toContain('box-shadow');
+  });
+
+  it('keeps the phone header at the height the loaded model row needs, so mobile does not shift either', () => {
+    expect(read('src/styles.css')).toMatch(/@media \(max-width: 30rem\) \{\s*\.server \{ min-block-size: 6\.8rem; \}/);
   });
 
   it('ships the Orbit logo as a self-contained SVG: a disc, a ring, a K and a dot, with no script, link or remote reference', () => {
