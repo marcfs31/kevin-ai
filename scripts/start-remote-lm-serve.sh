@@ -21,7 +21,7 @@ usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma|whiterabbitneo|g
 
 Environment (optional):
   LM_SERVE_SSH              default toor@192.168.1.96
-  LM_SERVE_REMOTE_BIN       default ~/small-llm-in-c/bin/lm-serve
+  LM_SERVE_REMOTE_BIN       default ~/kevin-ai/bin/lm-serve
   LM_SERVE_REMOTE_LLAMA_BIN default ~/opt/llama.cpp-v1.0.0/build/bin/llama-server
   LM_SERVE_REMOTE_ROOT      default ~/models
 EOF
@@ -126,7 +126,7 @@ main() {
   if [[ "$RUNTIME" == llama-server ]]; then
     REMOTE_BIN=${LM_SERVE_REMOTE_LLAMA_BIN:-'$HOME/opt/llama.cpp-v1.0.0/build/bin/llama-server'}
   else
-    REMOTE_BIN=${LM_SERVE_REMOTE_BIN:-'$HOME/small-llm-in-c/bin/lm-serve'}
+    REMOTE_BIN=${LM_SERVE_REMOTE_BIN:-'$HOME/kevin-ai/bin/lm-serve'}
   fi
   REMOTE_ROOT=${LM_SERVE_REMOTE_ROOT:-'$HOME/models'}
 

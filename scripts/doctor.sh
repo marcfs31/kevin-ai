@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only pre-flight check for small-llm-in-c. Prints one line per check: OK, FAIL,
+# Read-only pre-flight check for Kevin AI. Prints one line per check: OK, FAIL,
 # UNKNOWN (could not be evaluated on this system) or NOTE (information, neither pass
 # nor fail). Exits 1 if any check printed FAIL. Changes nothing on the system.
 set -uo pipefail

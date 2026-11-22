@@ -1,4 +1,4 @@
-# small-llm-in-c. Sources are discovered by wildcard: adding a file under src/ or a
+# Kevin AI. Sources are discovered by wildcard: adding a file under src/ or a
 # tests/unit/test_*.c needs no Makefile edit.
 #
 #   make            build bin/* (one binary per src/cli/*.c)

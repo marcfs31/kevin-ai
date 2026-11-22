@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Build the chat web app on this machine and copy web/dist to the server.
 #   scripts/deploy-web.sh
-# Overridable: DEPLOY_HOST (toor@192.168.1.96), DEPLOY_PATH (~/small-llm-in-c/web/dist/).
+# Overridable: DEPLOY_HOST (toor@192.168.1.96), DEPLOY_PATH (~/kevin-ai/web/dist/).
 # The server needs only Python 3 to run tools/chat_server.py; Node stays on this machine.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 host="${DEPLOY_HOST:-toor@192.168.1.96}"
-path="${DEPLOY_PATH:-~/small-llm-in-c/web/dist/}"
+path="${DEPLOY_PATH:-~/kevin-ai/web/dist/}"
 
 # rsync --delete empties whatever the path names, so only a dist directory is accepted.
 case "$path" in

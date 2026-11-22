@@ -15,7 +15,7 @@ usage: start-remote-chat-tools.sh [--update] [--port N]
 
 Environment (optional):
   LM_TOOLS_SSH     default toor@192.168.1.96
-  LM_TOOLS_REPO    default ~/small-llm-in-c on the remote host
+  LM_TOOLS_REPO    default ~/kevin-ai on the remote host
   LM_TOOLS_OPT     where install-tool-runtimes.sh put the runtimes, default ~/opt
 EOF2
   exit 2
@@ -40,7 +40,7 @@ main() {
     esac
   done
   local target=${LM_TOOLS_SSH:-toor@192.168.1.96}
-  local repo=${LM_TOOLS_REPO:-'$HOME/small-llm-in-c'}
+  local repo=${LM_TOOLS_REPO:-'$HOME/kevin-ai'}
   local opt=${LM_TOOLS_OPT:-'$HOME/opt'}
 
   local remote_script

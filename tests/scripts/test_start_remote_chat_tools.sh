@@ -17,7 +17,7 @@ run() { PATH="$fakebin:$PATH" bash "$script" "$@" 2>&1 || true; }
 
 out=$(run)
 check '[[ "$out" == *"-o BatchMode=yes"*"toor@192.168.1.96"*"bash -s --"* ]]' "default target missing, got: $out"
-check '[[ "$out" == *"bash -s -- "*"small-llm-in-c "*"opt "*"8081 0"* ]]' "defaults should be the repo, ~/opt, port 8081 and no update, got: $out"
+check '[[ "$out" == *"bash -s -- "*"kevin-ai "*"opt "*"8081 0"* ]]' "defaults should be the repo, ~/opt, port 8081 and no update, got: $out"
 out=$(run --update --port 8123)
 check '[[ "$out" == *" 8123 1"* ]]' "--update --port 8123 not passed on, got: $out"
 out=$(LM_TOOLS_SSH=me@host run)
