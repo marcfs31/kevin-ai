@@ -25,6 +25,8 @@ import shutil
 import tempfile
 import time
 
+import chat_audit
+import chat_commands
 import chat_git
 from chat_jail import GB, PathError, ToolFail, inside, int_arg, looks_binary, rel_of, resolve  # noqa: F401  (re-exported)
 
@@ -96,7 +98,12 @@ def load_registry_doc(path, base):
             raise RegistryError(f"{pid}: defaultBranch must be a branch name")
         if not isinstance(p.get("allowMain", False), bool):
             raise RegistryError(f"{pid}: allowMain must be true or false")
-        out[pid] = {"id": pid, "title": title, "root": root, "defaultBranch": branch, "allowMain": p.get("allowMain", False)}
+        try:
+            commands = chat_commands.parse_commands(pid, p.get("commands"))
+        except chat_commands.CommandError as e:
+            raise RegistryError(str(e)) from None
+        out[pid] = {"id": pid, "title": title, "root": root, "defaultBranch": branch, "allowMain": p.get("allowMain", False),
+                    "commands": commands}
     return identity, out
 
 
@@ -140,6 +147,8 @@ TOOLS = [
            "replace_all": {"type": "boolean"}}, ["path", "old", "new"]),
 ]
 TOOLS += chat_git.GIT_DEFS
+# The tools that change something: these are recorded in the audit log.
+CHANGING = {t["name"] for t in TOOLS if not t["annotations"]["readOnlyHint"]}
 # Changes whenever a definition changes, so a kept tool list is never older than the code.
 TOOLS_VERSION = hashlib.sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -327,16 +336,50 @@ def _result(text, is_error=False):
 
 
 class ProjectHost:
-    def __init__(self, base, registry_path, min_free_gb=5):
+    def __init__(self, base, registry_path, min_free_gb=5, audit=None):
         self.base = os.path.realpath(base)
         self.registry_path = registry_path
         self.min_free_bytes = int(min_free_gb * GB)
+        self.audit = audit                       # a chat_audit.Audit, or None: nothing is recorded
 
     def projects(self):
         return load_registry(self.registry_path, self.base)
 
     def identity(self):
         return load_registry_doc(self.registry_path, self.base)[0]
+
+    def command_tools(self):
+        """One tool per allowlisted command of every project: run_<project>_<name>."""
+        return [chat_commands.tool_def(pid, cmd) for pid, p in self.projects().items() for cmd in p["commands"].values()]
+
+    def tools_version(self):
+        """Changes when a tool definition or an allowlisted command changes, so a kept tool list is never stale."""
+        try:
+            commands = {pid: p["commands"] for pid, p in self.projects().items()}
+        except RegistryError:
+            return TOOLS_VERSION + "-bad"
+        return hashlib.sha256((TOOLS_VERSION + json.dumps(commands, sort_keys=True)).encode()).hexdigest()[:12]
+
+    def _command(self, name):
+        for pid, p in self.projects().items():
+            for cmd in p["commands"].values():
+                if chat_commands.tool_name(pid, cmd["name"]) == name:
+                    return p, cmd
+        return None, None
+
+    def _record_change(self, project, tool, args, result):
+        """Audit a call that changes something (read-only tools are not recorded)."""
+        if self.audit is not None and tool in CHANGING:
+            self._record(project, tool, args, not result["isError"], result["content"][0]["text"])
+
+    def _record_failure(self, tool, args, error):
+        if self.audit is not None and (tool in CHANGING or tool.startswith("run_")):
+            pid = args.get("project") if isinstance(args.get("project"), str) else "?"
+            self._record(pid, tool, args, False, f"error: {error}")
+
+    def _record(self, project, tool, args, ok, text):
+        if self.audit is not None:
+            self.audit.log(project, tool, chat_audit.summarize(tool, args), ok, text)
 
     def problem(self):
         """The reason the registry cannot be used, or None."""
@@ -364,11 +407,25 @@ class ProjectHost:
                 return _result(self._list())
             if name in FILE_TOOLS:
                 project = self._project(args)
-                return _result(FILE_TOOLS[name](project["root"], args, self))
+                result = _result(FILE_TOOLS[name](project["root"], args, self))
+                self._record_change(project["id"], name, args, result)
+                return result
             if name in chat_git.GIT_HANDLERS:
-                return _result(chat_git.GIT_HANDLERS[name](self._project(args), args, self))
+                project = self._project(args)
+                result = _result(chat_git.GIT_HANDLERS[name](project, args, self))
+                self._record_change(project["id"], name, args, result)
+                return result
+            if name.startswith("run_"):
+                project, cmd = self._command(name)
+                if cmd is None:
+                    raise ToolFail(f"no tool named {name!r}")
+                text, ok = chat_commands.run(project, cmd)
+                result = _result(text, not ok)
+                self._record(project["id"], name, args, ok, text)
+                return result
             raise ToolFail(f"no tool named {name!r}")
         except (PathError, ToolFail) as e:
+            self._record_failure(name, args, e)
             return _result(f"error: {e}", True)
         except RegistryError as e:
             return _result(f"error: the project registry cannot be used: {e}", True)
@@ -399,7 +456,10 @@ class NativeProjectClient:
         if method == "initialize":
             return {"protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "serverInfo": {"name": "kevin-projects", "version": TOOLS_VERSION}}
         if method == "tools/list":
-            return {"tools": TOOLS}
+            try:
+                return {"tools": TOOLS + self.host.command_tools()}
+            except RegistryError:
+                return {"tools": TOOLS}
         if method == "tools/call":
             params = params or {}
             return self.host.call(params.get("name"), params.get("arguments") or {})
