@@ -76,12 +76,14 @@ describe('migrate', () => {
         { id: 'x', role: 'tool', content: 'no call id' },
       ] }],
     });
-    expect(state?.settings).toMatchObject({ tools: false, maxSteps: 8 });
+    expect(state?.settings).toMatchObject({ tools: false, maxSteps: 20 });
     expect(state?.conversations[0]?.messages).toMatchObject([
       { toolCalls: [{ id: 'k', name: 'f', arguments: '{}' }], stepLimit: 3 },
       { role: 'tool', toolCallId: 'k', isError: true },
     ]);
-    expect(migrate({ version: 1, settings: { tools: true, maxSteps: 99 } })?.settings).toMatchObject({ tools: true, maxSteps: 8 });
+    expect(migrate({ version: 1, settings: { tools: true, maxSteps: 99 } })?.settings).toMatchObject({ tools: true, maxSteps: 20 });
+    expect(migrate({ version: 1, settings: { maxSteps: 50 } })?.settings.maxSteps).toBe(50);
+    expect(migrate({ version: 1, settings: { maxSteps: 51 } })?.settings.maxSteps).toBe(20);
     expect(migrate({ version: 1, settings: { maxSteps: 5 } })?.settings.maxSteps).toBe(5);
     // A chat saved before Auto compact existed keeps compacting by itself; a saved choice is kept.
     expect(migrate({ version: 1, settings: {} })?.settings.autoCompact).toBe(true);

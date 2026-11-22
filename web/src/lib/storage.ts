@@ -171,13 +171,13 @@ export const DEFAULT_SETTINGS: Settings = {
   imagePreset: 512,
   locale: 'auto',
   tools: false,
-  maxSteps: 8,
+  maxSteps: 20,
   autoCompact: true,
   toolsConfig: { servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [] },
   internet: { on: false, searchUrl: '' },
 };
 
-export const MAX_STEPS_LIMIT = 20;
+export const MAX_STEPS_LIMIT = 50;
 
 export function emptyState(): State {
   return { version: SCHEMA_VERSION, conversations: [], activeId: null, settings: { ...DEFAULT_SETTINGS } };
