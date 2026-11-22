@@ -25,6 +25,7 @@ import shutil
 import tempfile
 import time
 
+import chat_git
 from chat_jail import GB, PathError, ToolFail, inside, int_arg, looks_binary, rel_of, resolve  # noqa: F401  (re-exported)
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -48,19 +49,36 @@ class RegistryError(ValueError):
     pass
 
 
-def load_registry(path, base):
-    """{id: {"id", "title", "root"}} from the registry file; {} when there is none. Raises RegistryError."""
+DEFAULT_IDENTITY = {"name": "Kevin AI", "email": "developer@marcfors.com"}
+
+
+def _identity(doc, path):
+    ident = doc.get("identity", DEFAULT_IDENTITY)
+    if not isinstance(ident, dict):
+        raise RegistryError(f"{path}: identity must be an object with a name and an email")
+    name, email = ident.get("name", DEFAULT_IDENTITY["name"]), ident.get("email", DEFAULT_IDENTITY["email"])
+    for v in (name, email):
+        if not isinstance(v, str) or not v.strip() or len(v) > 100 or any(c in v for c in "\n\r\x00<>"):
+            raise RegistryError(f"{path}: the identity needs a plain name and email")
+    if "@" not in email:
+        raise RegistryError(f"{path}: the identity email must contain @")
+    return {"name": name.strip(), "email": email.strip()}
+
+
+def load_registry_doc(path, base):
+    """(identity, {id: project}) from the registry file; the default identity and {} when there is none. Raises RegistryError."""
     base_real = os.path.realpath(base)
     try:
         with open(path, encoding="utf-8") as f:
             doc = json.load(f)
     except FileNotFoundError:
-        return {}
+        return dict(DEFAULT_IDENTITY), {}
     except (OSError, ValueError) as e:
         raise RegistryError(f"{path}: {e}") from None
     projects = doc.get("projects") if isinstance(doc, dict) else None
     if not isinstance(projects, dict):
         raise RegistryError(f'{path}: expected {{"projects": {{...}}}}')
+    identity = _identity(doc, path)
     out = {}
     for pid, p in projects.items():
         if not PROJECT_ID.match(pid):
@@ -73,8 +91,18 @@ def load_registry(path, base):
         if not os.path.isdir(root):
             raise RegistryError(f"{pid}: {root} is not a folder")
         title = p.get("title") if isinstance(p.get("title"), str) and p["title"] else pid
-        out[pid] = {"id": pid, "title": title, "root": root}
-    return out
+        branch = p.get("defaultBranch", "main")
+        if not isinstance(branch, str) or not chat_git.BRANCH_NAME.match(branch):
+            raise RegistryError(f"{pid}: defaultBranch must be a branch name")
+        if not isinstance(p.get("allowMain", False), bool):
+            raise RegistryError(f"{pid}: allowMain must be true or false")
+        out[pid] = {"id": pid, "title": title, "root": root, "defaultBranch": branch, "allowMain": p.get("allowMain", False)}
+    return identity, out
+
+
+def load_registry(path, base):
+    """{id: project} from the registry file; {} when there is none. Raises RegistryError."""
+    return load_registry_doc(path, base)[1]
 
 
 # ---- the path jail -----------------------------------------------------------------------------
@@ -111,6 +139,7 @@ TOOLS = [
           {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"},
            "replace_all": {"type": "boolean"}}, ["path", "old", "new"]),
 ]
+TOOLS += chat_git.GIT_DEFS
 # Changes whenever a definition changes, so a kept tool list is never older than the code.
 TOOLS_VERSION = hashlib.sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()[:12]
 
@@ -306,6 +335,9 @@ class ProjectHost:
     def projects(self):
         return load_registry(self.registry_path, self.base)
 
+    def identity(self):
+        return load_registry_doc(self.registry_path, self.base)[0]
+
     def problem(self):
         """The reason the registry cannot be used, or None."""
         try:
@@ -333,6 +365,8 @@ class ProjectHost:
             if name in FILE_TOOLS:
                 project = self._project(args)
                 return _result(FILE_TOOLS[name](project["root"], args, self))
+            if name in chat_git.GIT_HANDLERS:
+                return _result(chat_git.GIT_HANDLERS[name](self._project(args), args, self))
             raise ToolFail(f"no tool named {name!r}")
         except (PathError, ToolFail) as e:
             return _result(f"error: {e}", True)
