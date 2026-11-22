@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.14] - 2026-11-23
+
+### Changed
+- README: the chat, the tool service and projects are part of the overview, with hand-made diagrams (system overview, project approval flow, chat and tool service, one message with a tool call, repository layout) in place of the generated GitDiagram one, and updated Status, projects, build and test, web chat, releases and troubleshooting sections.
+
 ## [0.3.13] - 2026-11-23
 
 ### Added
