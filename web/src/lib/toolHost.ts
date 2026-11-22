@@ -51,14 +51,32 @@ export function builtinHost(): ToolHost {
   };
 }
 
+/** The longest value shown in full on the approval card; a longer one is cut, and says by how much. */
+const SHOWN_VALUE_CHARS = 240;
+const SHOWN_KEYS = 40;
+
+function shown(v: unknown): unknown {
+  const text = typeof v === 'string' ? v : JSON.stringify(v);
+  if (text === undefined || text.length <= SHOWN_VALUE_CHARS) return v;
+  return `${text.slice(0, SHOWN_VALUE_CHARS)}… (${text.length - SHOWN_VALUE_CHARS} more characters)`;
+}
+
+/** The arguments for the approval card. Every key is shown whatever the order the model wrote them in and
+ * each value is cut on its own, so a long `content` can never push the `path` out of sight. */
 function prettyArguments(raw: string): string {
-  let text = raw;
   try {
-    text = JSON.stringify(JSON.parse(raw || '{}'), null, 2);
+    const parsed: unknown = JSON.parse(raw || '{}');
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const entries = Object.entries(parsed);
+      const out = Object.fromEntries(entries.slice(0, SHOWN_KEYS).map(([k, v]) => [k, shown(v)]));
+      const more = entries.length - SHOWN_KEYS;
+      return JSON.stringify(more > 0 ? { ...out, '…': `${more} more arguments` } : out, null, 2);
+    }
+    return JSON.stringify(shown(parsed), null, 2);
   } catch {
-    // Not JSON: show what the model wrote.
+    // Not JSON: show what the model wrote, its start and its end.
+    return raw.length > 800 ? `${raw.slice(0, 600)}\n…\n${raw.slice(-200)}` : raw;
   }
-  return text.length > 800 ? `${text.slice(0, 800)}\n…` : text;
 }
 
 function describe(e: unknown): string {

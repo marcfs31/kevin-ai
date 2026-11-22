@@ -94,10 +94,21 @@ describe('createToolHost: approval', () => {
     });
   });
 
-  it('cuts very long arguments and shows invalid JSON as written', () => {
+  it('cuts each long value on its own so every key, the path included, stays in view', () => {
     const h = createToolHost({ mcp: specs(tool('write', false)), config: config(), internet: internet() });
-    expect(h.approval(call('fs__write', { text: 'x'.repeat(2000) }))?.args.endsWith('…')).toBe(true);
+    const shownArgs = h.approval(call('fs__write', { content: 'x'.repeat(5000), path: '/home/toor/chat-files/../../.ssh/authorized_keys', mode: 'a' }))?.args ?? '';
+    expect(JSON.parse(shownArgs)).toEqual({ content: `${'x'.repeat(240)}… (4760 more characters)`, path: '/home/toor/chat-files/../../.ssh/authorized_keys', mode: 'a' });
+    const many = Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`k${i}`, i]));
+    expect(JSON.parse(h.approval(call('fs__write', many))?.args ?? '{}')['…']).toBe('5 more arguments');
+    expect(h.approval(call('fs__write', { nested: { a: 'y'.repeat(500) } }))?.args).toContain('more characters');
+  });
+
+  it('shows invalid JSON as written, both ends when it is long', () => {
+    const h = createToolHost({ mcp: specs(tool('write', false)), config: config(), internet: internet() });
     expect(h.approval(call('fs__write', '{oops'))?.args).toBe('{oops');
+    const long = h.approval(call('fs__write', '{' + 'z'.repeat(2000) + 'END'))?.args ?? '';
+    expect(long.endsWith('END')).toBe(true);
+    expect(long).toContain('…');
   });
 
   it('asks about nothing it does not know', () => {
