@@ -18,6 +18,9 @@ usage: start-local-chat-tools.sh [--port N] [--dry-run]
 Environment (optional):
   LM_LOCAL_TOOLS_CONFIG  default ~/.config/kevin-ai/mcp-local.json
   LM_LOCAL_TOOLS_STATE   default ~/.local/share/kevin-ai (pid file chat-tools-local.pid, log chat-tools-local.log)
+  LM_LOCAL_PROJECTS_BASE default ~/KevinProjects (the folder the agent's projects must be inside; empty turns projects off)
+  LM_LOCAL_PROJECTS_REGISTRY default ~/.config/kevin-ai/projects-local.json (you write it; the agent cannot)
+  ~/.config/kevin-ai/tool-service.env, if it exists (mode 600), is loaded first: put KEVIN_GITHUB_TOKEN there
 EOF2
   exit 2
 }
@@ -42,6 +45,10 @@ main() {
   pidfile=$state/chat-tools-local.pid
   log=$state/chat-tools-local.log
   local cmd=(python3 "$root/tools/chat_tools.py" --host 127.0.0.1 --port "$port" --config "$config" --state-dir "$state")
+  local projects=${LM_LOCAL_PROJECTS_BASE-$HOME/KevinProjects}
+  if [[ -n "$projects" ]]; then
+    cmd+=(--projects-base "$projects" --projects-registry "${LM_LOCAL_PROJECTS_REGISTRY:-$HOME/.config/kevin-ai/projects-local.json}")
+  fi
 
   if [[ "$dry" == 1 ]]; then
     if [[ "$stop" == 1 ]]; then echo "stop: pid file $pidfile"; else printf '%q ' "${cmd[@]}"; echo; fi
@@ -64,6 +71,12 @@ main() {
   if [[ "$stop" == 1 ]]; then stop_old; echo "local tool service stopped"; return 0; fi
 
   mkdir -p "$state" "$(dirname "$config")"
+  [[ -z "$projects" ]] || mkdir -p "$projects"
+  local envfile=$HOME/.config/kevin-ai/tool-service.env
+  if [[ -f "$envfile" ]]; then
+    [[ "$(stat -f %Lp "$envfile" 2>/dev/null || stat -c %a "$envfile")" == 600 ]] || { echo "$envfile must have mode 600" >&2; exit 1; }
+    set -a; . "$envfile"; set +a
+  fi
   [[ -f "$root/tools/chat_tools.py" ]] || { echo "missing $root/tools/chat_tools.py" >&2; exit 1; }
   stop_old
   nohup "${cmd[@]}" >"$log" 2>&1 &
