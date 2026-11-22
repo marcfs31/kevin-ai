@@ -324,9 +324,10 @@ class ToolsTest(ProxyTest):
         self.assertNotIn("Authorization", headers)
         self.assertNotIn("Cookie", headers)
 
-    def test_a_page_served_from_another_address_than_loopback_still_works_and_another_site_does_not(self):
-        # The browser names the address it used in both Host and Origin, e.g. a LAN address.
-        hdr = {"Content-Type": "application/json", "Host": "192.168.1.5:8000", "Origin": "http://192.168.1.5:8000"}
+    def test_an_origin_equal_to_the_host_the_page_was_served_on_passes_and_another_site_does_not(self):
+        # The browser names the address it used in both Host and Origin (behind a password that can be a LAN
+        # address; here a name the proxy accepts without one), whatever the port.
+        hdr = {"Content-Type": "application/json", "Host": "localhost:8000", "Origin": "http://localhost:8000"}
         resp, _ = self.request("POST", "/tools/search", body=b"{}", headers=hdr)
         self.assertEqual(resp.status, 200)
         before = len(self.tools_upstream.requests)
