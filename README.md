@@ -194,6 +194,19 @@ under `.git`. Writes stop at 2 MB a file and when the disk would drop under `--p
 use 20 on the model server, whose second SSD also holds the models). One copy of the service runs per host, the
 server and the Mac, and a project lives on the host whose service is asked.
 
+The same server has local git tools: `git_status`, `git_diff`, `git_log`, `git_show`, `git_branches`,
+`git_branch_create` (named `kevin/<name>`), `git_switch`, `git_add`, `git_commit`, `git_restore` and `git_init`.
+Git runs as an argument list with no user or system configuration, and with hooks, fsmonitor, external diff,
+editor, pager and credential helper switched off, so a repository cannot run code through its own config.
+Commits are refused on the project's default branch unless the registry sets `"allowMain": true`; the committer is
+the registry's `identity` (default Kevin AI, developer@marcfors.com). Per project the registry also takes
+`"defaultBranch"` (default `main`):
+
+```json
+{"identity": {"name": "Kevin AI", "email": "developer@marcfors.com"},
+ "projects": {"demo": {"title": "Demo", "root": "demo", "defaultBranch": "main", "allowMain": false}}}
+```
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
