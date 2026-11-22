@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - 2026-11-22
 
 ### Changed
 - The chat is named Kevin AI, with an Orbit logo (a coral disc with a K and an orbiting dot, `web/public/logo.svg`) in the header and as the tab icon; the page title and the app name are Kevin AI in English and Spanish.
