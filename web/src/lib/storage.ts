@@ -18,6 +18,13 @@ export interface Stats {
   /** What was counted locally, kept when the server sent no usage. */
   promptEstimate: number | null;
   completionEstimate: number | null;
+  /** The tool definitions that went with the request (names, estimated tokens); null when none did. */
+  tools?: ToolsSent | null;
+}
+
+export interface ToolsSent {
+  names: string[];
+  tokens: number;
 }
 
 export interface ToolCall {
@@ -201,6 +208,13 @@ function content(v: unknown): string | ContentPart[] | null {
   return parts;
 }
 
+function toolsSent(v: unknown): ToolsSent | null {
+  const o = obj(v);
+  if (!o || !Array.isArray(o.names) || !o.names.every((n) => typeof n === 'string')) return null;
+  const tokens = numOrNull(o.tokens);
+  return tokens === null || o.names.length === 0 ? null : { names: o.names as string[], tokens };
+}
+
 function stats(v: unknown): Stats | null {
   const o = obj(v);
   if (!o) return null;
@@ -212,6 +226,7 @@ function stats(v: unknown): Stats | null {
     completionTokens: numOrNull(o.completionTokens),
     promptEstimate: numOrNull(o.promptEstimate),
     completionEstimate: numOrNull(o.completionEstimate),
+    tools: toolsSent(o.tools),
   };
 }
 

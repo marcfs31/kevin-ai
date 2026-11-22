@@ -244,6 +244,8 @@ export const en = {
   'chatStats.prompt': 'Prompt',
   'chatStats.reply': 'Last reply',
   'chatStats.free': 'Free',
+  'chatStats.tools': 'Tools',
+  'chatStats.toolsSent': 'Sent with the last request: {count} (≈{tokens} tokens, estimated) — {names}',
   'chatStats.read': 'Read',
   'chatStats.written': 'Written',
   'chatStats.turns': 'Turns',

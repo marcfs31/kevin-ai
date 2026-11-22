@@ -137,6 +137,14 @@ describe('runAgent', () => {
     expect(second?.stats).toMatchObject({ promptTokens: 9, completionTokens: 2 });
   });
 
+  it('records which tool definitions went with each reply, and none when tools are off', async () => {
+    const withTools = await drive([say('a')]);
+    expect(withTools.committed[0]).toMatchObject({ stats: { tools: { names: ['calculator', 'current_time'], tokens: expect.any(Number) } } });
+    expect((withTools.committed[0] as AssistantMessage).stats?.tools?.tokens).toBeGreaterThan(0);
+    const without = await drive([say('a')], { settings: { ...settings, tools: false } });
+    expect((without.committed[0] as AssistantMessage).stats?.tools).toBeNull();
+  });
+
   it('expects to read only what the server has not cached, and all of it when the tools changed', async () => {
     const prior: AssistantMessage = {
       id: 'a', role: 'assistant', content: 'earlier', reasoning: '', status: 'done', error: null, createdAt: 0,

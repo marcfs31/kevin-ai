@@ -1,7 +1,7 @@
 import { useI18n } from '../i18n';
 import type { ServerInfo } from '../lib/api';
 import { chatFigures, contextBar } from '../lib/chatStats';
-import type { Message } from '../lib/storage';
+import type { Message, ToolsSent } from '../lib/storage';
 import type { Count, Figure } from '../lib/tokens';
 
 function Box({ kind, label, value }: { kind: 'prompt' | 'reply' | 'free' | 'plain'; label: string; value: string }) {
@@ -15,10 +15,10 @@ function Box({ kind, label, value }: { kind: 'prompt' | 'reply' | 'free' | 'plai
 
 /** "This chat": the context window as one bar of coloured boxes with their numbers, and the
  * chat's totals as boxes under it. Every figure is also written out, so colour is never the only cue. */
-export function ChatStats({ messages, systemPrompt, autoCompact, compactAt, info, live }: { messages: Message[]; systemPrompt: string; autoCompact: boolean; compactAt: number; info: ServerInfo | null; live: Count | null }) {
-  const { t, num } = useI18n();
+export function ChatStats({ messages, systemPrompt, autoCompact, compactAt, info, live, liveTools = null }: { messages: Message[]; systemPrompt: string; autoCompact: boolean; compactAt: number; info: ServerInfo | null; live: Count | null; liveTools?: ToolsSent | null }) {
+  const { t, tp, num } = useI18n();
   const figures = chatFigures(messages, live);
-  const bar = contextBar(messages, systemPrompt, info, live, compactAt);
+  const bar = contextBar(messages, systemPrompt, info, live, compactAt, liveTools);
   if (!figures || !bar) return null;
   const f = (x: Figure) => `${x.estimated ? '≈' : ''}${num(x.n)}`;
   const approx = bar.estimated ? '≈' : '';
@@ -29,14 +29,21 @@ export function ChatStats({ messages, systemPrompt, autoCompact, compactAt, info
   const summary = bar.limit === null
     ? t('chatStats.barUnknown', { prompt: `${approx}${num(bar.prompt)}`, reply: num(bar.reply) })
     : t('chatStats.bar', { prompt: `${approx}${num(bar.prompt)}`, reply: num(bar.reply), free: `${approx}${num(bar.free ?? 0)}`, limit: num(bar.limit), percent: percent ?? '0' });
+  const toolsLine = bar.tools ? t('chatStats.toolsSent', { count: tp('tools.count', bar.tools.names.length), tokens: num(bar.tools.tokens), names: bar.tools.names.join(', ') }) : null;
   return (
     <section className="chat-stats" aria-label={t('chatStats.label')}>
       <div className="ctx-wrap">
-        <div className={`ctx-bar${near ? ' near' : ''}`} role="img" aria-label={summary}>
+        <div className={`ctx-bar${near ? ' near' : ''}`} role="img" aria-label={toolsLine ? `${summary}. ${toolsLine}` : summary}>
           <span className="seg seg-prompt" style={{ flexGrow: Math.max(bar.prompt, 1) }}>
             <span className="box-label">{t('chatStats.prompt')}</span>
             <span className="box-value">{approx}{num(bar.prompt)}</span>
           </span>
+          {bar.tools && (
+            <span className="seg seg-tools" style={{ flexGrow: Math.max(bar.tools.tokens, 1) }}>
+              <span className="box-label">{t('chatStats.tools')}</span>
+              <span className="box-value">≈{num(bar.tools.tokens)}</span>
+            </span>
+          )}
           <span className="seg seg-reply" style={{ flexGrow: Math.max(bar.reply, 1) }}>
             <span className="box-label">{t('chatStats.reply')}</span>
             <span className="box-value">{num(bar.reply)}</span>
@@ -56,6 +63,7 @@ export function ChatStats({ messages, systemPrompt, autoCompact, compactAt, info
           : t(autoCompact ? 'chatStats.captionAuto' : 'chatStats.captionManual', { percent: percent ?? '0', limit: num(bar.limit), at: Math.round(bar.autoAt * 100) })}
         {bar.estimated && ` · ${t('tokens.estimated')}`}
       </p>
+      {toolsLine && <p className="hint ctx-caption">{toolsLine}</p>}
       <ul className="chat-boxes" aria-label={t('chatStats.totals')}>
         <Box kind="prompt" label={t('chatStats.read')} value={f(figures.read)} />
         <Box kind="reply" label={t('chatStats.written')} value={f(figures.written)} />

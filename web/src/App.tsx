@@ -590,6 +590,7 @@ function Chat({ state, setState, storage, notice }: {
           compactAt={modes.compactAt}
           info={info}
           live={live && live.convId === active?.id ? liveCount(live.info.usage, live.info.promptEstimate, live.info.chunks) : null}
+          liveTools={live && live.convId === active?.id ? live.info.tools : null}
         />
         <div className="chat-tools" role="group" aria-label={t('compact.group')}>
           <label className="check">
