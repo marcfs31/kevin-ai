@@ -171,7 +171,10 @@ with its own virtualenv made by `uv`; settings in `~/.config/searxng/settings.ym
 a random key) and starts it on 127.0.0.1:8888 with the JSON format on. It needs about 250 MB. In
 Settings > Tools and internet, turn the internet on and put `http://127.0.0.1:8888` as the web search
 address: the address is used by the tool service, which runs on that machine too. Queries go from
-SearXNG to the search engines it is configured for, and nowhere else.
+SearXNG to the search engines it is configured for, and nowhere else. The packages are installed from
+`scripts/searxng-requirements.txt` (exact versions of the tested environment). The tool service only
+searches a loopback address other than its own port; a private address on the network must be listed
+when starting it (`chat_tools.py --search-allow 192.168.1.20:8888`).
 
 ## Ubuntu Server installation
 
@@ -306,7 +309,8 @@ To do the same steps by hand, follow [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ```sh
 make            # build bin/* (one binary per src/cli/*.c)
-make test       # build and run every tests/unit/test_*.c
+make test       # build and run every tests/unit/test_*.c and tests/scripts/test_*.sh (the web chat's
+                # lint, typecheck, tests and build, and the tool service's Python tests; needs Node)
 make gate       # golden gates for Qwen3.5 and Gemma 4 against the oracle fixtures
 make sanitize   # unit tests under ASan and UBSan
 make portable   # x86-64 build with -mavx2 -mfma instead of -march=native
