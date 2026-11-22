@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot setup of small-llm-in-c on an Ubuntu Server: check tools, build, test, download
+# One-shot setup of Kevin AI on an Ubuntu Server: check tools, build, test, download
 # the model checkpoint, make the q8 file, and print the chat command.
 # Run it from a checkout of the repository. It never uses sudo itself.
 set -euo pipefail

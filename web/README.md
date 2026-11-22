@@ -47,7 +47,7 @@ python3 tools/chat_server.py --upstream http://127.0.0.1:8080        # http://12
 ```
 
 `scripts/deploy-web.sh` builds on this machine and copies `web/dist/` to the server
-(`DEPLOY_HOST`, `DEPLOY_PATH` override `toor@192.168.1.96` and `~/small-llm-in-c/web/dist/`).
+(`DEPLOY_HOST`, `DEPLOY_PATH` override `toor@192.168.1.96` and `~/kevin-ai/web/dist/`).
 
 ### tools/chat_server.py
 

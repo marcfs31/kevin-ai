@@ -30,8 +30,8 @@ The scripts never use sudo.
 Clone the repository on the server, or copy it with `rsync` from your Mac. Then change into it:
 
 ```sh
-git clone https://github.com/marcfs31/small-llm-in-c.git ~/small-llm-in-c
-cd ~/small-llm-in-c
+git clone https://github.com/marcfs31/kevin-ai.git ~/kevin-ai
+cd ~/kevin-ai
 ```
 
 ## 3. Build and run the unit tests
