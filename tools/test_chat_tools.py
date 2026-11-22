@@ -601,6 +601,30 @@ class Search(Base):
         status, doc = self.ask(query="x", searchUrl="http://169.254.169.254", internet=True)
         self.assertEqual((status, doc["error"]["code"]), (403, "blocked_address"))
 
+    def test_a_private_address_needs_to_be_listed_and_this_service_is_never_a_search_instance(self):
+        real_check, real_open = chat_tools.check_address, chat_tools.open_connection
+
+        def check(host, port, allow_private):
+            return "10.0.0.5" if host == "lan-box" else real_check(host, port, allow_private)
+
+        def opened(url, allow_private, timeout, ip=None):
+            if ip == "10.0.0.5":
+                raise chat_tools.ToolError("unreachable", "refused", 502)
+            return real_open(url, allow_private, timeout, ip)
+
+        with mock.patch.object(chat_tools, "check_address", check), mock.patch.object(chat_tools, "open_connection", opened):
+            status, doc = self.ask(query="x", searchUrl="http://lan-box:9", internet=True)
+            self.assertEqual((status, doc["error"]["code"]), (403, "blocked_address"))
+            self.assertIn("--search-allow lan-box:9", doc["error"]["message"])
+            # Listed, it is tried (and nothing listens there).
+            server = self.serve()
+            server.search_allow = frozenset({"lan-box:9"})
+            status, doc = self.ask(query="x", searchUrl="http://lan-box:9", internet=True)
+            self.assertEqual((status, doc["error"]["code"]), (502, "unreachable"))
+            status, doc = self.ask(query="x", searchUrl=f"http://127.0.0.1:{self.port}", internet=True)
+            self.assertEqual((status, doc["error"]["code"]), (403, "blocked_address"))
+            self.assertIn("itself", doc["error"]["message"])
+
     def test_a_sub_path_instance_is_searched_under_its_path(self):
         s = self.searx({"results": []})
         self.ask(query="x", searchUrl=s.url + "/searx/", internet=True)
