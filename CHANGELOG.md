@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows
 - `tools/chat_server.py` gzips text files (HTML, JS, CSS, JSON, SVG) for browsers that accept it and keeps the compressed bytes until the file changes: the 791 kB script is 237 kB on the wire.
 
 ### Changed
+- The select arrows (effort, speed and every other select) are drawn inside the box with room around them instead of against its edge, and the items of the header row are separated by a thin rule instead of a dot; the dot that sat inside the "Internet on" pill is gone. On a phone the separators give way to spacing.
 - Type scale with real steps (13 px interface text, 16 px section titles, 20 px dialog titles, 25 px for the Kevin AI name), the Settings dialog is set apart by its border and the backdrop without a wide shadow, and the model button has 8 px of side padding.
 
 ### Fixed
