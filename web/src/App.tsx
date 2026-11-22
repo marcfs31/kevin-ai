@@ -15,6 +15,8 @@ import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, toolsProjects, type ProjectInfo, type ServerInfo } from './lib/api';
 import { ProjectBar } from './components/ProjectBar';
+import { WorkflowBar } from './components/WorkflowBar';
+import { setStep, startWorkflow, type Workflow } from './lib/workflows';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
@@ -119,6 +121,7 @@ function Chat({ state, setState, storage, notice }: {
     return () => controller.abort();
   }, [projectsOn, mcpReload]);
   const [draftProject, setDraftProject] = useState<string | null>(null);
+  const [draftWorkflow, setDraftWorkflow] = useState<Workflow | null>(null);
   // The user is asked before a tool that is not read-only runs; Stop answers no.
   const [approval, setApproval] = useState<{ request: ApprovalRequest; answer: (a: Answer) => void } | null>(null);
   const approve = (request: ApprovalRequest, signal: AbortSignal) =>
@@ -152,7 +155,7 @@ function Chat({ state, setState, storage, notice }: {
   const projectId = active ? active.projectId : draftProject;
   const shownProjects = projectsOn ? projects : [];
   const project = shownProjects.find((p) => p.id === projectId) ?? null;
-  const speed = active ? active.speed : draftSpeed;
+  const workflow = active ? active.workflow : draftWorkflow;  const speed = active ? active.speed : draftSpeed;
   const modes = resolveModes(effort, speed, state.settings);
   // Context window and vision follow the model chosen, so everything below reads `info`.
   const info = infoForModel(serverInfo, modelId);
@@ -207,6 +210,7 @@ function Chat({ state, setState, storage, notice }: {
 
   const updateConv = (id: string, f: (c: Conversation) => Conversation) =>
     setState((s) => ({ ...s, conversations: s.conversations.map((c) => (c.id === id ? f(c) : c)) }));
+  const setWorkflow = (w: Workflow | null, convId = active?.id ?? null) => (convId ? updateConv(convId, (c) => ({ ...c, workflow: w })) : setDraftWorkflow(w));
 
   const assessDraft = useCallback(
     (typed: string, attachments: Attachment[]) => {
@@ -286,7 +290,7 @@ function Chat({ state, setState, storage, notice }: {
         thinking: modes.thinking,
         compactAt: modes.compactAt,
         cacheKey: `${convId}|${requestModel ?? ''}`,
-        tools: toolsOn ? createToolHost({ mcp: mcpSpecs, config: state.settings.toolsConfig, internet: state.settings.internet, project }) : undefined,
+        tools: toolsOn ? createToolHost({ mcp: mcpSpecs, config: state.settings.toolsConfig, internet: state.settings.internet, project, workflow, onWorkflowChange: (w) => setWorkflow(w, convId) }) : undefined,
         approve,
         info,
         signal: controller.signal,
@@ -365,7 +369,7 @@ function Chat({ state, setState, storage, notice }: {
     };
     let conv = target;
     if (!conv) {
-      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, effort, speed, projectId: draftProject, messages: [] };
+      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, effort, speed, projectId: draftProject, workflow: draftWorkflow, messages: [] };
       const created = conv;
       setState((s) => ({ ...s, conversations: [...s.conversations, created], activeId: created.id }));
     }
@@ -599,6 +603,16 @@ function Chat({ state, setState, storage, notice }: {
           {live && live.convId === active?.id && <MessageView m={live.message} live={live.info} />}
         </div>
         {approval && <ApprovalCard request={approval.request} onAnswer={approval.answer} />}
+        {projectsOn && (
+          <WorkflowBar
+            project={project}
+            workflow={workflow}
+            disabled={busy}
+            onStart={(def) => setWorkflow(startWorkflow(def))}
+            onSet={(step, status) => workflow && setWorkflow(setStep(workflow, step, status))}
+            onClear={() => setWorkflow(null)}
+          />
+        )}
         {compacting && (
           <p className="note" role="status">
             {t('compact.running')}

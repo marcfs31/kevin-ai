@@ -3,7 +3,8 @@
 // failure is a result the model can read.
 import { ApiError, toolsCall, toolsSearch, type ProjectInfo, type WireTool } from './api';
 import type { ToolCall, InternetConfig, ToolsConfig } from './storage';
-import { allowKey, builtinSpecs, findToolsSpec, toWire, webSearchSpec, type ToolSpec } from './toolRegistry';
+import { allowKey, builtinSpecs, findToolsSpec, toWire, webSearchSpec, workflowStepSpec, type ToolSpec } from './toolRegistry';
+import { STEP_STATUSES, setStep, stepResult, workflowGuidance, type StepResolution, type Workflow } from './workflows';
 import { searchSpecs, selectTools } from './toolSelect';
 import { parseArguments, runTool, toolDefinitions, type ToolResult } from './tools';
 
@@ -101,6 +102,10 @@ export interface HostInput {
   internet: InternetConfig;
   /** The project this chat works in, when one is chosen and the service still lists it. */
   project?: ProjectInfo | null;
+  /** The workflow this chat follows; the model ticks its steps with workflow_step. */
+  workflow?: Workflow | null;
+  /** Called with the checklist after each step the model marks, so the page can show and save it. */
+  onWorkflowChange?: (w: Workflow) => void;
 }
 
 /** Said once when a project is chosen: where the agent works and the rules the service enforces anyway. */
@@ -138,17 +143,19 @@ export const PROJECT_SERVER = 'project';
 
 export function createToolHost(i: HostInput): ToolHost {
   const project = i.project ?? null;
+  // The checklist as this run has changed it: several steps can be ticked in one run.
+  let workflow = i.workflow ?? null;
   const enabled = i.mcp.filter((s) => {
     if (s.source.kind !== 'mcp') return false;
     const server = i.config.servers[s.source.server];
     return !!server?.on && !server.disabledTools.includes(s.source.tool);
   });
   const searchOn = i.internet.on && i.internet.searchUrl !== '';
-  const pinned = [...builtinSpecs(), ...(searchOn ? [webSearchSpec()] : []), ...(enabled.length ? [findToolsSpec()] : [])];
+  const pinned = [...builtinSpecs(), ...(searchOn ? [webSearchSpec()] : []), ...(enabled.length ? [findToolsSpec()] : []), ...(workflow ? [workflowStepSpec()] : [])];
   const byName = new Map([...pinned, ...enabled].map((s) => [s.name, s]));
   return {
     external: enabled.length > 0 || searchOn,
-    guidance: [toolGuidance({ search: searchOn, mcp: enabled.length > 0 }), project ? projectGuidance(project) : ''].filter(Boolean).join(' '),
+    guidance: [toolGuidance({ search: searchOn, mcp: enabled.length > 0 }), project ? projectGuidance(project) : '', workflow ? workflowGuidance(workflow) : ''].filter(Boolean).join(' '),
     definitions: (query, unlocked) =>
       selectTools({ pinned, candidates: enabled, query, budgetTokens: i.config.budgetTokens, maxTools: MAX_TOOLS_PER_STEP, unlocked }).map(toWire),
     approval(call) {
@@ -176,6 +183,18 @@ export function createToolHost(i: HostInput): ToolHost {
             unlock(hits.map((h) => h.name));
             const lines = hits.map((h) => `${h.name}: ${h.description.slice(0, 160)}`);
             return { content: hits.length ? `${lines.join('\n')}\nThese are now available to call.` : 'no matching tool', isError: false };
+          }
+          case 'workflow': {
+            if (!workflow) return fail('there is no workflow in this chat');
+            const step = typeof parsed.args.step === 'string' ? Number(parsed.args.step) : parsed.args.step;
+            const status = parsed.args.status;
+            if (typeof step !== 'number' || !Number.isInteger(step) || step < 1 || step > workflow.steps.length) return fail(`step must be a whole number from 1 to ${workflow.steps.length}`);
+            if (typeof status !== 'string' || !(STEP_STATUSES as readonly string[]).includes(status)) return fail('status must be done, skipped or blocked');
+            const next = setStep(workflow, step, status as StepResolution, typeof parsed.args.note === 'string' ? parsed.args.note : '');
+            if (!next) return fail('no such step');
+            workflow = next;
+            i.onWorkflowChange?.(next);
+            return { content: stepResult(next, step), isError: false };
           }
           case 'search': {
             if (!query) return fail('query must be a non-empty string');

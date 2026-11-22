@@ -38,6 +38,17 @@ describe('effort and speed per conversation', () => {
   });
 });
 
+describe('workflow per conversation', () => {
+  it('is kept with its checklist, and is null when absent or not a workflow', () => {
+    const saved = { id: 'ship', title: 'Ship it', steps: [{ text: 'Test', status: 'done', note: 'green' }, { text: 'Push', status: 'todo', note: '' }] };
+    const state = migrate({
+      version: 1,
+      conversations: [{ id: 'a', messages: [] }, { id: 'b', workflow: saved, messages: [] }, { id: 'c', workflow: { id: 'x', steps: 'no' }, messages: [] }],
+    });
+    expect(state?.conversations.map((c) => c.workflow)).toEqual([null, saved, null]);
+  });
+});
+
 describe('project per conversation', () => {
   it('loads null when absent or not a plain id, and keeps a valid id', () => {
     const state = migrate({
