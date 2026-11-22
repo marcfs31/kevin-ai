@@ -17,7 +17,8 @@ chat_server.py forwards them), so the page's CSP stays 'self' only.
   this process's secrets.
 - Servers and tools that reach the network only run when the request says the internet is on.
   The first start of a catalog package also needs it, because the package is downloaded then.
-- POST /tools/search asks a SearXNG instance (its URL comes with the request) and returns text.
+- POST /tools/search asks a SearXNG instance (its URL comes with the request) and returns text. The
+  instance may be on loopback (not this service's own port); a private address needs --search-allow.
 - It listens on 127.0.0.1. A --host that is not loopback needs CHAT_PASSWORD in the environment,
   as chat_server.py does; without a password requests must name a loopback Host.
 
@@ -212,10 +213,11 @@ def tls_context():
     return ctx
 
 
-def open_connection(url, allow_private, timeout):
+def open_connection(url, allow_private, timeout, ip=None):
+    """A connection to url. `ip` is an address already checked for it; without one the name is resolved and checked here."""
     parts = urllib.parse.urlsplit(url)
     port = parts.port or (443 if parts.scheme == "https" else 80)
-    ip = check_address(parts.hostname, port, allow_private)
+    ip = ip or check_address(parts.hostname, port, allow_private)
     try:
         sock = socket.create_connection((ip, port), timeout=timeout)
     except OSError as e:
@@ -729,9 +731,24 @@ class Manager:
 
 # ---- web search -------------------------------------------------------------------------------
 
-def web_search(search_url, query, count):
+def search_target(parts, allow, own_port):
+    """The address of the search instance, after the checks that keep it from being a way to probe the network:
+    never link-local and the like; loopback only for another service than this one; a private address only when
+    it is listed (host:port) in `allow`."""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    ip = check_address(parts.hostname, port, True)
+    addr = ipaddress.ip_address(ip)
+    if addr.is_loopback and own_port is not None and port == own_port:
+        raise ToolError("blocked_address", "that is the tool service itself, not a search instance", 403)
+    if addr.is_private and not addr.is_loopback and f"{parts.hostname}:{port}" not in allow:
+        raise ToolError("blocked_address", f"{parts.hostname}:{port} is a private address: start the service with --search-allow {parts.hostname}:{port} to use it", 403)
+    return ip
+
+
+def web_search(search_url, query, count, allow=(), own_port=None):
     """Asks a SearXNG instance (its JSON API) and returns the results as text. The instance is the
-    user's own choice, so a private or loopback address is fine; link-local and the like never are."""
+    user's own choice: a loopback address is fine, a private one when listed in `allow`; link-local
+    and the like never are."""
     parts = urllib.parse.urlsplit(search_url) if isinstance(search_url, str) else None
     if not parts or parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
         raise ToolError("bad_request", "searchUrl must be an http(s) address without a user name or password", 400)
@@ -740,7 +757,7 @@ def web_search(search_url, query, count):
     count = count if isinstance(count, int) and 1 <= count <= 10 else 5
     path = parts.path.rstrip("/") + "/search"
     qs = urllib.parse.urlencode({"q": query, "format": "json"})
-    conn = open_connection(search_url, True, SEARCH_TIMEOUT_S)
+    conn = open_connection(search_url, True, SEARCH_TIMEOUT_S, ip=search_target(parts, allow, own_port))
     try:
         conn.request("GET", f"{path}?{qs}", headers={"Accept": "application/json", "User-Agent": "lm-chat-tools", "Host": parts.netloc})
         res = conn.getresponse()
@@ -895,15 +912,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return mgr.add_from_catalog(groups[0], internet, self.server.scratch)
         if not internet:
             raise ToolError("internet_off", "web search needs the internet and it is off", 403)
-        return web_search(doc.get("searchUrl"), doc.get("query"), doc.get("count"))
+        return web_search(doc.get("searchUrl"), doc.get("query"), doc.get("count"), self.server.search_allow, self.server.server_address[1])
 
 
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, manager, password, scratch):
+    def __init__(self, addr, manager, password, scratch, search_allow=()):
         self.address_family = socket.AF_INET6 if ":" in addr[0] else socket.AF_INET
+        self.search_allow = frozenset(search_allow)
         self.manager = manager
         self.password = password
         self.scratch = scratch
@@ -920,6 +938,8 @@ def main(argv=None, env=None):
     ap.add_argument("--state-dir", default=os.path.join(os.path.expanduser("~"), ".local", "share", "lm-chat"))
     ap.add_argument("--scratch", default=os.path.join(os.path.expanduser("~"), "chat-files"),
                     help="the one directory the filesystem server may touch (default ~/chat-files)")
+    ap.add_argument("--search-allow", action="append", default=[], metavar="HOST:PORT",
+                    help="a private (not loopback) address the web search may use; repeat for several")
     ap.add_argument("--max-running", type=int, default=MAX_RUNNING)
     ap.add_argument("--idle-seconds", type=float, default=IDLE_SECONDS)
     args = ap.parse_args(argv)
@@ -930,7 +950,7 @@ def main(argv=None, env=None):
         sys.exit(f"chat_tools: catalog {args.catalog}: {e}")
     manager = Manager(args.config, catalog, dict(env), args.state_dir, args.max_running, args.idle_seconds)
     try:
-        server = Server((args.host, args.port), manager, password, args.scratch)
+        server = Server((args.host, args.port), manager, password, args.scratch, args.search_allow)
     except OSError as e:
         sys.exit(f"chat_tools: {e}")
 
