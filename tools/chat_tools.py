@@ -163,6 +163,15 @@ def load_catalog(path):
     return out
 
 
+def reap_safely(manager):
+    """One pass of the idle reaper; an error is logged and the next pass still runs."""
+    try:
+        return manager.reap()
+    except Exception as e:  # noqa: BLE001  (the thread must not die with the first odd child)
+        sys.stderr.write(f"chat_tools: reaper: {type(e).__name__}: {e}\n")
+        return []
+
+
 def memory_available_mb():
     """MemAvailable in MiB on Linux; None elsewhere or when it cannot be read."""
     try:
@@ -928,7 +937,7 @@ def main(argv=None, env=None):
     def reaper():
         while True:
             time.sleep(15)
-            manager.reap()
+            reap_safely(manager)
 
     threading.Thread(target=reaper, daemon=True).start()
     host = f"[{args.host}]" if ":" in args.host else args.host
