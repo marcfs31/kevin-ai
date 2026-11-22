@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { useI18n } from '../i18n';
 import type { ApprovalRequest } from '../lib/toolHost';
 
@@ -9,8 +9,11 @@ export type Answer = 'allow' | 'always' | 'deny';
 export function ApprovalCard({ request, onAnswer }: { request: ApprovalRequest; onAnswer: (a: Answer) => void }) {
   const { t } = useI18n();
   const id = useId();
+  const card = useRef<HTMLElement>(null);
+  // Focus the card, not a button: a key typed while it appears (the composer stays usable during a reply) must not answer it.
+  useEffect(() => card.current?.focus(), []);
   return (
-    <section className="approval" role="alertdialog" aria-labelledby={`${id}-t`} aria-describedby={`${id}-d`}>
+    <section ref={card} tabIndex={-1} className="approval" role="alertdialog" aria-labelledby={`${id}-t`} aria-describedby={`${id}-d`}>
       <h2 id={`${id}-t`}>{t('approval.title', { tool: request.title })}</h2>
       <p id={`${id}-d`} className="hint">
         {request.readOnly ? t('approval.hintReadOnly') : t('approval.hint')}
@@ -18,7 +21,7 @@ export function ApprovalCard({ request, onAnswer }: { request: ApprovalRequest; 
       <p className="hint">{t('approval.args')}</p>
       <pre>{request.args}</pre>
       <div className="approval-actions">
-        <button type="button" className="primary" onClick={() => onAnswer('allow')} autoFocus>
+        <button type="button" className="primary" onClick={() => onAnswer('allow')}>
           {t('approval.allow')}
         </button>
         <button type="button" onClick={() => onAnswer('always')}>
