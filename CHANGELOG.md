@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-11-22
+
+### Added
+- Project server: allowlisted commands per project (`run_<project>_<name>`, argv fixed by the owner in the registry, no shell, minimal environment, private HOME, time limit killing the process group, output tail) and an audit log of every change (`--audit-log`, JSONL, private, no contents, rotates at 5 MB).
+
 ## [0.3.8] - 2026-11-22
 
 ### Added
