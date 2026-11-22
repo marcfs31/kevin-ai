@@ -6,7 +6,7 @@ import type { Count } from './tokens';
 let n = 0;
 const user = (text: string): UserMessage => ({ id: `u${n++}`, role: 'user', content: text, typed: text, attachmentNames: [], createdAt: 0 });
 const stats = (o: Partial<Stats> = {}): Stats => ({
-  ttftMs: null, tokensPerSecond: null, promptTokens: null, cachedTokens: null, completionTokens: null, promptEstimate: null, completionEstimate: null, ...o,
+  ttftMs: null, tokensPerSecond: null, promptTokens: null, cachedTokens: null, completionTokens: null, promptEstimate: null, completionEstimate: null, tools: null, ...o,
 });
 const bot = (o: Partial<Stats>, status: AssistantMessage['status'] = 'done'): AssistantMessage => ({
   id: `a${n++}`, role: 'assistant', content: 'a', reasoning: '', status, error: null, stats: stats(o), createdAt: 0,
@@ -46,6 +46,23 @@ describe('chatFigures', () => {
 
 describe('contextBar', () => {
   const m: Message[] = [user('q'), bot({ promptTokens: 60, completionTokens: 20 })];
+
+  it('takes the tool definitions of the last request out of the prompt and lists them', () => {
+    const tools = { names: ['web_search', 'time__get_current_time'], tokens: 25 };
+    const withTools: Message[] = [user('q'), bot({ promptTokens: 60, completionTokens: 20, tools })];
+    expect(contextBar(withTools, '', info(200))).toMatchObject({ prompt: 35, tools, reply: 20, free: 120 });
+    // The server's own count wins when it is smaller than the estimate.
+    expect(contextBar([user('q'), bot({ promptTokens: 10, completionTokens: 1, tools })], '', info(200))).toMatchObject({ prompt: 0, tools: { tokens: 10 } });
+  });
+
+  it('shows no tools box when the request had none, after a summary, or for a live reply without tools', () => {
+    const live = (read: number, written: number): Count => ({ read: { n: read, estimated: true }, written: { n: written, estimated: true } });
+    expect(contextBar(m, '', info(200))?.tools).toBeNull();
+    const old: Message[] = [user('q'), bot({ promptTokens: 60, completionTokens: 20, tools: { names: ['a'], tokens: 5 } }), summary(), user('q2')];
+    expect(contextBar(old, '', info(200))?.tools).toBeNull();
+    expect(contextBar(m, '', info(200), live(90, 7), undefined, null)?.tools).toBeNull();
+    expect(contextBar(m, '', info(200), live(90, 7), undefined, { names: ['a'], tokens: 30 })).toMatchObject({ prompt: 60, tools: { names: ['a'], tokens: 30 } });
+  });
 
   it('splits the window into prompt, last reply and what is free', () => {
     expect(contextBar(m, '', info(200))).toMatchObject({ prompt: 60, reply: 20, free: 120, limit: 200, share: 0.4, estimated: false });

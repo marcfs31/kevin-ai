@@ -8,8 +8,9 @@ import { contentText, newId } from './attachments';
 import { planCompaction, shouldCompact, type Plan } from './compact';
 import { toWire } from './request';
 import type { StreamEvent, Usage } from './sse';
-import type { AssistantMessage, Message, Settings, ToolCall, ToolMessage } from './storage';
+import type { AssistantMessage, Message, Settings, ToolCall, ToolMessage, ToolsSent } from './storage';
 import { estimateWireTokens } from './tokens';
+import { estimateTokens } from './toolRegistry';
 import { builtinHost, type ApprovalRequest, type ToolHost } from './toolHost';
 import type { ToolResult } from './tools';
 
@@ -22,6 +23,8 @@ export interface LiveInfo {
   promptEstimate: number;
   /** Estimated tokens the server still has to read: the prompt less what its cache already holds. */
   readEstimate: number;
+  /** The tool definitions in this request, null when there are none. */
+  tools: ToolsSent | null;
   usage: Usage | null;
 }
 
@@ -80,7 +83,8 @@ async function streamReply(o: AgentOptions, wire: ReturnType<typeof toWire>, mes
   const sig = (defs ?? []).map((d) => d.function.name).join(',');
   const readEstimate = Math.max(0, promptEstimate - warmTokens(history, sig));
   lastToolsSig = sig;
-  const live: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate, readEstimate, usage: null };
+  const tools: ToolsSent | null = defs?.length ? { names: defs.map((d) => d.function.name), tokens: defs.reduce((n, d) => n + estimateTokens(d), 0) } : null;
+  const live: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate, readEstimate, tools, usage: null };
   const calls = new Map<number, ToolCall>();
   const publish = () => o.onLive({ ...message, toolCalls: calls.size ? [...calls.values()] : undefined }, { ...live });
   publish();
@@ -141,6 +145,7 @@ async function streamReply(o: AgentOptions, wire: ReturnType<typeof toWire>, mes
     completionTokens: u?.completionTokens ?? null,
     promptEstimate,
     completionEstimate: live.chunks,
+    tools,
   };
   if (calls.size) message.toolCalls = [...calls.values()];
 }

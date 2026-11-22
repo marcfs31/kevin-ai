@@ -2,7 +2,7 @@
 // the mean speed, how often it was compacted, and how full the context window is now. No I/O.
 import type { ServerInfo } from './api';
 import { AUTO_RATIO, contextUse } from './compact';
-import type { Message } from './storage';
+import type { Message, ToolsSent } from './storage';
 import { sessionTotals, type Count, type Figure } from './tokens';
 
 export interface ChatFigures {
@@ -35,7 +35,10 @@ export function chatFigures(messages: Message[], live: Count | null = null): Cha
 
 /** The context window as three boxes: what is re-sent, the last reply, and what is left. */
 export interface ContextBar {
+  /** The prompt without the tool definitions. */
   prompt: number;
+  /** The tool definitions sent with the latest request (tokens are an estimate); null when there were none. */
+  tools: ToolsSent | null;
   reply: number;
   /** Tokens left; null when the server did not say how large the window is. */
   free: number | null;
@@ -49,15 +52,19 @@ export interface ContextBar {
 
 /** Null for an empty chat. While a reply streams (`live`) the window is what that request holds:
  * its prompt already contains the whole chat, so it replaces the figure taken from finished replies. */
-export function contextBar(messages: Message[], systemPrompt: string, info: ServerInfo | null, live: Count | null = null, autoAt: number = AUTO_RATIO): ContextBar | null {
+export function contextBar(messages: Message[], systemPrompt: string, info: ServerInfo | null, live: Count | null = null, autoAt: number = AUTO_RATIO, liveTools: ToolsSent | null = null): ContextBar | null {
   if (messages.length === 0) return null;
   const use = live
     ? { prompt: live.read.n, reply: live.written.n, estimated: live.read.estimated || live.written.estimated }
     : contextUse(messages, systemPrompt, info);
   const limit = info?.contextLength ?? null;
   const used = use.prompt + use.reply;
+  const sent = live ? liveTools : lastToolsSent(messages);
+  // The server counts the definitions inside the prompt; they are shown as their own box, so take them out of it.
+  const toolTokens = sent ? Math.min(sent.tokens, use.prompt) : 0;
   return {
-    prompt: use.prompt,
+    prompt: use.prompt - toolTokens,
+    tools: sent ? { names: sent.names, tokens: toolTokens } : null,
     reply: use.reply,
     free: limit === null ? null : Math.max(0, limit - used),
     limit,
@@ -65,4 +72,14 @@ export function contextBar(messages: Message[], systemPrompt: string, info: Serv
     autoAt,
     estimated: use.estimated,
   };
+}
+
+/** The tools of the latest finished reply since the last summary: the request the bar describes. */
+function lastToolsSent(messages: Message[]): ToolsSent | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role === 'summary') return null;
+    if (m?.role === 'assistant' && m.status === 'done' && m.stats?.promptTokens != null) return m.stats.tools ?? null;
+  }
+  return null;
 }

@@ -250,6 +250,8 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'chatStats.prompt': 'Prompt',
   'chatStats.reply': 'Última respuesta',
   'chatStats.free': 'Libre',
+  'chatStats.tools': 'Herramientas',
+  'chatStats.toolsSent': 'Enviadas con la última petición: {count} (≈{tokens} tokens, estimado) — {names}',
   'chatStats.read': 'Leídos',
   'chatStats.written': 'Escritos',
   'chatStats.turns': 'Turnos',
