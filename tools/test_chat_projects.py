@@ -65,7 +65,7 @@ class Base(unittest.TestCase):
 class Registry(Base):
     def test_a_valid_registry_is_filled_in_and_a_missing_one_means_no_projects(self):
         p = cp.load_registry(self.registry, self.base)
-        self.assertEqual(p["demo"], {"id": "demo", "title": "Demo", "root": self.root})
+        self.assertEqual(p["demo"], {"id": "demo", "title": "Demo", "root": self.root, "defaultBranch": "main", "allowMain": False})
         self.assertEqual(cp.load_registry(os.path.join(self.tmp, "none.json"), self.base), {})
 
     def test_a_root_outside_the_base_a_bad_id_or_a_missing_folder_is_refused(self):
@@ -241,6 +241,27 @@ class Files(Base):
         self.fails("fs_edit", "binary", path="b.bin", old="a", new="b")
 
 
+class RegistryExtras(Base):
+    def test_default_branch_allow_main_and_identity_are_read_and_checked(self):
+        with open(self.registry, "w") as f:
+            json.dump({"identity": {"name": "Bot", "email": "bot@example.org"},
+                       "projects": {"demo": {"root": "demo", "defaultBranch": "trunk", "allowMain": True}}}, f)
+        ident, projects = cp.load_registry_doc(self.registry, self.base)
+        self.assertEqual(ident, {"name": "Bot", "email": "bot@example.org"})
+        self.assertEqual((projects["demo"]["defaultBranch"], projects["demo"]["allowMain"]), ("trunk", True))
+        self.assertEqual(cp.load_registry_doc(os.path.join(self.tmp, "none.json"), self.base)[0], cp.DEFAULT_IDENTITY)
+        for doc, text in [({"identity": "bot", "projects": {}}, "identity must be"),
+                          ({"identity": {"name": "Bot\nX", "email": "a@b"}, "projects": {}}, "plain name"),
+                          ({"identity": {"name": "Bot", "email": "nope"}, "projects": {}}, "contain @"),
+                          ({"projects": {"demo": {"root": "demo", "defaultBranch": "-x"}}}, "defaultBranch"),
+                          ({"projects": {"demo": {"root": "demo", "allowMain": "yes"}}}, "allowMain")]:
+            with open(self.registry, "w") as f:
+                json.dump(doc, f)
+            with self.assertRaises(cp.RegistryError) as e:
+                cp.load_registry_doc(self.registry, self.base)
+            self.assertIn(text, str(e.exception), doc)
+
+
 class Selection(Base):
     def test_one_project_is_the_default_and_several_need_a_name(self):
         self.put("a.txt", "hi\n")
@@ -275,7 +296,8 @@ class Client(Base):
         client = cp.NativeProjectClient("project", {}, {}, self.host)
         self.assertEqual(client.request("initialize")["serverInfo"]["name"], "kevin-projects")
         names = [t["name"] for t in client.request("tools/list")["tools"]]
-        self.assertEqual(names, ["project_list", "fs_read", "fs_list", "fs_search", "fs_write", "fs_edit"])
+        self.assertEqual(names[:6], ["project_list", "fs_read", "fs_list", "fs_search", "fs_write", "fs_edit"])
+        self.assertEqual(len(names), 17)                      # the six file tools and the eleven git tools
         res = client.request("tools/call", {"name": "project_list", "arguments": {}})
         self.assertFalse(res["isError"])
         self.assertIsNone(client.dead)
@@ -284,7 +306,12 @@ class Client(Base):
 
     def test_reads_are_marked_read_only_and_writes_are_not(self):
         hints = {t["name"]: t["annotations"]["readOnlyHint"] for t in cp.TOOLS}
-        self.assertEqual(hints, {"project_list": True, "fs_read": True, "fs_list": True, "fs_search": True, "fs_write": False, "fs_edit": False})
+        self.assertEqual({n for n, ro in hints.items() if ro},
+                         {"project_list", "fs_read", "fs_list", "fs_search", "git_status", "git_diff", "git_log", "git_show", "git_branches"})
+        self.assertEqual({n for n, ro in hints.items() if not ro},
+                         {"fs_write", "fs_edit", "git_branch_create", "git_switch", "git_add", "git_commit", "git_restore", "git_init"})
+        destructive = {t["name"] for t in cp.TOOLS if t["annotations"].get("destructiveHint")}
+        self.assertEqual(destructive, {"git_restore"})
         for t in cp.TOOLS:
             self.assertEqual(t["inputSchema"]["type"], "object")
             self.assertIn("project", t["inputSchema"]["properties"])

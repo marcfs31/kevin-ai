@@ -380,9 +380,10 @@ class ProjectServer(Base):
         self.assertEqual(status, 200, doc)
         self.assertFalse(doc["cached"])
         tools = {t["name"]: t for t in doc["tools"]}
-        self.assertEqual(sorted(tools), ["fs_edit", "fs_list", "fs_read", "fs_search", "fs_write", "project_list"])
-        self.assertEqual({n: t["readOnly"] for n, t in tools.items()},
-                         {"fs_edit": False, "fs_list": True, "fs_read": True, "fs_search": True, "fs_write": False, "project_list": True})
+        self.assertEqual(len(tools), 17)
+        self.assertTrue({"project_list", "fs_read", "fs_edit", "git_status", "git_commit"} <= set(tools))
+        self.assertEqual({n for n, t in tools.items() if t["readOnly"]},
+                         {"project_list", "fs_read", "fs_list", "fs_search", "git_status", "git_diff", "git_log", "git_show", "git_branches"})
         self.assertTrue(all(t["tokens"] > 20 for t in tools.values()))
         self.assertEqual(self.http("GET", "/tools/status")[1]["servers"][0]["state"], "ready")
         self.http("POST", "/tools/servers/project/stop", {})
