@@ -38,6 +38,21 @@ describe('effort and speed per conversation', () => {
   });
 });
 
+describe('project per conversation', () => {
+  it('loads null when absent or not a plain id, and keeps a valid id', () => {
+    const state = migrate({
+      version: 1,
+      conversations: [
+        { id: 'a', messages: [] },
+        { id: 'b', projectId: 'demo-1', messages: [] },
+        { id: 'c', projectId: '../etc', messages: [] },
+        { id: 'd', projectId: 7, messages: [] },
+      ],
+    });
+    expect(state?.conversations.map((c) => c.projectId)).toEqual([null, 'demo-1', null, null]);
+  });
+});
+
 describe('migrate', () => {
   it('loads a document missing newer fields with their defaults', () => {
     const state = migrate({

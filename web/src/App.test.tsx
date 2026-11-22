@@ -156,7 +156,7 @@ describe('App', () => {
       );
       let step = 0;
       const fetchMock = mockFetch((url) => {
-        if (url === '/tools/status') return json({ ok: true, servers: [{ id: 'fs', title: 'fs', kind: 'stdio', network: false, state: 'stopped' }, { id: 'net', title: 'net', kind: 'stdio', network: true, state: 'stopped' }], catalog: [] });
+        if (url === '/tools/status') return json({ ok: true, servers: [{ id: 'fs', title: 'fs', kind: 'stdio', network: false, state: 'stopped' }, { id: 'net', title: 'net', kind: 'stdio', network: true, state: 'stopped' }, { id: 'project', title: 'Projects', kind: 'stdio', network: false, state: 'stopped' }], catalog: [] });
         if (url.startsWith('/tools/servers/') && url.includes('/tools?')) return json(TOOLS_LIST);
         if (url.endsWith('/call')) return json({ ok: true, content: 'wrote it', isError: false });
         step += 1;
@@ -218,6 +218,29 @@ describe('App', () => {
       expect(await screen.findByText('all done')).toBeTruthy();
       expect(screen.queryByRole('alertdialog')).toBeNull();
       expect(calls(f)).toHaveLength(1);
+    });
+
+    it('works in the chosen project: shows its git state, tells the model, and always sends its id', async () => {
+      const inner = setup({ tool: 'project__read_file', args: '{"project":"other","path":"a.txt"}', servers: { project: { on: true, disabledTools: [] } } });
+      const wrapped = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/tools/projects') return json({ ok: true, projects: [{ id: 'demo', title: 'Demo', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: ['test'] }], freeGb: 400 });
+        if (url.endsWith('/call') && String(init?.body).includes('"git_status"')) return json({ ok: true, content: '## kevin/work\n M a.txt', isError: false });
+        return inner(input, init);
+      });
+      vi.stubGlobal('fetch', wrapped);
+      renderApp();
+      await waitFor(() => expect(urls(inner).some((u) => u.includes('/tools/servers/project/tools'))).toBe(true));
+      fireEvent.change(await screen.findByLabelText('Project'), { target: { value: 'demo' } });
+      expect(await screen.findByText('kevin/work · 1 changed')).toBeTruthy();
+      typeAndSend('read a.txt');
+      expect(await screen.findByText('all done')).toBeTruthy();
+      const system = String((bodyOf(inner, 0).messages as { content: string }[])[0]?.content);
+      expect(system).toContain('You are working in the project "Demo"');
+      expect(system).toContain('run_demo_test');
+      const call = wrapped.mock.calls.map(([, init]) => String(init?.body)).find((b) => b.includes('"read_file"'));
+      expect(JSON.parse(call ?? '{}').arguments).toEqual({ project: 'demo', path: 'a.txt' });
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].projectId).toBe('demo');
     });
 
     it('refuses the call when Stop is pressed while the question is open', async () => {

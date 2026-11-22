@@ -126,7 +126,7 @@ describe('createToolHost: approval', () => {
     const h = createToolHost({ mcp: specs(tool('read', true), tool('write', false)), config: config(), internet: internet() });
     expect(h.approval(call('fs__read'))).toBeNull();
     expect(h.approval(call('fs__write', { path: '/x', text: 'hi' }, 'k'))).toEqual({
-      callId: 'k', tool: 'fs__write', allowKey: 'fs/write', title: 'fs · write', server: 'fs', network: false, args: JSON.stringify({ path: '/x', text: 'hi' }, null, 2), readOnly: false,
+      callId: 'k', tool: 'fs__write', allowKey: 'fs/write', title: 'fs · write', server: 'fs', network: false, args: JSON.stringify({ path: '/x', text: 'hi' }, null, 2), readOnly: false, description: 'does write',
     });
   });
 
@@ -235,5 +235,37 @@ describe('toolGuidance', () => {
     expect(createToolHost({ mcp: [], config: config(), internet: internet(true, 'http://127.0.0.1:8888') }).guidance).toContain('web_search');
     expect(createToolHost({ mcp: [], config: config(), internet: internet(true, '') }).guidance).toBe('');
     expect(createToolHost({ mcp: [], config: config(), internet: internet(false, 'http://127.0.0.1:8888') }).guidance).toBe('');
+  });
+});
+
+describe('createToolHost with a project', () => {
+  const demo = { id: 'demo', title: 'Demo', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: ['test'] };
+  const projectSpecs = () => mcpSpecs('project', [tool('git_status', true, 'Show the branch.'), tool('git_commit', false, 'Commit what is staged.')], new Set());
+  const host = (project: typeof demo | null) =>
+    createToolHost({ mcp: projectSpecs(), config: config({ servers: { project: { on: true, disabledTools: [] } } }), internet: internet(), project });
+
+  it('tells the model where it works, the branch rule and the commands it has; says nothing without a project', () => {
+    const g = host(demo).guidance;
+    expect(g).toContain('"Demo"');
+    expect(g).toContain('main is the default branch and commits there are refused');
+    expect(g).toContain('run_demo_test');
+    expect(g).toContain('Do not push or open a pull request unless the user asks');
+    expect(host(null).guidance).not.toContain('Demo');
+  });
+
+  it('always sends the chat\'s project, whatever the model wrote, and leaves other servers alone', async () => {
+    const fetchMock = stubFetch(() => json({ ok: true, content: '## main', isError: false }));
+    await host(demo).run(call('project__git_status', { project: 'someone-else', extra: 1 }), signal(), noUnlock);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/tools/servers/project/call');
+    expect(JSON.parse(String(init.body)).arguments).toEqual({ project: 'demo', extra: 1 });
+    await host(null).run(call('project__git_status', { project: 'x' }), signal(), noUnlock);
+    expect(JSON.parse(String((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body)).arguments).toEqual({ project: 'x' });
+  });
+
+  it('puts the tool\'s description on the approval request, so a command shows what will run', () => {
+    const request = host(demo).approval(call('project__git_commit', { message: 'm' }));
+    expect(request?.description).toBe('Commit what is staged.');
+    expect(host(demo).approval(call('project__git_status'))).toBeNull();
   });
 });

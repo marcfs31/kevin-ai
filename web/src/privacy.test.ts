@@ -38,6 +38,7 @@ describe('privacy', () => {
         ]);
         // The tool service's paths: same-origin /tools/* or /tools-local/* (toolsBase), nothing else.
         expect(f.text.match(/toolsJson\(\s*[`']([^`'?]*)/g)?.map((m) => m.replace(/^toolsJson\(\s*[`']/, ''))).toEqual([
+          '${toolsBase(host)}/projects',
           '${toolsBase(host)}/status',
           '${toolsBase(host)}/servers/${encodeURIComponent(server)}/tools',
           '${toolsBase(host)}/servers/${encodeURIComponent(server)}/call',

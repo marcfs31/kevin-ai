@@ -13,7 +13,8 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ToolsPanel } from './components/ToolsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
-import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, type ServerInfo } from './lib/api';
+import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, toolsProjects, type ProjectInfo, type ServerInfo } from './lib/api';
+import { ProjectBar } from './components/ProjectBar';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
@@ -106,6 +107,18 @@ function Chat({ state, setState, storage, notice }: {
     return () => controller.abort();
   }, [toolsOn, serverKey, internetOn, mcpKey, mcpReload]);
   const mcpSpecs = toolsOn && mcp.key === mcpKey ? (mcp.load?.specs ?? []) : [];
+  // The projects the owner registered on the model server (none when the service has no projects base or cannot be reached).
+  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  useEffect(() => {
+    if (!toolsOn) return setProjects([]);
+    const controller = new AbortController();
+    toolsProjects(controller.signal).then(setProjects, () => {
+      if (!controller.signal.aborted) setProjects([]);
+    });
+    return () => controller.abort();
+  }, [toolsOn, mcpReload]);
+  const [draftProject, setDraftProject] = useState<string | null>(null);
+  const [gitTick, setGitTick] = useState(0);
   // The user is asked before a tool that is not read-only runs; Stop answers no.
   const [approval, setApproval] = useState<{ request: ApprovalRequest; answer: (a: Answer) => void } | null>(null);
   const approve = (request: ApprovalRequest, signal: AbortSignal) =>
@@ -136,6 +149,11 @@ function Chat({ state, setState, storage, notice }: {
   const [draftEffort, setDraftEffort] = useState<Effort>(DEFAULT_EFFORT);
   const [draftSpeed, setDraftSpeed] = useState<Speed>(DEFAULT_SPEED);
   const effort = active ? active.effort : draftEffort;
+  const projectId = active ? active.projectId : draftProject;
+  const project = projects.find((p) => p.id === projectId) ?? null;
+  useEffect(() => {
+    if (!busy) setGitTick((n) => n + 1);
+  }, [busy]);
   const speed = active ? active.speed : draftSpeed;
   const modes = resolveModes(effort, speed, state.settings);
   // Context window and vision follow the model chosen, so everything below reads `info`.
@@ -270,7 +288,7 @@ function Chat({ state, setState, storage, notice }: {
         thinking: modes.thinking,
         compactAt: modes.compactAt,
         cacheKey: `${convId}|${requestModel ?? ''}`,
-        tools: toolsOn ? createToolHost({ mcp: mcpSpecs, config: state.settings.toolsConfig, internet: state.settings.internet }) : undefined,
+        tools: toolsOn ? createToolHost({ mcp: mcpSpecs, config: state.settings.toolsConfig, internet: state.settings.internet, project }) : undefined,
         approve,
         info,
         signal: controller.signal,
@@ -349,7 +367,7 @@ function Chat({ state, setState, storage, notice }: {
     };
     let conv = target;
     if (!conv) {
-      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, effort, speed, messages: [] };
+      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, effort, speed, projectId: draftProject, messages: [] };
       const created = conv;
       setState((s) => ({ ...s, conversations: [...s.conversations, created], activeId: created.id }));
     }
@@ -546,6 +564,15 @@ function Chat({ state, setState, storage, notice }: {
               {t('server.retry')}
             </button>
           </p>
+        )}
+        {toolsOn && (
+          <ProjectBar
+            projects={projects}
+            projectId={projectId}
+            disabled={busy}
+            refreshKey={gitTick}
+            onChange={(id) => (active ? updateConv(active.id, (c) => ({ ...c, projectId: id })) : setDraftProject(id))}
+          />
         )}
         <div
           className="log"

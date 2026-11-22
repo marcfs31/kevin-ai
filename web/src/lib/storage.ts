@@ -120,6 +120,8 @@ export interface Conversation {
   /** Per-chat switches next to the model picker (see lib/modes.ts). */
   effort: Effort;
   speed: Speed;
+  /** The project (a registry id on the model server) the agent works in for this chat; null = none. */
+  projectId: string | null;
   messages: Message[];
 }
 
@@ -290,7 +292,8 @@ function conversation(v: unknown): Conversation | null {
   const model = typeof o.model === 'string' && o.model ? o.model : null;
   return {
     id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), model,
-    effort: isEffort(o.effort) ? o.effort : DEFAULT_EFFORT, speed: isSpeed(o.speed) ? o.speed : DEFAULT_SPEED, messages,
+    effort: isEffort(o.effort) ? o.effort : DEFAULT_EFFORT, speed: isSpeed(o.speed) ? o.speed : DEFAULT_SPEED,
+    projectId: typeof o.projectId === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(o.projectId) ? o.projectId : null, messages,
   };
 }
 
