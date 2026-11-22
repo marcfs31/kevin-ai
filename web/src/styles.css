@@ -292,7 +292,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   background: color-mix(in srgb, #0c0e12 58%, transparent);
   cursor: pointer;
 }
-.modal-backdrop:hover { background: color-mix(in srgb, #0c0e12 58%, transparent); }
+.modal-backdrop:hover:not(:disabled) { background: color-mix(in srgb, #0c0e12 58%, transparent); }
 .settings-modal {
   position: relative;
   z-index: 1;
