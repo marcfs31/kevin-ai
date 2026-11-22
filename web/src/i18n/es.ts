@@ -144,6 +144,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'tools.addNeedsInternet': 'Activa internet para añadirlo.',
   'tools.unverified': 'aún sin probar aquí',
   'tools.budget': 'Definiciones de herramientas por paso: hasta {tokens} tokens',
+  'tools.budgetFit': 'Con este tamaño caben unas {n} de tus {total} herramientas en cada paso (máximo {cap}). Solo se envían las que coinciden con tu mensaje, así que un tamaño mayor añade herramientas solo cuando coinciden más.',
   'tools.budgetHint': 'Las herramientas integradas y find_tools se envían siempre; las demás se eligen según lo que pidas. Las herramientas que activaste suman ≈{all} tokens; leer lo que se envía tarda unos {wait} la primera vez.',
   'tools.approval': 'Preguntar antes de ejecutar una herramienta',
   'tools.approval.readonly-free': 'Solo las que no son de solo lectura (recomendado)',

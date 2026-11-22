@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolSpec } from './toolRegistry';
-import { searchSpecs, selectTools, terms } from './toolSelect';
+import { fitCount, searchSpecs, selectTools, terms } from './toolSelect';
 
 const spec = (name: string, description: string, tokens = 100): ToolSpec => ({ name, description, parameters: {}, readOnly: true, tokens, source: { kind: 'mcp', server: 's', tool: name } });
 const FILES = [
@@ -75,5 +75,23 @@ describe('selectTools', () => {
   it('does not offer a tool twice', () => {
     const out = selectTools({ ...base, unlocked: new Set(['fs__read_file']) }).map((s) => s.name);
     expect(out.filter((n) => n === 'fs__read_file')).toHaveLength(1);
+  });
+});
+
+describe('fitCount', () => {
+  const spec = (name: string, tokens: number) => ({ name, description: '', parameters: {}, readOnly: true, tokens, source: { kind: 'mcp' as const, server: 's', tool: name } });
+  const five = ['a', 'b', 'c', 'd', 'e'].map((n) => spec(n, 100));
+
+  it('grows with the budget, stops at the number of tools and at the per-step cap', () => {
+    expect(fitCount(five, 200, 500, 30, 3)).toBe(3);
+    expect(fitCount(five, 200, 700, 30, 3)).toBe(5);
+    expect(fitCount(five, 200, 9000, 30, 3)).toBe(5);
+    expect(fitCount(five, 200, 9000, 6, 3)).toBe(3);
+  });
+
+  it('is zero without tools or when the always-sent ones already use the budget', () => {
+    expect(fitCount([], 0, 5000, 30, 0)).toBe(0);
+    expect(fitCount(five, 600, 500, 30, 3)).toBe(0);
+    expect(fitCount(five, 200, 500, 3, 3)).toBe(0);
   });
 });

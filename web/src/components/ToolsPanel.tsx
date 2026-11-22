@@ -2,6 +2,9 @@ import { useCallback, useEffect, useId, useState } from 'react';
 import { useI18n } from '../i18n';
 import { ApiError, toolsAddCatalog, toolsSearch, toolsStatus, toolsStop, type ToolsStatus } from '../lib/api';
 import { estimateWaitSeconds } from '../lib/estimate';
+import { builtinSpecs, findToolsSpec, webSearchSpec } from '../lib/toolRegistry';
+import { MAX_TOOLS_PER_STEP } from '../lib/toolHost';
+import { fitCount } from '../lib/toolSelect';
 import type { McpLoad } from '../lib/mcpLoad';
 import { APPROVAL_MODES, MAX_TOOL_BUDGET, MIN_TOOL_BUDGET, type ApprovalMode, type Settings } from '../lib/storage';
 import { errorText } from './MessageView';
@@ -50,7 +53,10 @@ export function ToolsPanel({ settings, onChange, load, reload }: Props) {
   const setNet = (patch: Partial<Settings['internet']>) => onChange({ ...settings, internet: { ...net, ...patch } });
 
   const specs = load?.specs ?? [];
-  const enabledTokens = specs.reduce((n, s) => (s.source.kind === 'mcp' && cfg.servers[s.source.server]?.on && !cfg.servers[s.source.server]?.disabledTools.includes(s.source.tool) ? n + s.tokens : n), 0);
+  const enabledSpecs = specs.filter((s) => s.source.kind === 'mcp' && cfg.servers[s.source.server]?.on && !cfg.servers[s.source.server]?.disabledTools.includes(s.source.tool));
+  const enabledTokens = enabledSpecs.reduce((n, s) => n + s.tokens, 0);
+  const always = [...builtinSpecs(), ...(net.on && net.searchUrl !== '' ? [webSearchSpec()] : []), ...(enabledSpecs.length ? [findToolsSpec()] : [])];
+  const fit = fitCount(enabledSpecs, always.reduce((n, s) => n + s.tokens, 0), cfg.budgetTokens, MAX_TOOLS_PER_STEP, always.length);
 
   const act = async (key: string, f: () => Promise<unknown>) => {
     setBusyId(key);
@@ -228,6 +234,11 @@ export function ToolsPanel({ settings, onChange, load, reload }: Props) {
         <p id={`${id}-budget-hint`} className="hint">
           {t('tools.budgetHint', { all: num(enabledTokens), wait: duration(estimateWaitSeconds(Math.min(enabledTokens, cfg.budgetTokens))) })}
         </p>
+        {enabledSpecs.length > 0 && (
+          <p className="hint" role="status">
+            {t('tools.budgetFit', { n: num(fit), total: num(enabledSpecs.length), cap: num(MAX_TOOLS_PER_STEP) })}
+          </p>
+        )}
       </div>
 
       <div className="field">
