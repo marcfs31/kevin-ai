@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../i18n';
-import { DUAL_COPY_MIN_HEIGHT_PX, Markdown, needsDualCopy } from './Markdown';
+import { DUAL_COPY_MIN_HEIGHT_PX, Markdown, needsDualCopy, normalizeMathDelimiters } from './Markdown';
 
 function mockPreHeight(height: number) {
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
@@ -107,5 +107,35 @@ describe('Markdown maths', () => {
     const c = show('$\\href{javascript:alert(1)}{click}$ <b>raw</b>');
     expect(c.querySelector('a')).toBeNull();
     expect(c.querySelector('b')).toBeNull();
+  });
+});
+
+describe('Markdown maths with backslash delimiters', () => {
+  const show = (text: string, emphasisAsBold = false) =>
+    render(
+      <I18nProvider locale="en">
+        <Markdown text={text} emphasisAsBold={emphasisAsBold} />
+      </I18nProvider>,
+    ).container;
+
+  it('draws \\( ... \\) inline and \\[ ... \\] as a block, like the dollar forms', () => {
+    const c = show('Mass \\(m = \\rho V\\) and then\n\n\\[\nE = mc^2\n\\]');
+    expect(c.querySelectorAll('math')).toHaveLength(2);
+    expect(c.querySelector('math[display="block"]')).toBeTruthy();
+    const drawn = c.cloneNode(true) as HTMLElement;
+    drawn.querySelectorAll('annotation').forEach((n) => n.remove());
+    expect(drawn.textContent).not.toContain('\\');
+  });
+
+  it('leaves them alone inside code, and in text that has no closing delimiter', () => {
+    expect(normalizeMathDelimiters('Use `\\(x\\)` and\n```\n\\[y\\]\n```\n')).toBe('Use `\\(x\\)` and\n```\n\\[y\\]\n```\n');
+    expect(normalizeMathDelimiters('a \\( open but never closed')).toBe('a \\( open but never closed');
+    expect(normalizeMathDelimiters('plain text')).toBe('plain text');
+  });
+
+  it('works in the thinking text too, together with bold', () => {
+    const c = show('*Total Weight:* \\(1.0 \\text{ g}\\) to $1.2 \\text{ g}$', true);
+    expect(c.querySelector('strong')?.textContent).toBe('Total Weight:');
+    expect(c.querySelectorAll('math')).toHaveLength(2);
   });
 });
