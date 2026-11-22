@@ -21,6 +21,7 @@ describe('Kevin AI branding', () => {
     expect(svg).toContain('<ellipse');                    // the orbit
     expect(svg).toContain('M38 28V68');                   // the K's stem
     expect((svg.match(/<circle/g) ?? []).length).toBe(2); // the disc and the dot
-    expect(svg).not.toMatch(/<script|<a[ >]|href=|xlink|https?:\/\/(?!www\.w3\.org)/);
+    expect(svg).not.toMatch(/<script|<a[ >]|href=|xlink|https?:\/\/(?!www\.w3\.org)/i);   // any case: <SCRIPT> counts too
+    expect('<SCRIPT>').toMatch(/<script/i);
   });
 });
