@@ -54,6 +54,8 @@ def summarize(tool, args):
     if tool == "git_commit":
         message = str(args.get("message") or "")
         return message.splitlines()[0][:100] if message.strip() else ""
+    if tool == "pr_create":
+        return str(args.get("title") or "")[:100]
     if tool in ("git_add", "git_restore"):
         return "all" if args.get("all") is True else ", ".join(str(p) for p in (args.get("paths") or []))[:200]
     if tool in ("git_branch_create", "git_switch"):

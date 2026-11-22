@@ -28,6 +28,7 @@ import time
 import chat_audit
 import chat_commands
 import chat_git
+import chat_remote
 from chat_jail import GB, PathError, ToolFail, inside, int_arg, looks_binary, rel_of, resolve  # noqa: F401  (re-exported)
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -102,8 +103,14 @@ def load_registry_doc(path, base):
             commands = chat_commands.parse_commands(pid, p.get("commands"))
         except chat_commands.CommandError as e:
             raise RegistryError(str(e)) from None
+        remote = p.get("remote")
+        if remote is not None and not chat_remote.valid_remote(remote):
+            raise RegistryError(f"{pid}: remote must be an https URL without credentials, for example https://github.com/owner/repo.git")
+        token_env = p.get("tokenEnv")
+        if token_env is not None and not chat_remote.valid_token_env(token_env):
+            raise RegistryError(f"{pid}: tokenEnv must be the name of an environment variable, for example KEVIN_GITHUB_TOKEN")
         out[pid] = {"id": pid, "title": title, "root": root, "defaultBranch": branch, "allowMain": p.get("allowMain", False),
-                    "commands": commands}
+                    "commands": commands, "remote": remote, "tokenEnv": token_env}
     return identity, out
 
 
@@ -146,7 +153,7 @@ TOOLS = [
           {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"},
            "replace_all": {"type": "boolean"}}, ["path", "old", "new"]),
 ]
-TOOLS += chat_git.GIT_DEFS
+TOOLS += chat_git.GIT_DEFS + chat_remote.REMOTE_DEFS
 # The tools that change something: these are recorded in the audit log.
 CHANGING = {t["name"] for t in TOOLS if not t["annotations"]["readOnlyHint"]}
 # Changes whenever a definition changes, so a kept tool list is never older than the code.
@@ -413,6 +420,11 @@ class ProjectHost:
             if name in chat_git.GIT_HANDLERS:
                 project = self._project(args)
                 result = _result(chat_git.GIT_HANDLERS[name](project, args, self))
+                self._record_change(project["id"], name, args, result)
+                return result
+            if name in chat_remote.REMOTE_HANDLERS:
+                project = self._project(args)
+                result = _result(chat_remote.REMOTE_HANDLERS[name](project, args, self))
                 self._record_change(project["id"], name, args, result)
                 return result
             if name.startswith("run_"):
