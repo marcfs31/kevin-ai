@@ -53,10 +53,11 @@ describe('selectTools', () => {
     expect(names).not.toContain('git__git_status');
   });
 
-  it('stops at the budget: pinned tokens count, a match that does not fit is skipped', () => {
-    const tight = selectTools({ ...base, budgetTokens: 160 }).map((s) => s.name);
-    expect(tight).toHaveLength(2);                      // 50 pinned + one 100-token match
-    expect(selectTools({ ...base, budgetTokens: 40 }).map((s) => s.name)).toEqual(['calculator']);   // pinned stay whatever the budget
+  it('stops at the budget, which is for the tools beyond the pinned ones; a match that does not fit is skipped', () => {
+    const tight = selectTools({ ...base, budgetTokens: 110 }).map((s) => s.name);
+    expect(tight).toHaveLength(2);                      // the 50-token pinned tool is free; one 100-token match fits
+    expect(selectTools({ ...base, budgetTokens: 40 }).map((s) => s.name)).toEqual(['calculator']);   // nothing fits: only the pinned tool
+    expect(selectTools({ ...base, budgetTokens: 300 }).length).toBeGreaterThan(tight.length);        // a bigger budget only ever adds
   });
 
   it('never goes over maxTools', () => {
@@ -83,15 +84,15 @@ describe('fitCount', () => {
   const five = ['a', 'b', 'c', 'd', 'e'].map((n) => spec(n, 100));
 
   it('grows with the budget, stops at the number of tools and at the per-step cap', () => {
-    expect(fitCount(five, 200, 500, 30, 3)).toBe(3);
-    expect(fitCount(five, 200, 700, 30, 3)).toBe(5);
-    expect(fitCount(five, 200, 9000, 30, 3)).toBe(5);
-    expect(fitCount(five, 200, 9000, 6, 3)).toBe(3);
+    expect(fitCount(five, 300, 30, 3)).toBe(3);
+    expect(fitCount(five, 500, 30, 3)).toBe(5);
+    expect(fitCount(five, 9000, 30, 3)).toBe(5);
+    expect(fitCount(five, 9000, 6, 3)).toBe(3);
   });
 
-  it('is zero without tools or when the always-sent ones already use the budget', () => {
-    expect(fitCount([], 0, 5000, 30, 0)).toBe(0);
-    expect(fitCount(five, 600, 500, 30, 3)).toBe(0);
-    expect(fitCount(five, 200, 500, 3, 3)).toBe(0);
+  it('is zero without tools, with no budget, or when the per-step cap is already used by the always-sent ones', () => {
+    expect(fitCount([], 5000, 30, 0)).toBe(0);
+    expect(fitCount(five, 0, 30, 3)).toBe(0);
+    expect(fitCount(five, 500, 3, 3)).toBe(0);
   });
 });

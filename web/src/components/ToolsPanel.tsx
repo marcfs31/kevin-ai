@@ -56,7 +56,7 @@ export function ToolsPanel({ settings, onChange, load, reload }: Props) {
   const enabledSpecs = specs.filter((s) => s.source.kind === 'mcp' && cfg.servers[s.source.server]?.on && !cfg.servers[s.source.server]?.disabledTools.includes(s.source.tool));
   const enabledTokens = enabledSpecs.reduce((n, s) => n + s.tokens, 0);
   const always = [...builtinSpecs(), ...(net.on && net.searchUrl !== '' ? [webSearchSpec()] : []), ...(enabledSpecs.length ? [findToolsSpec()] : [])];
-  const fit = fitCount(enabledSpecs, always.reduce((n, s) => n + s.tokens, 0), cfg.budgetTokens, MAX_TOOLS_PER_STEP, always.length);
+  const fit = fitCount(enabledSpecs, cfg.budgetTokens, MAX_TOOLS_PER_STEP, always.length);
 
   const act = async (key: string, f: () => Promise<unknown>) => {
     setBusyId(key);
