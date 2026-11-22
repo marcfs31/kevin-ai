@@ -145,6 +145,10 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   `LM_TOOLS_URL` (default `http://127.0.0.1:8081`) points the dev proxy at the service, as
   `--tools-upstream` does for `tools/chat_server.py`; an SSH tunnel to it works like the one to
   lm-serve. The dev proxy reads this at start, so a running dev server needs a restart for `/tools`.
+  A second copy of the service on this Mac (`scripts/start-local-chat-tools.sh`, 127.0.0.1:8082) is reached at
+  `/tools-local` with the same rules: `LM_TOOLS_LOCAL_URL` for the dev proxy, `--tools-local-upstream` for
+  `chat_server.py` (404 `tools_local_not_configured` when unset). In `lib/api.ts` every `tools*` function takes
+  an optional last argument `host: 'server' | 'local'` (default `'server'`).
 - **Server state reuse.** Every earlier answer is re-sent exactly as received (no reasoning, no
   edits), because lm-serve reuses its state only then. Stopped replies are re-sent as far as
   they got; failed replies are left out, even when they streamed some text.
