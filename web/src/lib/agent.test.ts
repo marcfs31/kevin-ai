@@ -137,6 +137,23 @@ describe('runAgent', () => {
     expect(second?.stats).toMatchObject({ promptTokens: 9, completionTokens: 2 });
   });
 
+  it('puts the host guidance and the tool note in the system message, after the user\'s own prompt', async () => {
+    const host: ToolHost = { ...(await import('./toolHost')).builtinHost(), external: true, guidance: 'Search when unsure.' };
+    const up = upstream([say('a')]);
+    await runAgent({
+      history: [user], settings: { ...settings, systemPrompt: 'Be brief.' }, model: null, info: null, signal: new AbortController().signal, stream: up.stream,
+      onLive: () => undefined, onCommit: () => undefined, tools: host,
+    });
+    expect(up.requests[0]?.messages[0]).toEqual({ role: 'system', content: `Be brief.\n\nSearch when unsure.\n\n${TOOL_NOTE}` });
+    // Tools off: none of it is sent.
+    const off = upstream([say('a')]);
+    await runAgent({
+      history: [user], settings: { ...settings, tools: false, systemPrompt: 'Be brief.' }, model: null, info: null, signal: new AbortController().signal, stream: off.stream,
+      onLive: () => undefined, onCommit: () => undefined, tools: host,
+    });
+    expect(off.requests[0]?.messages[0]).toEqual({ role: 'system', content: 'Be brief.' });
+  });
+
   it('records which tool definitions went with each reply, and none when tools are off', async () => {
     const withTools = await drive([say('a')]);
     expect(withTools.committed[0]).toMatchObject({ stats: { tools: { names: ['calculator', 'current_time'], tokens: expect.any(Number) } } });
@@ -218,6 +235,7 @@ describe('runAgent with a tool host', () => {
     const ran: string[] = [];
     const h: ToolHost = {
       external: true,
+      guidance: '',
       definitions: (query, unlocked) => {
         seen.push({ query, unlocked: [...unlocked] });
         return [{ type: 'function', function: { name: 'write', description: 'w', parameters: {} } }];

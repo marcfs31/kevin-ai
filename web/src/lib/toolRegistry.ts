@@ -59,7 +59,7 @@ export function findToolsSpec(): ToolSpec {
 export function webSearchSpec(): ToolSpec {
   return make(
     WEB_SEARCH,
-    'Search the web and return the top results with their titles, addresses and snippets.',
+    'Search the web and return the top results with their titles, addresses and snippets. Use it for recent or changing facts and whenever you are unsure of the answer.',
     { type: 'object', properties: { query: { type: 'string', description: 'The search terms.' } }, required: ['query'] },
     true,
     { kind: 'search' },
