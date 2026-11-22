@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.17] - 2026-11-23
+
+### Added
+- Workflows: a project keeps step recipes in `.kevin/workflows.json`; a Workflow bar lists them when a project is chosen, a started workflow becomes a checklist saved with the chat (`workflow`, `null` for older chats), the model is told the steps and ticks them with `workflow_step` (done, skipped or blocked, with a note; never asks for approval), and the user can tick, untick or stop it. Limits: 20 workflows, 12 steps of 200 characters.
+
 ## [0.3.16] - 2026-11-23
 
 ### Changed
