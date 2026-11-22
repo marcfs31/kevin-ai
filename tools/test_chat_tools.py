@@ -430,6 +430,13 @@ class Front(Base):
         self.assertEqual(self.http("POST", "/tools/servers/fake/stop", {}, {"Origin": "http://127.0.0.1:5173", "Sec-Fetch-Site": "same-origin"})[0], 200)
         self.assertEqual(self.http("POST", "/tools/servers/fake/stop", {}, {"Origin": "http://localhost:5173"})[0], 200)
 
+    def test_a_cross_site_get_that_would_start_a_server_is_refused_but_status_stays_open(self):
+        for headers in ({"Origin": "https://evil.example"}, {"Sec-Fetch-Site": "cross-site"}):
+            self.assertEqual(self.http("GET", "/tools/servers/fake/tools", headers=headers)[0], 403)
+        self.assertEqual(self.http("GET", "/tools/status", headers={"Sec-Fetch-Site": "cross-site"})[0], 200)
+        self.assertEqual(self.http("GET", "/tools/servers/fake/tools", headers={"Origin": "http://localhost:5173", "Sec-Fetch-Site": "same-origin"})[0], 200)
+        self.assertEqual(self.http("GET", "/tools/servers/fake/tools")[0], 200)
+
     def test_a_request_that_names_another_host_is_refused(self):
         self.assertEqual(self.http("GET", "/tools/status", headers={"Host": "evil.example"})[0], 403)
 
