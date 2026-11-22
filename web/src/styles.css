@@ -620,6 +620,11 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   input[type='range'] { min-block-size: 2.75rem; }
 }
 
+/* A button with an icon: the icon and the label sit on one line, the icon in the label's colour. */
+button:has(> .icon) { display: inline-flex; align-items: center; gap: 0.45rem; }
+.icon { flex: none; }
+.attachment-head > .icon { color: var(--muted); }
+
 .chat-model { display: inline-flex; align-items: center; gap: 0.4rem; }
 .chat-model select { font: inherit; font-size: 0.8125rem; max-inline-size: 16rem; }
 

@@ -5,6 +5,7 @@ import {
   ACCEPT_ATTRIBUTE, AttachError, DEFAULT_MAX_PIXELS, checkText, classifyFile, estimateAttachment, maxBytes, newId, parsePageRange,
   selectPdf, type Attachment,
 } from '../lib/attachments';
+import { FileIcon, ImageIcon } from './Icons';
 import { Preview, PreviewImage, PreviewText } from './Preview';
 import { WARN_WAIT_SECONDS } from '../lib/estimate';
 import { imageToPng } from '../lib/image';
@@ -219,9 +220,11 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, canRedi
           }}
         />
         <button type="button" onClick={() => fileRef.current?.click()}>
+          <FileIcon />
           {t('composer.attach')}
         </button>
         <button type="button" onClick={() => imageRef.current?.click()} disabled={!visionOk} aria-describedby={visionOk ? undefined : 'image-reason'}>
+          <ImageIcon />
           {t('composer.attachImage')}
         </button>
         {!visionOk && (
@@ -265,7 +268,7 @@ function AttachmentItem({ a, info, onRemove, onRange }: { a: Attachment; info: S
   return (
     <li className="attachment">
       <div className="attachment-head">
-        {a.kind === 'image' && <img src={a.dataUrl} alt="" width={40} height={40} className="thumb" />}
+        {a.kind === 'image' ? <img src={a.dataUrl} alt="" width={40} height={40} className="thumb" /> : <FileIcon />}
         <span className="attachment-name">{a.name}</span>
         <span className="muted">{est.tokens === null ? t('composer.tokensUnknown') : t('composer.tokens', { n: est.tokens })}</span>
         <button type="button" onClick={onRemove} aria-label={t('composer.remove', { name: a.name })}>
