@@ -337,6 +337,101 @@ class ListingCache(Base):
         self.assertEqual(self.http("GET", "/tools/servers/fake/tools")[1]["error"]["code"], "internet_off")
 
 
+class ProjectServer(Base):
+    """The built-in "project" server: listed, listed again from the kept list, called, and kept apart from the MCP limits."""
+
+    def setUp(self):
+        super().setUp()
+        self.base = os.path.join(self.tmp, "projects")
+        os.makedirs(os.path.join(self.base, "demo"))
+        self.registry = os.path.join(self.tmp, "projects.json")
+        with open(self.registry, "w") as f:
+            json.dump({"projects": {"demo": {"title": "Demo", "root": "demo"}}}, f)
+        self.host = chat_tools.chat_projects.ProjectHost(self.base, self.registry, min_free_gb=0)
+        self.write_config({})
+
+    def start(self, **kw):
+        self.serve(self.manager(projects=self.host, **kw))
+
+    def call(self, name, **args):
+        return self.http("POST", "/tools/servers/project/call", {"name": name, "arguments": args})
+
+    def test_it_is_listed_with_no_mcp_config_and_not_at_all_without_a_projects_base(self):
+        os.remove(self.cfg)
+        self.start()
+        row = self.http("GET", "/tools/status")[1]["servers"][0]
+        self.assertEqual((row["id"], row["kind"], row["network"], row["state"], row["title"]), ("project", "native", False, "stopped", "Projects"))
+        self.assertIsNone(row["error"])
+        self.serve()                                  # a service started without --projects-base
+        self.assertEqual(self.http("GET", "/tools/status")[1]["servers"], [])
+        self.assertEqual(self.http("GET", "/tools/servers/project/tools")[1]["error"]["code"], "unknown_server")
+
+    def test_it_stays_listed_when_the_mcp_config_is_unreadable(self):
+        with open(self.cfg, "w") as f:
+            f.write("{nope")
+        self.start()
+        doc = self.http("GET", "/tools/status")[1]
+        self.assertIn("mcp.json", doc["configError"])
+        self.assertEqual([s["id"] for s in doc["servers"]], ["project"])
+
+    def test_it_lists_its_tools_with_read_only_hints_and_then_from_the_kept_list(self):
+        self.start()
+        status, doc = self.http("GET", "/tools/servers/project/tools")
+        self.assertEqual(status, 200, doc)
+        self.assertFalse(doc["cached"])
+        tools = {t["name"]: t for t in doc["tools"]}
+        self.assertEqual(sorted(tools), ["fs_edit", "fs_list", "fs_read", "fs_search", "fs_write", "project_list"])
+        self.assertEqual({n: t["readOnly"] for n, t in tools.items()},
+                         {"fs_edit": False, "fs_list": True, "fs_read": True, "fs_search": True, "fs_write": False, "project_list": True})
+        self.assertTrue(all(t["tokens"] > 20 for t in tools.values()))
+        self.assertEqual(self.http("GET", "/tools/status")[1]["servers"][0]["state"], "ready")
+        self.http("POST", "/tools/servers/project/stop", {})
+        again = self.http("GET", "/tools/servers/project/tools")[1]
+        self.assertTrue(again["cached"])
+        self.assertEqual(again["tools"], doc["tools"])
+
+    def test_a_changed_tool_definition_makes_the_kept_list_stale(self):
+        self.start()
+        self.http("GET", "/tools/servers/project/tools")
+        self.http("POST", "/tools/servers/project/stop", {})
+        with mock.patch.object(chat_tools.chat_projects, "TOOLS_VERSION", "newcode00000"):
+            self.assertFalse(self.http("GET", "/tools/servers/project/tools")[1]["cached"])
+
+    def test_files_are_written_and_read_through_a_call_and_the_internet_flag_is_not_needed(self):
+        self.start()
+        status, doc = self.call("fs_write", path="src/hello.py", content="print('hi')\n")
+        self.assertEqual((status, doc["ok"], doc["isError"], doc["content"]), (200, True, False, "created src/hello.py (12 bytes)"))
+        self.assertTrue(os.path.exists(os.path.join(self.base, "demo", "src", "hello.py")))
+        doc = self.call("fs_read", path="src/hello.py")[1]
+        self.assertEqual(doc["content"], "src/hello.py lines 1-1 of 1\nprint('hi')")
+        doc = self.call("fs_read", path="../x")[1]
+        self.assertEqual((doc["isError"], doc["content"]), (True, "error: .. is not allowed"))
+        self.assertEqual(self.http("POST", "/tools/servers/project/call", {"name": "bad name!", "arguments": {}})[0], 400)
+
+    def test_it_does_not_use_up_the_running_limit_of_mcp_servers_nor_wait_for_memory(self):
+        self.write_config({"fake": stdio()})
+        self.start(max_running=1, memory_fn=lambda: 1)       # one slot for MCP servers, and memory under the floor
+        self.assertEqual(self.http("GET", "/tools/servers/fake/tools")[1]["error"]["code"], "low_memory")
+        self.assertEqual(self.call("project_list")[1]["isError"], False)
+
+    def test_a_bad_registry_shows_on_the_server_and_in_every_result(self):
+        with open(self.registry, "w") as f:
+            json.dump({"projects": {"x": {"root": "../elsewhere"}}}, f)
+        self.start()
+        row = self.http("GET", "/tools/status")[1]["servers"][0]
+        self.assertIn("inside", row["error"])
+        doc = self.call("fs_list")[1]
+        self.assertTrue(doc["isError"])
+        self.assertIn("registry cannot be used", doc["content"])
+
+    def test_a_project_write_and_an_mcp_server_do_not_see_each_others_state(self):
+        self.write_config({"fake": stdio()})
+        self.start()
+        self.call("fs_write", path="a.txt", content="x")
+        self.assertEqual(self.http("GET", "/tools/servers/fake/tools")[0], 200)
+        self.assertEqual({s["id"] for s in self.http("GET", "/tools/status")[1]["servers"]}, {"fake", "project"})
+
+
 class Pagination(Base):
     def test_every_page_of_tools_is_collected(self):
         self.write_config({"fake": stdio("--pages")})
