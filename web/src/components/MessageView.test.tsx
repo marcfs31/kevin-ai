@@ -119,3 +119,30 @@ describe('MessageView user images', () => {
     expect(screen.queryByRole('list', { name: 'Attached images' })).toBeNull();
   });
 });
+
+describe('thinking text', () => {
+  it('is drawn as Markdown like the answer: bold and italic marks become formatting, not asterisks', () => {
+    const m = assistant({ content: 'Done.', reasoning: '**Total weight:** 12 g\n\n* first\n* second\n\n*note*' });
+    const { container } = render(
+      <I18nProvider locale="en">
+        <MessageView m={m} />
+      </I18nProvider>,
+    );
+    const body = container.querySelector('.think-body');
+    expect(body?.querySelector('strong')?.textContent).toBe('Total weight:');
+    expect(body?.querySelector('em')?.textContent).toBe('note');
+    expect(body?.querySelectorAll('li')).toHaveLength(2);
+    expect(body?.textContent).not.toContain('*');
+  });
+
+  it('shows raw HTML in thinking as text, as in the answer', () => {
+    const m = assistant({ content: 'x', reasoning: 'a <b>raw</b> tag' });
+    const { container } = render(
+      <I18nProvider locale="en">
+        <MessageView m={m} />
+      </I18nProvider>,
+    );
+    expect(container.querySelector('.think-body b')).toBeNull();
+    expect(container.querySelector('.think-body')?.textContent).toContain('<b>raw</b>');
+  });
+});

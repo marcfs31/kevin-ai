@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The thinking text is drawn as Markdown like the answer (bold, italics, lists, maths), not as raw text with asterisks.
+
 ### Added
 - Web chat: LaTeX in replies (`$...$` inline, `$$...$$` as a block) is drawn as MathML with KaTeX, which needs no stylesheet or fonts so the CSP is unchanged; a price such as "$5 to $10" stays text. Adds `remark-math` and `rehype-katex` (MIT); the bundle grows by about 83 KB gzipped.
 
