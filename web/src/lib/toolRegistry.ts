@@ -19,6 +19,8 @@ export interface ToolSpec {
   readOnly: boolean;
   /** Estimated tokens of this definition in the request. */
   tokens: number;
+  /** The tool reaches the network, so what it is given can leave this machine (a server marked network, or web search). */
+  network: boolean;
   source: ToolSource;
 }
 
@@ -44,8 +46,8 @@ export function toWire(spec: ToolSpec): WireTool {
   return { type: 'function', function: { name: spec.name, description: spec.description, parameters: spec.parameters } };
 }
 
-function make(name: string, description: string, parameters: Record<string, unknown>, readOnly: boolean, source: ToolSource): ToolSpec {
-  return { name, description, parameters, readOnly, tokens: estimateTokens({ name, description, parameters }), source };
+function make(name: string, description: string, parameters: Record<string, unknown>, readOnly: boolean, source: ToolSource, network = false): ToolSpec {
+  return { name, description, parameters, readOnly, tokens: estimateTokens({ name, description, parameters }), network, source };
 }
 
 export function builtinSpecs(): ToolSpec[] {
@@ -69,6 +71,7 @@ export function webSearchSpec(): ToolSpec {
     { type: 'object', properties: { query: { type: 'string', description: 'The search terms.' } }, required: ['query'] },
     true,
     { kind: 'search' },
+    true,
   );
 }
 
@@ -83,9 +86,9 @@ export function wireName(server: string, tool: string, taken: Set<string>): stri
   return name;
 }
 
-export function mcpSpecs(server: string, tools: McpTool[], taken: Set<string>): ToolSpec[] {
+export function mcpSpecs(server: string, tools: McpTool[], taken: Set<string>, network = false): ToolSpec[] {
   return tools.map((t) => {
     const name = wireName(server, t.name, taken);
-    return { name, description: t.description, parameters: t.inputSchema, readOnly: t.readOnly, tokens: estimateTokens({ name, description: t.description, parameters: t.inputSchema }), source: { kind: 'mcp', server, tool: t.name } };
+    return { name, description: t.description, parameters: t.inputSchema, readOnly: t.readOnly, tokens: estimateTokens({ name, description: t.description, parameters: t.inputSchema }), network, source: { kind: 'mcp', server, tool: t.name } };
   });
 }

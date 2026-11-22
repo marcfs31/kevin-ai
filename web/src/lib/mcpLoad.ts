@@ -22,7 +22,7 @@ export async function loadMcpSpecs(ids: string[], internet: boolean, signal?: Ab
     else if (server.network && !internet) out.skipped.push({ id, reason: 'internet_off' });
     else {
       try {
-        out.specs.push(...mcpSpecs(id, await toolsList(id, internet, signal), taken));
+        out.specs.push(...mcpSpecs(id, await toolsList(id, internet, signal), taken, server.network));
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') throw e;
         out.failed.push({ id, message: e instanceof Error ? e.message : 'failed' });

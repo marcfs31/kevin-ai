@@ -228,7 +228,7 @@ describe('runAgent', () => {
 });
 
 describe('runAgent with a tool host', () => {
-  const request = (name: string): ApprovalRequest => ({ callId: 'c1', tool: name, title: name, server: 's', args: '{}', readOnly: false });
+  const request = (name: string): ApprovalRequest => ({ callId: 'c1', tool: name, title: name, allowKey: `s/${name}`, server: 's', network: false, args: '{}', readOnly: false });
   /** A host whose "write" needs the user's OK and whose results are recorded. */
   function host(over: Partial<ToolHost> = {}) {
     const seen: { query: string; unlocked: string[] }[] = [];

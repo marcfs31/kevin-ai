@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolSpec } from './toolRegistry';
 import { fitCount, searchSpecs, selectTools, terms } from './toolSelect';
 
-const spec = (name: string, description: string, tokens = 100): ToolSpec => ({ name, description, parameters: {}, readOnly: true, tokens, source: { kind: 'mcp', server: 's', tool: name } });
+const spec = (name: string, description: string, tokens = 100): ToolSpec => ({ name, description, parameters: {}, readOnly: true, tokens, network: false, source: { kind: 'mcp', server: 's', tool: name } });
 const FILES = [
   spec('fs__read_file', 'Read the complete contents of a file as text'),
   spec('fs__write_file', 'Create a new file or overwrite an existing file'),
@@ -79,7 +79,7 @@ describe('selectTools', () => {
 });
 
 describe('fitCount', () => {
-  const spec = (name: string, tokens: number) => ({ name, description: '', parameters: {}, readOnly: true, tokens, source: { kind: 'mcp' as const, server: 's', tool: name } });
+  const spec = (name: string, tokens: number) => ({ name, description: '', parameters: {}, readOnly: true, tokens, network: false, source: { kind: 'mcp' as const, server: 's', tool: name } });
   const five = ['a', 'b', 'c', 'd', 'e'].map((n) => spec(n, 100));
 
   it('grows with the budget, stops at the number of tools and at the per-step cap', () => {

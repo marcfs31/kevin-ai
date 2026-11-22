@@ -101,6 +101,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'mode.hint': 'Esfuerzo: bajo responde brevemente sin pensar, medio responde con tu longitud habitual sin pensar, alto piensa primero y puede escribir respuestas largas. Velocidad: rápida envía imágenes más pequeñas y compacta el chat al 50% de la ventana, equilibrada usa tus ajustes, minuciosa conserva las imágenes a tamaño completo y compacta al 90%. Elegir una velocidad también fija el esfuerzo del que parte.',
   'approval.title': '¿Permitir {tool}?',
   'approval.hint': 'El modelo pidió ejecutar esto y puede cambiar algo. No se ejecuta nada hasta que respondas; Detener también lo rechaza.',
+  'approval.hintNetwork': 'Esta herramienta llega a internet, así que lo que el modelo le da, como una dirección web o un texto, puede salir de este equipo. No se ejecuta nada hasta que respondas; Detener también la rechaza.',
   'approval.hintReadOnly': 'Elegiste que se te pregunte antes de cada llamada. No se ejecuta nada hasta que respondas; Detener también la rechaza.',
   'approval.args': 'Argumentos',
   'approval.allow': 'Permitir una vez',
