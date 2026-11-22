@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.12] - 2026-11-22
+
+### Added
+- Project server: remote git and pull requests (`git_clone`, `git_fetch`, `git_pull` fast-forward only, `git_push`, `pr_create` through the GitHub REST API). The registry takes `remote` (an https URL) and `tokenEnv`; the agent never names a URL, remote or token, and there is no force or delete option. The token goes to git only through a `GIT_ASKPASS` helper, is scrubbed from every result, and a repository that rewrites URLs is refused.
+
 ## [0.3.11] - 2026-11-22
 
 ### Security
