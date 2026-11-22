@@ -8,6 +8,11 @@ function renderApp(languages: readonly string[] = ['en-US']) {
   return render(<App storage={localStorage} languages={languages} />);
 }
 
+/** Tools are on by default; these tests are about a chat without them. */
+function toolsOff() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: { tools: false } }));
+}
+
 function typeAndSend(text: string) {
   const box = screen.getByLabelText('Message');
   fireEvent.change(box, { target: { value: text } });
@@ -80,6 +85,7 @@ describe('App', () => {
   });
 
   it('shows a chat total without a mark when every reply has real usage, in Spanish', async () => {
+    toolsOff();
     mockFetch(() => sseResponse([delta('Hola'), FINISH, USAGE, DONE]));
     renderApp(['es-ES']);
     const box = screen.getByLabelText('Mensaje');
@@ -93,6 +99,7 @@ describe('App', () => {
   });
 
   it('shows the context as one bar of boxes with their numbers', async () => {
+    toolsOff();
     mockFetch(() => sseResponse([delta('Hola'), FINISH, USAGE, DONE]), () => modelsResponse({ context_length: 100 }));
     renderApp();
     await screen.findByText('Context: 100 tokens');
@@ -106,6 +113,7 @@ describe('App', () => {
   });
 
   it('moves the context bar and the totals while the reply is still being written', async () => {
+    toolsOff();
     mockFetch((_u, init) => heldReply(init), () => modelsResponse({ context_length: 1000 }));
     renderApp();
     await screen.findByText('Context: 1,000 tokens');
@@ -307,7 +315,7 @@ describe('App', () => {
     });
 
     it('lists the servers with their state, and turns one on, which is saved and needs the tools switch', async () => {
-      open();
+      open({ saved: { tools: false } });
       const panel = await settings();
       const files = (await within(panel).findByLabelText('Use Files')) as HTMLInputElement;
       expect(files.disabled).toBe(true);                       // "Let the model use tools" is off
@@ -949,6 +957,7 @@ describe('App', () => {
     });
 
     it('does not offer tools unless they are turned on in Settings, and the cap is set there', async () => {
+      toolsOff();
       const fetchMock = mockFetch(() => sseResponse([delta('hi'), FINISH, DONE]));
       renderApp();
       typeAndSend('x');
@@ -1154,10 +1163,17 @@ describe('App', () => {
     const list = await screen.findByRole('list', { name: 'Attachments' });
     expect(within(list).getByText('a.py')).toBeTruthy();
     expect(within(list).getByText(/tokens \(estimate\)/)).toBeTruthy();
+    // Before sending: the file's text can be opened from its row.
+    const before = within(list).getByText('Preview a.py').closest('details') as HTMLDetailsElement;
+    expect(before.open).toBe(false);
+    expect(before.querySelector('pre')?.textContent).toBe('print(1)\n');
     typeAndSend('explain');
     await screen.findByText('ok');
     expect(bodyOf(fetchMock, 0).messages[0].content).toBe('a.py\n```python\nprint(1)\n```\n\nexplain');
     expect(screen.getByText('Attached: a.py')).toBeTruthy();
+    // After sending: the same text, as it was sent, without what was typed.
+    const after = screen.getByText('Preview the attached files as sent').closest('details') as HTMLDetailsElement;
+    expect(after.querySelector('pre')?.textContent).toBe('a.py\n```python\nprint(1)\n```');
   });
 
   it('disables image upload and says why when the server does not report vision', async () => {

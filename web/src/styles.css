@@ -518,6 +518,12 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 }
 .attachment-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; }
 .attachment-name { font-weight: 600; overflow-wrap: anywhere; font-size: 0.875rem; }
+.preview { margin-block-start: 0.35rem; }
+.preview summary { cursor: pointer; font-size: 0.8125rem; color: var(--muted); }
+.preview-image summary { list-style: none; }
+.preview-image summary::-webkit-details-marker { display: none; }
+.preview-text { max-block-size: 18rem; overflow: auto; margin: 0.35rem 0; padding: 0.5rem; background: var(--code-bg); border-radius: 0.25rem; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.8125rem; }
+.preview-img { display: block; max-inline-size: 100%; max-block-size: 28rem; margin-block-start: 0.35rem; object-fit: contain; border-radius: 0.25rem; background: var(--surface-2); }
 .thumb { object-fit: cover; border-radius: 0.25rem; }
 .pdf-range { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; margin-block-start: 0.45rem; }
 .pdf-range label { flex-basis: 100%; min-inline-size: 0; overflow-wrap: anywhere; }
