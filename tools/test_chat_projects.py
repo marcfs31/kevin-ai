@@ -65,7 +65,7 @@ class Base(unittest.TestCase):
 class Registry(Base):
     def test_a_valid_registry_is_filled_in_and_a_missing_one_means_no_projects(self):
         p = cp.load_registry(self.registry, self.base)
-        self.assertEqual(p["demo"], {"id": "demo", "title": "Demo", "root": self.root, "defaultBranch": "main", "allowMain": False})
+        self.assertEqual(p["demo"], {"id": "demo", "title": "Demo", "root": self.root, "defaultBranch": "main", "allowMain": False, "commands": {}})
         self.assertEqual(cp.load_registry(os.path.join(self.tmp, "none.json"), self.base), {})
 
     def test_a_root_outside_the_base_a_bad_id_or_a_missing_folder_is_refused(self):

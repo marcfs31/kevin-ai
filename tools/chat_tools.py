@@ -555,7 +555,7 @@ class Manager:
         if self.projects is None:
             return {}
         return {"project": {"id": "project", "title": "Projects", "catalog": None, "kind": "native", "network": False,
-                            "install": False, "version": chat_projects.TOOLS_VERSION}}
+                            "install": False, "version": self.projects.tools_version()}}
 
     def servers(self):
         return {**load_config(self.cfg_path), **self._native()}
@@ -1002,6 +1002,8 @@ def main(argv=None, env=None):
                     help="the folder whose subfolders are the projects of this host; without it there is no \"project\" server")
     ap.add_argument("--projects-registry", default=os.path.join(os.path.expanduser("~"), ".config", "lm-chat", "projects.json"),
                     help="the owner-edited list of projects (default ~/.config/lm-chat/projects.json)")
+    ap.add_argument("--audit-log", default=None, metavar="FILE",
+                    help="where changes made through the project tools are recorded (default <state-dir>/audit.jsonl)")
     ap.add_argument("--projects-min-free-gb", type=float, default=5.0,
                     help="writes are refused when the disk would drop under this many GB (default 5)")
     ap.add_argument("--max-running", type=int, default=MAX_RUNNING)
@@ -1018,7 +1020,8 @@ def main(argv=None, env=None):
             os.makedirs(args.projects_base, exist_ok=True)
         except OSError as e:
             sys.exit(f"chat_tools: --projects-base {args.projects_base}: {e}")
-        projects = chat_projects.ProjectHost(args.projects_base, args.projects_registry, args.projects_min_free_gb)
+        audit = chat_projects.chat_audit.Audit(args.audit_log or os.path.join(args.state_dir, "audit.jsonl"))
+        projects = chat_projects.ProjectHost(args.projects_base, args.projects_registry, args.projects_min_free_gb, audit=audit)
     manager = Manager(args.config, catalog, dict(env), args.state_dir, args.max_running, args.idle_seconds, projects=projects)
     try:
         server = Server((args.host, args.port), manager, password, args.scratch, args.search_allow)
