@@ -961,7 +961,7 @@ describe('App', () => {
       expect(steps.disabled).toBe(true);
       fireEvent.click(box);
       expect(steps.disabled).toBe(false);
-      expect(steps.value).toBe('8');
+      expect(steps.value).toBe('20');
       fireEvent.change(steps, { target: { value: '3' } });
       fireEvent.change(steps, { target: { value: '99' } });
       expect(steps.value).toBe('3');
