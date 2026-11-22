@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-11-22
+
+### Added
+- Project server: local git tools (`git_status`, `git_diff`, `git_log`, `git_show`, `git_branches`, `git_branch_create`, `git_switch`, `git_add`, `git_commit`, `git_restore`, `git_init`), hardened against the repository's own configuration (no hooks, fsmonitor, external diff, editor, pager or credential helper; no user or system git config). Commits on the default branch are refused unless the registry allows it, the committer is the registry identity, and every path goes through the jail. The registry takes `identity`, `defaultBranch` and `allowMain`.
+
+### Changed
+- The path jail and shared helpers moved to `tools/chat_jail.py`.
+
 ## [0.3.7] - 2026-11-22
 
 ### Added
