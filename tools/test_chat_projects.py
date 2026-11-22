@@ -65,7 +65,7 @@ class Base(unittest.TestCase):
 class Registry(Base):
     def test_a_valid_registry_is_filled_in_and_a_missing_one_means_no_projects(self):
         p = cp.load_registry(self.registry, self.base)
-        self.assertEqual(p["demo"], {"id": "demo", "title": "Demo", "root": self.root, "defaultBranch": "main", "allowMain": False, "commands": {}})
+        self.assertEqual(p["demo"], {"id": "demo", "title": "Demo", "root": self.root, "defaultBranch": "main", "allowMain": False, "commands": {}, "remote": None, "tokenEnv": None})
         self.assertEqual(cp.load_registry(os.path.join(self.tmp, "none.json"), self.base), {})
 
     def test_a_root_outside_the_base_a_bad_id_or_a_missing_folder_is_refused(self):
@@ -297,7 +297,7 @@ class Client(Base):
         self.assertEqual(client.request("initialize")["serverInfo"]["name"], "kevin-projects")
         names = [t["name"] for t in client.request("tools/list")["tools"]]
         self.assertEqual(names[:6], ["project_list", "fs_read", "fs_list", "fs_search", "fs_write", "fs_edit"])
-        self.assertEqual(len(names), 17)                      # the six file tools and the eleven git tools
+        self.assertEqual(len(names), 22)                      # the file, local git and remote git tools
         res = client.request("tools/call", {"name": "project_list", "arguments": {}})
         self.assertFalse(res["isError"])
         self.assertIsNone(client.dead)
@@ -309,7 +309,8 @@ class Client(Base):
         self.assertEqual({n for n, ro in hints.items() if ro},
                          {"project_list", "fs_read", "fs_list", "fs_search", "git_status", "git_diff", "git_log", "git_show", "git_branches"})
         self.assertEqual({n for n, ro in hints.items() if not ro},
-                         {"fs_write", "fs_edit", "git_branch_create", "git_switch", "git_add", "git_commit", "git_restore", "git_init"})
+                         {"fs_write", "fs_edit", "git_branch_create", "git_switch", "git_add", "git_commit", "git_restore", "git_init",
+                          "git_clone", "git_fetch", "git_pull", "git_push", "pr_create"})
         destructive = {t["name"] for t in cp.TOOLS if t["annotations"].get("destructiveHint")}
         self.assertEqual(destructive, {"git_restore"})
         for t in cp.TOOLS:

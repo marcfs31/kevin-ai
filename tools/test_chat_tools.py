@@ -380,7 +380,7 @@ class ProjectServer(Base):
         self.assertEqual(status, 200, doc)
         self.assertFalse(doc["cached"])
         tools = {t["name"]: t for t in doc["tools"]}
-        self.assertEqual(len(tools), 17)
+        self.assertEqual(len(tools), 22)
         self.assertTrue({"project_list", "fs_read", "fs_edit", "git_status", "git_commit"} <= set(tools))
         self.assertEqual({n for n, t in tools.items() if t["readOnly"]},
                          {"project_list", "fs_read", "fs_list", "fs_search", "git_status", "git_diff", "git_log", "git_show", "git_branches"})
