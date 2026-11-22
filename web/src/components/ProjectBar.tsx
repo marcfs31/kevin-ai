@@ -10,7 +10,7 @@ export function ProjectBar({ projects, projectId, disabled, refreshKey, onChange
   projects: ProjectInfo[];
   projectId: string | null;
   disabled: boolean;
-  /** Changes when a run ends, so the chip is read again. */
+  /** Changes when a run ends, so the chip is read again; negative while a run is going (nothing is read then). */
   refreshKey: number;
   onChange: (id: string | null) => void;
 }) {
@@ -19,7 +19,7 @@ export function ProjectBar({ projects, projectId, disabled, refreshKey, onChange
   const [chip, setChip] = useState<{ project: string; value: GitChip | null } | null>(null);
   const known = projectId !== null && projects.some((p) => p.id === projectId);
   useEffect(() => {
-    if (!known || projectId === null) return;
+    if (!known || projectId === null || refreshKey < 0) return;
     const controller = new AbortController();
     toolsCall(PROJECT_SERVER, 'git_status', { project: projectId }, false, controller.signal).then(
       (r) => setChip({ project: projectId, value: r.isError ? null : parseGitStatus(r.content) }),
