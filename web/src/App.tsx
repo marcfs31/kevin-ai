@@ -433,7 +433,10 @@ function Chat({ state, setState, storage, notice }: {
           >
             {sidebarOpen ? t('sidebar.hideShort') : t('sidebar.showShort')}
           </button>
-          <h1>{t('app.title')}</h1>
+          <h1>
+            <img src="/logo.svg" alt="" width={24} height={24} className="logo" />
+            {t('app.title')}
+          </h1>
         </div>
         <div className={`server server-${server.kind}`} role="status">
           {server.kind === 'ok' ? (
