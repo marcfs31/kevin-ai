@@ -231,6 +231,40 @@ class Basics(Base):
         self.assertNotIn("MY_SETTING", doc["content"].split())
 
 
+class StdinWrites(Base):
+    def test_a_write_stuck_on_a_full_pipe_does_not_stop_the_reading_of_answers(self):
+        self.write_config({"fake": stdio()})
+        m = self.manager()
+        client = m._ensure("fake", False)["client"]
+        release = threading.Event()
+
+        class Stuck:
+            def write(self, data):
+                release.wait(10)
+
+            def flush(self):
+                pass
+
+            def close(self):
+                pass
+
+        real = client.proc.stdin
+        client.proc.stdin = Stuck()
+        self.addCleanup(release.set)
+        writer = threading.Thread(target=client._send, args=({"jsonrpc": "2.0", "method": "x"},), daemon=True)
+        writer.start()
+        time.sleep(0.2)
+        slot = [threading.Event(), None]
+        client.pending[99] = slot
+        reader = threading.Thread(target=client._handle, args=({"jsonrpc": "2.0", "id": 99, "result": {}},), daemon=True)
+        reader.start()
+        reader.join(2)
+        self.assertFalse(reader.is_alive(), "the reader waited for the blocked writer")
+        self.assertTrue(slot[0].is_set())
+        release.set()
+        client.proc.stdin = real
+
+
 class Pagination(Base):
     def test_every_page_of_tools_is_collected(self):
         self.write_config({"fake": stdio("--pages")})

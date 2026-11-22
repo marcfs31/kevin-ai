@@ -239,7 +239,8 @@ class StdioClient:
                                          stderr=subprocess.PIPE, env=child_env, start_new_session=True)
         except OSError as e:
             raise ToolError("start_failed", f"cannot run {spec['command']}: {e}", 502) from None
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()         # the pending map and the dead flag: the reader needs it for every message
+        self.wlock = threading.Lock()        # writes to the child's stdin, which may block while its pipe is full
         self.next_id = 1
         self.pending = {}
         self.dead = None
@@ -291,17 +292,17 @@ class StdioClient:
                 slot[1] = msg
                 slot[0].set()
         elif "method" in msg and "id" in msg:        # a request from the server: only ping is answered
-            if msg["method"] == "ping":
-                self._send({"jsonrpc": "2.0", "id": msg["id"], "result": {}})
-            else:
-                self._send({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "not supported"}})
+            reply = ({"jsonrpc": "2.0", "id": msg["id"], "result": {}} if msg["method"] == "ping"
+                     else {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "not supported"}})
+            # Off the reader thread: a write that blocks must not stop the reading that would unblock it.
+            threading.Thread(target=self._send, args=(reply,), daemon=True).start()
         elif msg.get("method") == "notifications/tools/list_changed":
             self.stale = True
 
     def _send(self, msg):
         data = (json.dumps(msg, separators=(",", ":")) + "\n").encode()
         try:
-            with self.lock:
+            with self.wlock:
                 self.proc.stdin.write(data)
                 self.proc.stdin.flush()
         except (OSError, ValueError):
