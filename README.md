@@ -2,12 +2,34 @@
 
 Created by **Marc Fors i Soler**.
 
-A C99 CPU inference engine for small language models, written from scratch for a small
-machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512), about
-11 GB RAM, Ubuntu Server 26.04.1 LTS, with the models on the NVMe SSD in `~/models`.
+A private, local AI assistant for one small machine, in three parts that work together:
+
+- **The engine**: a C99 CPU inference engine for small language models (Qwen3.5-4B, Gemma 4 E4B and a
+  GGUF Qwen2.5-Coder fine-tune), written from scratch. No GPU, no Python at run time. `bin/lm-run`,
+  `bin/lm-chat`, `bin/lm-serve` (an OpenAI-compatible HTTP endpoint) and `bin/lm-quant`.
+- **The web chat** (`web/`, the app is called Kevin AI): a React page that talks to `lm-serve`, keeps
+  conversations in the browser only, reads files and images, and lets the model use tools.
+- **The tool service** (`tools/chat_tools.py`): runs MCP servers, searches the web through a self-hosted
+  SearXNG, and gives the model a **project** to work in: files, git, allowlisted commands and GitHub
+  pull requests, each behind rules the owner sets and the agent cannot change.
+
+Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512), about 11 GB RAM,
+Ubuntu Server 26.04.1 LTS, with the models on the NVMe SSD in `~/models`. Everything stays on your
+machines: no accounts, no telemetry, no remote scripts or fonts in the page.
+
+- [Status](#status), [System overview](#system-overview), [Target machine](#target-machine)
+- [Models](#the-two-models), [Chat tools and projects](#chat-tools-on-the-model-server-mcp-and-web-search)
+- [Installation](#ubuntu-server-installation), [Build and test](#build-and-test), [Architecture](#architecture)
+- [Usage](#usage), [Releases](#releases), [Troubleshooting](#troubleshooting)
 
 ## Status
 
+- **The web chat and the tool service are in daily use** (every merged pull
+  request is a tagged release, see [Releases](#releases) and [CHANGELOG.md](CHANGELOG.md)). The chat scores
+  100 in every Lighthouse category on desktop and mobile (`scripts/lighthouse.sh`). The agent can read and
+  edit files, use git, run commands you allowlisted and open pull requests inside a project you registered;
+  that part is tested against real git repositories, a local bare remote and a fake GitHub server, and has
+  **not yet been run against real GitHub** (it needs a token you create).
 - **Qwen3.5-4B (phase 1) and Gemma 4 E4B (phase 2) are both implemented.** Each passes its
   golden gate on a tiny synthetic model, checked against a float64 oracle. The Gemma
   oracle agrees with Hugging Face transformers to 5e-9.
@@ -39,6 +61,42 @@ machine. Target: a Dell OptiPlex 3050 (Intel i5-6500T, 4 cores, AVX2, no AVX-512
 The full plan, with the normative model equations and test gates, is in
 [docs/PLAN.md](docs/PLAN.md).
 
+## System overview
+
+```mermaid
+flowchart LR
+  you(("You"))
+  subgraph MAC["This Mac"]
+    page["Kevin AI web chat (web/)"]
+    proxy["Vite dev proxy, or tools/chat_server.py"]
+    toolsLocal["tool service on the Mac :8082 (optional)"]
+    projLocal[("projects on the Mac")]
+  end
+  subgraph SRV["Model server (OptiPlex 3050)"]
+    serve["bin/lm-serve (C engine) or llama-server :8080"]
+    models[("models on the NVMe")]
+    tools["tool service :8081 (tools/chat_tools.py)"]
+    mcp["MCP servers (Node, uv)"]
+    searx["SearXNG :8888"]
+    projSrv[("projects on the second SSD")]
+  end
+  gh["GitHub: clone, push, pull requests"]
+  you --> page --> proxy
+  proxy -->|"/v1 and /health, SSH tunnel"| serve --> models
+  proxy -->|"/tools, SSH tunnel"| tools
+  proxy -->|"/tools-local"| toolsLocal
+  tools --> mcp
+  tools --> searx
+  tools --> projSrv
+  toolsLocal --> projLocal
+  tools -->|"https, token from the environment"| gh
+  toolsLocal -.->|"https"| gh
+```
+
+The page only ever talks to its own origin (a strict Content-Security-Policy says `'self'`): the proxy forwards
+`/v1/*` to the model server, `/tools/*` to the tool service on the model server and `/tools-local/*` to a second
+copy of it on the Mac. The model server is reached through SSH tunnels on ports 8080 and 8081.
+
 ## Target machine
 
 The engine is developed and measured on one machine. Every number in this README is for it.
@@ -50,7 +108,7 @@ The engine is developed and measured on one machine. Every number in this README
 | memory | about 11 GB (the OS reports 11,328 MiB usable; about 10.8 GiB available when idle) |
 | GPU | Intel HD Graphics 530, not used |
 | system disk | Samsung MZVLB256HAHQ, 238.5 GB NVMe SSD (reads 1.7 GB/s) |
-| spare disk | Samsung SSD 850, 465.8 GB SATA SSD, ext4 at `/mnt/models`, not used by the engine (reads about 0.55 GB/s) |
+| spare disk | Samsung SSD 850, 465.8 GB SATA SSD, ext4 at `/mnt/models`, not used by the engine (reads about 0.55 GB/s); the chat's projects can live there (`/mnt/models/kevin-projects`) |
 | network | Realtek RTL8111/8168 gigabit Ethernet, Intel Wireless 8265/8275 (unused) |
 | OS | Ubuntu Server 26.04.1 LTS, kernel 7.0.0-43-generic, x86-64 |
 | toolchain | gcc 15.2.0, GNU make 4.4.1, Python 3.14.4 |
@@ -194,7 +252,7 @@ SearXNG to the search engines it is configured for, and nowhere else. The packag
 searches a loopback address other than its own port; a private address on the network must be listed
 when starting it (`chat_tools.py --search-allow 192.168.1.20:8888`).
 
-### Projects for the agent (files; git and commands follow)
+### Projects, git and pull requests for the agent
 
 `chat_tools.py --projects-base DIR` adds a built-in server **project** to the tool service of that host: file tools
 (`project_list`, `fs_read`, `fs_list`, `fs_search`, `fs_write`, `fs_edit`) on the projects listed in an owner-edited
@@ -254,11 +312,42 @@ through a `GIT_ASKPASS` helper that is deleted afterwards, and is scrubbed from 
 rewrites URLs in its own config is refused, and its proxy, header and TLS settings are overridden. These tools
 always ask for approval.
 
-In the chat, a **Project** picker under the header (shown when the tool service lists projects, read from
-`GET /tools/projects`: ids, titles and rules, never paths) chooses the project a chat works in. The page then tells
-the model the project's rules and commands, always sends that project's id to the project tools whatever the model
-wrote, shows the branch and the number of changed files (read with `git_status`), and shows the exact command on the
-approval card.
+**What the owner decides and what the agent can do**
+
+| | Owner (registry file, service flags, environment) | Agent (tool calls) |
+|---|---|---|
+| where it works | `root` of each project, inside `--projects-base`; `--projects-min-free-gb` | a project id, never a path outside the project |
+| files | which projects exist | `fs_read`, `fs_list`, `fs_search`, `fs_write`, `fs_edit` inside the jail |
+| git | `identity`, `defaultBranch`, `allowMain`, `remote` | status, diff, log, branches named `kevin/...`, add, commit, restore |
+| commands | `commands`: fixed argv, timeout, `safe`, `cwd`, `env` | call `run_<project>_<name>`; no arguments |
+| network | `remote` (https), `tokenEnv` and the token in the service's environment | clone, fetch, pull (fast-forward), push its branch, open a pull request |
+| record | `--audit-log` | nothing: every change is appended to the audit log |
+
+```mermaid
+sequenceDiagram
+  participant M as Model
+  participant P as Web page
+  participant U as You
+  participant S as Tool service
+  participant G as git, commands, GitHub
+  M->>P: tool call, for example git_commit
+  P->>P: read-only tools run, the others need approval
+  P->>U: approval card with the command or arguments
+  U-->>P: allow once, always, or deny
+  P->>S: POST /tools/servers/project/call with the chat's project id
+  S->>S: path jail, registry rules, default-branch rule
+  S->>G: hardened git or the fixed argv, minimal environment
+  G-->>S: output (token scrubbed, tail only)
+  S->>S: append to the audit log
+  S-->>P: result or error text
+  P-->>M: the result, so it can go on
+```
+
+In the chat, a **Project** picker under the header (shown while the Project server is on in Settings > Tools
+and the service lists projects, read from `GET /tools/projects`: ids, titles and rules, never paths) chooses the
+project a chat works in. The page then tells the model the project's rules and commands, always sends that
+project's id to the project tools whatever the model wrote, shows the branch and the number of changed files
+(read with `git_status`) and shows the exact command on the approval card.
 
 ## Ubuntu Server installation
 
@@ -401,7 +490,14 @@ make portable   # x86-64 build with -mavx2 -mfma instead of -march=native
 ```
 
 Requirements: a C99 compiler (`build-essential`), `make`, Python 3 (stdlib only), and
-`curl` and `sha256sum` for the download script.
+`curl` and `sha256sum` for the download script. The web chat needs Node 24 (`web/.nvmrc`) only on the machine
+where you build or develop it; the servers need Python 3 only.
+
+A pull request runs one job (`make test`: C tests, shell tests, the Python tests of the services and
+the chat's lint, typecheck, tests and build). `scripts/ci-heavy.sh` (sanitizers, the portable build) runs
+from `.githooks/pre-push` (`git config core.hooksPath .githooks`) and weekly in CI. A change under `web/`,
+`tools/chat_server.py` or `index.html` also runs `scripts/lighthouse.sh` (needs Chrome and the network): 100 in
+every category, desktop and mobile, on the production build.
 
 ## How it works
 
@@ -433,120 +529,74 @@ Three layers sit between the command-line tools and the weights file. The public
 [include/lm/lm.h](include/lm/lm.h) is the only thing the tools call: token ids in, logits
 out. The engine knows nothing about text; the chat and tokenizer code wrap it.
 
-### Generated overview (GitDiagram)
+### The chat and the tool service
 
-Generated by [GitDiagram](https://gitdiagram.com/marcfs31/kevin-ai) from the file tree,
-README and sampled source. It is an AI-made overview: check details against the source.
-Each box links to its file on GitHub, and the interactive version is on the site.
-
-Kevin AI is a CPU inference engine for Qwen3.5 and Gemma 4, accepting either bf16 safetensors or quantized q8 weights. The main workflow is CLI input → tokenization and chat formatting → token-by-token model inference → sampled, decoded response; separate commands run token IDs directly or convert weights to q8. The graph preserves both model families, shared numeric and weight-loading layers, and the documented quantization capability. Edges reflect shown calls or documented responsibilities; unsampled implementations are represented only where the index or README supports them.
+The engine ends at `lm-serve`. Everything the chat adds sits above it, in two Python files with no
+dependencies and one React app:
 
 ```mermaid
 flowchart TD
-
-subgraph group_interaction["Text interaction"]
-  node_chat_cli["Chat CLI<br/>[lm-chat.c]"]
-  node_chat_loop["Chat generation<br/>[lm_chat.c]"]
-  node_templates["Chat templates<br/>[lm_template.c]"]
-  node_profiles["Model profiles<br/>[lm_profile.c]"]
-  node_sampler["Token sampler<br/>[lm_sampler.c]"]
-  node_tokenizer["Tokenizer<br/>[lm_tok.c]"]
-  node_normalizer["Unicode normalization<br/>[lm_nfc.c]"]
-  node_run_cli["Token-ID runner<br/>[lm-run.c]"]
-end
-
-subgraph group_inference["Model inference"]
-  node_api["Inference API<br/>[lm.h]"]
-  node_qwen_model["Qwen3.5 model<br/>[lm_model.c]"]
-  node_gemma_model["Gemma 4 model<br/>[lm_gemma.c]"]
-  node_qwen_config["Qwen configuration<br/>[lm_config.c]"]
-  node_gemma_config["Gemma configuration<br/>[lm_gemma_config.c]"]
-  node_layers["Layer definitions<br/>[lm_layers.c]"]
-end
-
-subgraph group_numeric["Numeric kernels"]
-  node_ops["Model operations<br/>[lm_ops.c]"]
-  node_kernels["Matrix kernels<br/>[lm_kernels.c]"]
-  node_quant_kernels["Quantization math<br/>[lm_quant.c]"]
-end
-
-subgraph group_weights["Weight handling"]
-  node_binding["Tensor binding<br/>[lm_bind.c]"]
-  node_safetensors["Safetensors reader<br/>[lm_st.c]"]
-  node_quant_cli["Quantization CLI<br/>[lm-quant.c]"]
-  node_quantfile["Q8 weight files<br/>[lm_quantfile.c]"]
-  node_writer["Safetensors writer<br/>[lm_stw.c]"]
-end
-
-node_user(("User"))
-
-node_user -->|"provides prompt"| node_chat_cli
-node_chat_cli -->|"starts chat"| node_chat_loop
-node_chat_cli -->|"loads profile"| node_profiles
-node_chat_cli -->|"selects template"| node_templates
-node_chat_loop -->|"feeds tokens"| node_api
-node_chat_loop -->|"renders and parses"| node_templates
-node_chat_loop -->|"samples tokens"| node_sampler
-node_chat_loop -->|"encodes and decodes"| node_tokenizer
-node_templates -->|"uses token IDs"| node_tokenizer
-node_tokenizer -->|"normalizes text"| node_normalizer
-node_run_cli -->|"feeds token IDs"| node_api
-node_api -->|"dispatches inference"| node_qwen_model
-node_qwen_model -->|"dispatches Gemma"| node_gemma_model
-node_qwen_model -->|"loads configuration"| node_qwen_config
-node_qwen_model -->|"binds tensors"| node_binding
-node_qwen_model -->|"runs model operations"| node_ops
-node_qwen_model -->|"computes projections"| node_kernels
-node_gemma_model -->|"loads configuration"| node_gemma_config
-node_gemma_model -->|"binds tensors"| node_binding
-node_gemma_model -->|"runs model operations"| node_ops
-node_gemma_model -->|"computes projections"| node_kernels
-node_qwen_model -->|"uses layer definitions"| node_layers
-node_gemma_model -->|"uses layer definitions"| node_layers
-node_binding -->|"reads checkpoint tensors"| node_safetensors
-node_quant_cli -->|"writes q8 weights"| node_quantfile
-node_quantfile -->|"reads source weights"| node_safetensors
-node_quantfile -->|"writes converted tensors"| node_writer
-node_quantfile -->|"quantizes weights"| node_quant_kernels
-node_quantfile -.->|"supplies q8 weights"| node_qwen_model
-node_quantfile -.->|"supplies q8 weights"| node_gemma_model
-node_ops -->|"uses matrix kernels"| node_kernels
-
-click node_chat_cli "https://github.com/marcfs31/kevin-ai/blob/main/src/cli/lm-chat.c"
-click node_chat_loop "https://github.com/marcfs31/kevin-ai/blob/main/src/chat/lm_chat.c"
-click node_templates "https://github.com/marcfs31/kevin-ai/blob/main/src/chat/lm_template.c"
-click node_profiles "https://github.com/marcfs31/kevin-ai/blob/main/src/chat/lm_profile.c"
-click node_sampler "https://github.com/marcfs31/kevin-ai/blob/main/src/chat/lm_sampler.c"
-click node_tokenizer "https://github.com/marcfs31/kevin-ai/blob/main/src/tokenizer/lm_tok.c"
-click node_normalizer "https://github.com/marcfs31/kevin-ai/blob/main/src/tokenizer/lm_nfc.c"
-click node_run_cli "https://github.com/marcfs31/kevin-ai/blob/main/src/cli/lm-run.c"
-click node_api "https://github.com/marcfs31/kevin-ai/blob/main/include/lm/lm.h"
-click node_qwen_model "https://github.com/marcfs31/kevin-ai/blob/main/src/model/lm_model.c"
-click node_gemma_model "https://github.com/marcfs31/kevin-ai/blob/main/src/model/lm_gemma.c"
-click node_qwen_config "https://github.com/marcfs31/kevin-ai/blob/main/src/model/lm_config.c"
-click node_gemma_config "https://github.com/marcfs31/kevin-ai/blob/main/src/model/lm_gemma_config.c"
-click node_layers "https://github.com/marcfs31/kevin-ai/blob/main/src/model/lm_layers.c"
-click node_binding "https://github.com/marcfs31/kevin-ai/blob/main/src/model/lm_bind.c"
-click node_safetensors "https://github.com/marcfs31/kevin-ai/blob/main/src/io/lm_st.c"
-click node_quant_cli "https://github.com/marcfs31/kevin-ai/blob/main/src/cli/lm-quant.c"
-click node_quantfile "https://github.com/marcfs31/kevin-ai/blob/main/src/io/lm_quantfile.c"
-click node_writer "https://github.com/marcfs31/kevin-ai/blob/main/src/io/lm_stw.c"
-click node_ops "https://github.com/marcfs31/kevin-ai/blob/main/src/core/lm_ops.c"
-click node_kernels "https://github.com/marcfs31/kevin-ai/blob/main/src/core/lm_kernels.c"
-click node_quant_kernels "https://github.com/marcfs31/kevin-ai/blob/main/src/core/lm_quant.c"
-
-classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
-classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
-classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
-classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
-classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
-classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
-classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
-class node_chat_cli,node_chat_loop,node_templates,node_profiles,node_sampler,node_tokenizer,node_normalizer,node_run_cli,node_user toneBlue
-class node_api,node_qwen_model,node_gemma_model,node_qwen_config,node_gemma_config,node_layers toneAmber
-class node_ops,node_kernels,node_quant_kernels toneMint
-class node_binding,node_safetensors,node_quant_cli,node_quantfile,node_writer toneRose
+  subgraph WEB["web/src (React, Vite)"]
+    app["App.tsx: chats, header, composer"]
+    agent["lib/agent.ts: the model and tool loop"]
+    host["lib/toolHost.ts: which tools, approvals, project rules"]
+    api["lib/api.ts: the only place that calls fetch"]
+    store["lib/storage.ts: conversations in localStorage"]
+    comps["components: ProjectBar, ApprovalCard, ToolsPanel, ..."]
+  end
+  subgraph PROXY["tools/chat_server.py"]
+    static["web/dist with CSP and gzip"]
+    fwd["/v1, /tools, /tools-local forwarding, origin checks"]
+  end
+  subgraph SVC["tools/chat_tools.py: the tool service"]
+    mgr["Manager: lazy start, limits, internet gate, kept tool lists"]
+    mcpc["stdio and HTTP MCP clients"]
+    nat["chat_projects.py: the native project server"]
+    web["web search through SearXNG"]
+  end
+  subgraph PROJ["project server modules"]
+    jail["chat_jail.py: path jail"]
+    git["chat_git.py: local git, hardened"]
+    rem["chat_remote.py: clone, fetch, pull, push, pull requests"]
+    cmd["chat_commands.py: allowlisted commands"]
+    aud["chat_audit.py: audit log"]
+  end
+  app --> agent --> host --> api
+  app --> store
+  app --> comps
+  api --> fwd
+  fwd --> mgr
+  mgr --> mcpc
+  mgr --> nat
+  mgr --> web
+  nat --> jail
+  nat --> git
+  nat --> rem
+  nat --> cmd
+  nat --> aud
 ```
+
+One message with a tool call, end to end:
+
+```mermaid
+sequenceDiagram
+  participant U as You
+  participant W as Web page
+  participant L as lm-serve
+  participant T as Tool service
+  U->>W: message
+  W->>W: pick the tools that fit the token budget, add the project rules
+  W->>L: /v1/chat/completions with tools, streamed
+  L-->>W: reasoning and a tool call
+  W->>U: approval card when the tool changes something
+  W->>T: /tools/servers/ID/call
+  T-->>W: result as text
+  W->>L: the same conversation plus the result
+  L-->>W: the answer, streamed
+  W-->>U: the answer, with a trace of the tool calls
+```
+
+The loop stops at the steps limit (Settings, up to 50, default 20); the last call is made without tools.
 
 ### Module map
 
@@ -663,7 +713,7 @@ flowchart TD
 flowchart LR
   root["kevin-ai/"]
   root --> inc["include/lm/: public API"]
-  root --> src["src/"]
+  root --> src["src/: the C engine"]
   src --> cli["cli/: lm-run, lm-chat, lm-serve, lm-quant"]
   src --> model["model/: forward passes, config readers"]
   src --> core["core/: kernels, ops, quantiser"]
@@ -671,13 +721,15 @@ flowchart LR
   src --> chat["chat/: templates, sampler, profile"]
   src --> tokz["tokenizer/: BPE, NFC"]
   root --> tp["third_party/: vendored headers"]
-  root --> tools["tools/: Python oracles and fixture generators"]
-  root --> tests["tests/: unit tests and fixtures"]
-  tests --> unit["unit/: test_*.c"]
-  tests --> fix["fixtures/: synthetic models, ops, tokenizers"]
-  root --> scripts["scripts/: install, download, doctor, CI"]
+  root --> web["web/: the chat (React, Vite, vitest)"]
+  root --> tools["tools/"]
+  tools --> svc["chat_tools.py, chat_server.py: the services"]
+  tools --> proj["chat_projects, chat_git, chat_remote, chat_commands, chat_jail, chat_audit"]
+  tools --> orc["Python oracles, fixture generators, benchmarks, their tests"]
+  root --> tests["tests/: unit tests, fixtures, shell tests"]
+  root --> scripts["scripts/: install, download, start services, doctor, lighthouse"]
+  root --> ci[".github/workflows and .githooks: the per-pull gate and the heavy checks"]
   root --> docs["docs/: PLAN, QUICKSTART"]
-  tests --> scripts_t["scripts/: shell tests for the CLIs and the scripts"]
 ```
 
 The Makefile discovers sources with wildcards, so a new file under `src/` or a
@@ -715,6 +767,13 @@ Every token reads each layer's weights once, so speed is bounded by how fast tho
 can be read (see the measured speed in Status). KV caches exist only where a layer owns one
 (Gemma's shared layers reuse their producer's cache), so memory grows with context only
 through those caches.
+
+## Releases
+
+Every merged pull request is a release: SemVer (before 1.0 a patch for each change, the minor number
+for a breaking or phase change), one version in `web/package.json` and `web/package-lock.json`, a section in
+[CHANGELOG.md](CHANGELOG.md) and an annotated tag `vX.Y.Z` on the merged commit. Pull requests are
+rebase-merged so each commit survives. [AGENTS.md](AGENTS.md) has the rules for coding agents.
 
 ## Usage
 
@@ -811,7 +870,20 @@ curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/
 ### Web chat (`web/`)
 
 A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the gate are in
-[web/README.md](web/README.md); this is only how to run it locally.
+[web/README.md](web/README.md); this is what it does in short, and how to run it locally.
+
+- **Chat.** Streaming replies with Stop and Redirect, a thinking block, per-chat model, effort and speed,
+  a context bar with automatic compaction, retry, rewind, token statistics, Markdown with tables, code
+  and LaTeX, English and Spanish. Conversations live in the browser only.
+- **Files.** Text, code, PDFs and images (when the model can see) can be attached, previewed before and
+  after sending.
+- **Tools.** A calculator, the time, web search through SearXNG, MCP servers from a catalog or your own
+  config, and the project tools above. The page offers only the tools that fit a token budget, tells a small
+  model when to use them, and asks before anything that changes something; see Settings > Tools.
+- **Projects.** A project per chat, a git chip with the branch and the changed files, approval cards that
+  show the exact command.
+- **Privacy and quality.** No telemetry, no remote resources, a test that fails if the code names a remote
+  URL, axe in the test suite, Lighthouse 100.
 
 **Prerequisites:** Node 24 or newer (see `web/.nvmrc`), and `lm-serve` reachable on
 `127.0.0.1:8080` (or wherever you point the proxy). The page talks to `/v1` and `/health` on
@@ -969,6 +1041,16 @@ scripts/doctor.sh [--read-speed] [MODEL_DIR]
   set to Quiet, and update the BIOS. It is not a heat problem unless `x86_pkg_temp` is high.
   After the genuine adapter went in on this machine, `cpuinfo_max_freq` printed 2500000 and
   Qwen q8 replies went from 2.5 to 4.0 tokens/s (table under `tools/bench_serve.py`).
+- **The chat says the tool service cannot be reached.** The tunnel to port 8081 is down (tunnels die when
+  the Mac sleeps; start them with `-o ServerAliveInterval=30 -o ServerAliveCountMax=3`), or the service is not
+  running: `scripts/start-remote-chat-tools.sh` starts it on the model server.
+- **No Project picker.** The Project server must be on in Settings > Tools, the service must be started with
+  `--projects-base`, and the registry must list at least one project; a registry error shows in the Tools panel.
+- **A git or pull request tool is refused.** The message says why: the default branch is protected (use
+  `git_branch_create`), no `remote` is set for the project, the token variable is missing from the service's
+  environment, the folder is not empty for a clone, or the repository's own config rewrites URLs.
+- **A command is "not found" or fails only through the chat.** It runs with a minimal environment and the
+  service's `PATH`; give the command an absolute path or set `env` for it in the registry.
 - **Installer shows "Mount a filesystem at /" or "Select a boot disk".** Both must be set
   on the Samsung SSD before Done.
 - **doctor reports FAIL on a model file.** The size or hash does not match the pinned
