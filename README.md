@@ -4,9 +4,10 @@ Created by **Marc Fors i Soler**.
 
 A private, local AI assistant for one small machine, in three parts that work together:
 
-- **The engine**: a C99 CPU inference engine for small language models (Qwen3.5-4B, Gemma 4 E4B and a
-  GGUF Qwen2.5-Coder fine-tune), written from scratch. No GPU, no Python at run time. `bin/lm-run`,
-  `bin/lm-chat`, `bin/lm-serve` (an OpenAI-compatible HTTP endpoint) and `bin/lm-quant`.
+- **The engine**: a C99 CPU inference engine for small language models, written from scratch (Qwen3.5-4B,
+  Gemma 4 E4B and Qwen2.5-Coder GGUFs). No GPU, no Python at run time. `bin/lm-run`, `bin/lm-chat`,
+  `bin/lm-serve` (an OpenAI-compatible HTTP endpoint) and `bin/lm-quant`. The chat starts five models in all,
+  two of them on llama.cpp: see [The five models](#the-five-models).
 - **The web chat** (`web/`, the app is called Kevin AI): a React page that talks to `lm-serve`, keeps
   conversations in the browser only, reads files and images, and lets the model use tools.
 - **The tool service** (`tools/chat_tools.py`): runs MCP servers, searches the web through a self-hosted
@@ -18,7 +19,7 @@ Ubuntu Server 26.04.1 LTS, with the models on the NVMe SSD in `~/models`. Everyt
 machines: no accounts, no telemetry, no remote scripts or fonts in the page.
 
 - [Status](#status), [System overview](#system-overview), [Target machine](#target-machine)
-- [Models](#the-two-models), [Chat tools and projects](#chat-tools-on-the-model-server-mcp-and-web-search)
+- [Models](#the-five-models), [Chat tools and projects](#chat-tools-on-the-model-server-mcp-and-web-search)
 - [Installation](#ubuntu-server-installation), [Build and test](#build-and-test), [Architecture](#architecture)
 - [Usage](#usage), [Releases](#releases), [Troubleshooting](#troubleshooting)
 
@@ -131,20 +132,33 @@ What this means for the engine:
   golden gates pass under gcc 15 with OpenMP and the AVX2 kernels. The real Qwen3.5-4B
   checkpoint loads and answers; the speed is in the Status section above.
 
-## The two models
+## The five models
 
-| model | params (text) | checkpoint | status | notes |
-|---|---:|---:|---|---|
-| Qwen3.5-4B | ~4.2 B | 9.32 GB bf16, 2 shards | phase 1, implemented | Gated DeltaNet linear attention, three layers to one full attention |
-| Gemma 4 E4B | ~4 B core + per-layer embeddings | 15.99 GB bf16, 1 file | phase 2, implemented | per-layer embeddings, KV sharing across layers, logit softcap 30 |
+Five models can be started from the chat (Settings, or the header picker) or with
+`scripts/start-remote-lm-serve.sh --id <id>`. Only one runs at a time: the 11 GB machine cannot hold two, so
+starting one stops the other.
 
-A third family runs from a GGUF file: **WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B** (a Qwen2.5-Coder-7B
-fine-tune, Apache-2.0), the Q4_K_M quantisation of `bartowski/WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-GGUF`.
-See "WhiteRabbitNeo (GGUF)" below.
+| name in the chat | `--id` | runs on | files in `~/models` | context | notes |
+|---|---|---|---|---:|---|
+| Qwen3.5-4B | `qwen` | `lm-serve` (this engine) | `qwen3.5-4b/model.q8.safetensors` | up to 131,072 | phase 1: Gated DeltaNet linear attention, three layers to one full attention; ~4.2 B text parameters; Apache-2.0 |
+| Qwen3.5-4B Uncensored | `qwen-uncensored` | `lm-serve` (this engine) | `qwen3.5-4b-uncensored/model.q8.safetensors` | up to 131,072 | an uncensored variant of Qwen3.5-4B in the same q8 format; its source is not pinned in this repository, so `scripts/download-model.sh` does not fetch it |
+| Gemma 4 E4B | `gemma` | `lm-serve` (this engine) | `gemma-4-e4b/model.q8.safetensors` | up to 131,072 | phase 2: per-layer embeddings, KV sharing across layers, logit softcap 30; ~4 B core parameters plus the per-layer table |
+| WhiteRabbitNeo 2.5 7B | `whiterabbitneo` | llama.cpp `llama-server` | `whiterabbitneo-2.5-7b/*-Q8_0.gguf` | up to 16,384 | fine-tune of Qwen2.5-Coder-7B, Apache-2.0, text only; see "WhiteRabbitNeo (GGUF)" |
+| Gemma 4 E4B Uncensored | `gemma-uncensored` | llama.cpp `llama-server` | `gemma-4-e4b-uncensored/*-Q6_K_P.gguf` and the `mmproj` projector | up to 32,768 | fine-tune of Gemma 4 E4B that reads images; Gemma Terms of Use; see "Gemma 4 E4B Uncensored" |
 
-Qwen3.5 and Gemma 4 are Apache-2.0 and ungated. Vision and audio are out of scope; the engine is text only.
-Qwen's multi-token-prediction (MTP) head is used for speculative greedy decoding in `lm-run
---mtp` (see below).
+Checkpoints: Qwen3.5-4B is 9.32 GB in bf16 (2 shards) and Gemma 4 E4B 15.99 GB in bf16 (1 file); `bin/lm-quant`
+writes the q8 files the engine normally runs. The chat marks the two uncensored targets with a warning badge:
+they have fewer safety filters than the stock checkpoints.
+
+The engine has its own loaders for the first three. The other two ship only as GGUF files, which the engine cannot
+run for Gemma 4, so the chat starts them on llama.cpp's `llama-server` on the same port; `lm-serve`
+flags `--cache-mb` and `--fast` do not apply to them. A third engine family, `qwen2`, can also load the
+WhiteRabbitNeo Q4_K_M with `bin/lm-serve --model ~/models/whiterabbitneo-2.5-7b-q4km` (see its section).
+
+Qwen3.5 and Gemma 4 are Apache-2.0 and ungated. Audio is out of scope. The engine's vision encoder runs on its
+own (`lm-run --image`), but the language model does not read images yet (docs/PLAN.md "Phase 3"), so images
+work in the chat with Gemma 4 E4B Uncensored on `llama-server`. Qwen's multi-token-prediction (MTP) head is used
+for speculative greedy decoding in `lm-run --mtp` (see below).
 
 ## WhiteRabbitNeo (GGUF)
 
@@ -348,6 +362,33 @@ and the service lists projects, read from `GET /tools/projects`: ids, titles and
 project a chat works in. The page then tells the model the project's rules and commands, always sends that
 project's id to the project tools whatever the model wrote, shows the branch and the number of changed files
 (read with `git_status`) and shows the exact command on the approval card.
+
+#### Setting up projects (owner steps)
+
+1. **Start the service with a projects base.** `scripts/start-remote-chat-tools.sh --update` now passes
+   `--projects-base` (default `/mnt/models/kevin-projects`, created if missing, `LM_PROJECTS_BASE` to change it,
+   empty to turn projects off) and `--projects-min-free-gb` (default 20, `LM_PROJECTS_MIN_FREE_GB`). On the Mac,
+   `scripts/start-local-chat-tools.sh` does the same with `~/KevinProjects` (`LM_LOCAL_PROJECTS_BASE`) and its
+   own registry `~/.config/kevin-ai/projects-local.json` (`LM_LOCAL_PROJECTS_REGISTRY`).
+2. **Write the registry** on that host (`~/.config/lm-chat/projects.json` on the server): one entry per project,
+   `root` inside the base, and what the agent may do (see the examples above). The service reads it on every
+   call, so a change needs no restart; a mistake shows as an error in the Tools panel.
+3. **Give it a token only if it should push** (clone, push and pull requests; reading and local commits need
+   none). Create a fine-grained GitHub token for the one repository, with Contents and Pull requests read and
+   write, and put it where only you can read it:
+
+   ```bash
+   mkdir -p ~/.config/kevin-ai && install -m 600 /dev/null ~/.config/kevin-ai/tool-service.env
+   echo 'KEVIN_GITHUB_TOKEN=github_pat_...' >> ~/.config/kevin-ai/tool-service.env
+   ```
+
+   Both start scripts load that file (and refuse it unless its mode is 600). It never goes in the repository or the
+   browser, and the agent never sees it.
+4. **Use it.** In Settings > Tools turn the Project server on, then pick the project under the header. Every
+   change the agent makes is in `<state-dir>/audit.jsonl` on that host.
+
+The chat page uses the model server's projects. The Mac's copy is reachable at `/tools-local`, but the picker
+does not switch to it yet.
 
 ## Ubuntu Server installation
 
@@ -875,6 +916,9 @@ A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the
 - **Chat.** Streaming replies with Stop and Redirect, a thinking block, per-chat model, effort and speed,
   a context bar with automatic compaction, retry, rewind, token statistics, Markdown with tables, code
   and LaTeX, English and Spanish. Conversations live in the browser only.
+- **Models.** Settings and the header start any of the five models (Qwen3.5-4B, Qwen3.5-4B Uncensored, Gemma 4
+  E4B, WhiteRabbitNeo 2.5 7B, Gemma 4 E4B Uncensored; see [The five models](#the-five-models)) with a context
+  size that fits the machine; each chat remembers which model it uses.
 - **Files.** Text, code, PDFs and images (when the model can see) can be attached, previewed before and
   after sending.
 - **Tools.** A calculator, the time, web search through SearXNG, MCP servers from a catalog or your own
