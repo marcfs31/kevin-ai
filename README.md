@@ -238,6 +238,22 @@ program can reach. Everything the agent changes (file writes and edits, git add,
 commands) is appended to `<state-dir>/audit.jsonl` (`--audit-log` to move it), a private file with the time,
 project, tool, a short summary and the first words of the result, never file contents.
 
+Remote git and pull requests need two more registry fields, again out of the agent's reach:
+
+```json
+"remote": "https://github.com/owner/repo.git", "tokenEnv": "KEVIN_GITHUB_TOKEN"
+```
+
+`git_clone` (into the empty project folder), `git_fetch`, `git_pull` (fast-forward only, no uncommitted changes),
+`git_push` and `pr_create` talk only to that `remote`: the agent never names a URL, a remote or a token, and the
+tools take no force or delete option. `git_push` sends the current branch under the same name, never forced, and
+not the default branch unless `allowMain` is set; `pr_create` opens a GitHub pull request from the current branch
+into the default branch. The token is read from the service's environment variable named by `tokenEnv` (default
+`KEVIN_GITHUB_TOKEN`; use a fine-scoped token, contents and pull requests on that one repository), reaches git only
+through a `GIT_ASKPASS` helper that is deleted afterwards, and is scrubbed from every result. A repository that
+rewrites URLs in its own config is refused, and its proxy, header and TLS settings are overridden. These tools
+always ask for approval.
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them
