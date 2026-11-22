@@ -23,5 +23,11 @@ check 'grep -q "bind_address: \"127.0.0.1\"" "$script" && grep -q "    - json" "
 # the secret key is generated, never written into the repository
 check '! grep -qE "secret_key: \"[0-9a-f]{16,}\"" "$script"' "no fixed secret key"
 
+# every dependency is pinned to an exact version (the install reads this file, not the newest releases)
+lock=$root/scripts/searxng-requirements.txt
+check '[ -s "$lock" ] && ! grep -vqE "^[A-Za-z0-9_.-]+==[0-9A-Za-z.+!-]+$" "$lock"' "searxng-requirements.txt must list only name==version lines"
+check '! grep -q " -U " "$script" && grep -q -- "-r \"\$LOCKFILE\"" "$script"' "the install must come from the lock file, never -U"
+out=$(run); check '[[ "$out" == *"msgspec==0.22.0"* ]]' "the lock contents are not sent to the host, got: $out"
+
 if [ "$fails" -ne 0 ]; then echo "test_setup_remote_searxng: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_setup_remote_searxng: $checks checks passed"

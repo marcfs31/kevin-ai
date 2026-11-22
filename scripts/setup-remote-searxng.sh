@@ -4,6 +4,8 @@
 # it to the search engines and nowhere else. Needs scripts/install-tool-runtimes.sh first (uv).
 # In Settings > Tools and internet the search address is then http://127.0.0.1:<port> (the address
 # is used by the tool service, which runs on the same machine).
+# The packages come from scripts/searxng-requirements.txt (exact versions, from the environment that was
+# tested); regenerate it with `uv pip freeze` in ~/opt/searxng-venv when the pinned commit moves.
 set -euo pipefail
 
 SEARXNG_COMMIT=c6ee3e9fd0235004a694e63720efc869bb1e3594
@@ -19,7 +21,7 @@ Environment (optional):
   LM_TOOLS_OPT     where install-tool-runtimes.sh put uv, default ~/opt
 
 Clones github.com/searxng/searxng at a pinned commit into ~/opt/searxng, installs it into
-~/opt/searxng-venv with uv (Python 3.12), writes ~/.config/searxng/settings.yml once (loopback,
+~/opt/searxng-venv with uv (Python 3.12) from the pinned list scripts/searxng-requirements.txt, writes ~/.config/searxng/settings.yml once (loopback,
 a random secret key, no limiter, JSON enabled), and (re)starts it; the log is ~/logs/searxng.log.
 EOF2
   exit 2
@@ -42,7 +44,7 @@ main() {
   remote_script=$(cat <<'EOS'
 set -euo pipefail
 expand_home() { local v=$1; if [[ "$v" == '$HOME/'* ]]; then printf '%s\n' "$HOME/${v#'$HOME/'}"; else printf '%s\n' "$v"; fi; }
-OPT=$(expand_home "$1"); PORT=$2; COMMIT=$3
+OPT=$(expand_home "$1"); PORT=$2; COMMIT=$3; LOCK=$4
 export PATH="$OPT/tool-bin:$PATH"
 command -v uv >/dev/null || { echo "uv not found in $OPT/tool-bin: run scripts/install-tool-runtimes.sh first" >&2; exit 1; }
 mkdir -p "$HOME/.config/searxng" "$HOME/logs"
@@ -51,8 +53,11 @@ git -C "$OPT/searxng" fetch -q origin "$COMMIT" 2>/dev/null || true
 git -C "$OPT/searxng" checkout -q "$COMMIT"
 uv venv -q --python 3.12 "$OPT/searxng-venv"
 PY="$OPT/searxng-venv/bin/python"
-uv pip install -q --python "$PY" -U pip setuptools wheel pyyaml msgspec typing_extensions pybind11
-(cd "$OPT/searxng" && uv pip install -q --python "$PY" --no-build-isolation -e .)
+LOCKFILE=$(mktemp)
+printf '%s\n' "$LOCK" >"$LOCKFILE"
+uv pip install -q --python "$PY" -r "$LOCKFILE"      # every package at the exact version that was tested
+(cd "$OPT/searxng" && uv pip install -q --python "$PY" --no-deps --no-build-isolation -e .)
+rm -f "$LOCKFILE"
 CFG="$HOME/.config/searxng/settings.yml"
 if [[ ! -f "$CFG" ]]; then
   KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
@@ -88,7 +93,9 @@ echo "searxng did not answer in time" >&2; tail -n 20 "$HOME/logs/searxng.log" >
 EOS
 )
   local quoted
-  quoted=$(printf '%q %q %q' "$opt" "$port" "$SEARXNG_COMMIT")
+  local lock_file; lock_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/searxng-requirements.txt"
+  [[ -f "$lock_file" ]] || { echo "setup-remote-searxng.sh: missing $lock_file" >&2; exit 1; }
+  quoted=$(printf '%q %q %q %q' "$opt" "$port" "$SEARXNG_COMMIT" "$(cat "$lock_file")")
   exec ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "bash -s -- $quoted" <<<"$remote_script"
 }
 
