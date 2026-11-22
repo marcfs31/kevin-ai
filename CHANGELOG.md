@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-11-23
+
+### Added
+- `scripts/start-remote-chat-tools.sh` starts the tool service with `--projects-base` (default `/mnt/models/kevin-projects`, `LM_PROJECTS_BASE`, empty turns it off) and `--projects-min-free-gb` (default 20, `LM_PROJECTS_MIN_FREE_GB`); `scripts/start-local-chat-tools.sh` does the same on the Mac (`~/KevinProjects`, its own registry `~/.config/kevin-ai/projects-local.json`).
+- Both scripts load `~/.config/kevin-ai/tool-service.env` (refused unless its mode is 600) so the GitHub token never sits in the repository, the command line or the browser.
+
+### Changed
+- README: "The five models" table (Qwen3.5-4B, Qwen3.5-4B Uncensored, Gemma 4 E4B, WhiteRabbitNeo 2.5 7B, Gemma 4 E4B Uncensored, each with its id, runtime, files and context), all five named in the intro and the web chat section, an owner guide for projects and the token, and a corrected note on vision.
+
 ## [0.3.14] - 2026-11-23
 
 ### Changed
