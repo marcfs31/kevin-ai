@@ -54,7 +54,8 @@ export interface SelectInput {
 export function selectTools(i: SelectInput): ToolSpec[] {
   const out = [...i.pinned];
   const have = new Set(out.map((s) => s.name));
-  let used = out.reduce((n, s) => n + s.tokens, 0);
+  // The budget is for the tools beyond the always-sent ones, so the slider starts at none and only ever adds.
+  let used = 0;
   for (const s of i.candidates) {
     if (out.length >= i.maxTools) break;
     if (i.unlocked.has(s.name) && !have.has(s.name)) {
@@ -72,11 +73,11 @@ export function selectTools(i: SelectInput): ToolSpec[] {
   return out;
 }
 
-/** About how many of `enabled` fit in `budgetTokens` next to the always-sent tools, judged by their average size.
+/** About how many of `enabled` fit in `budgetTokens` (the always-sent tools are not part of it), judged by their average size.
  * An estimate for the settings screen: the tools actually sent are the ones that match the message. */
-export function fitCount(enabled: ToolSpec[], pinnedTokens: number, budgetTokens: number, maxTools: number, pinnedCount: number): number {
+export function fitCount(enabled: ToolSpec[], budgetTokens: number, maxTools: number, pinnedCount: number): number {
   if (!enabled.length) return 0;
   const average = enabled.reduce((n, s) => n + s.tokens, 0) / enabled.length;
-  const byBudget = Math.floor(Math.max(0, budgetTokens - pinnedTokens) / average);
+  const byBudget = Math.floor(budgetTokens / average);
   return Math.max(0, Math.min(enabled.length, byBudget, maxTools - pinnedCount));
 }

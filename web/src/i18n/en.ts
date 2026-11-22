@@ -143,7 +143,7 @@ export const en = {
   'tools.unverified': 'not tried here yet',
   'tools.budget': 'Tool definitions per step: up to {tokens} tokens',
   'tools.budgetFit': 'At this size about {n} of your {total} tools fit in each step ({cap} at most). Only tools that match your message are sent, so a bigger size adds tools only when more of them match.',
-  'tools.budgetHint': 'The built-in tools and find_tools are always sent; the others are picked by what you ask. The tools you turned on add up to ≈{all} tokens; reading what is sent takes about {wait} the first time.',
+  'tools.budgetHint': 'The built-in tools and find_tools are always sent, on top of this; the others are picked by what you ask, up to this size. The tools you turned on add up to ≈{all} tokens; reading what is sent takes about {wait} the first time.',
   'tools.approval': 'Ask before running a tool',
   'tools.approval.readonly-free': 'Only tools that are not read-only (recommended)',
   'tools.approval.always': 'Every tool',
