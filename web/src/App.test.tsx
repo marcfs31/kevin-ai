@@ -205,6 +205,7 @@ describe('App', () => {
       typeAndSend('please write a file');
       fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Always allow this tool' }));
       await screen.findByText('all done');
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.toolsConfig.alwaysAllow).toEqual(['fs/write_file']);
       expect(calls(f)).toHaveLength(1);
     });
@@ -468,6 +469,7 @@ describe('App', () => {
       pick('Speed', 'fast');
       typeAndSend('first');
       await screen.findByText('ok');
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0]).toMatchObject({ effort: 'low', speed: 'fast' });
       fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
       // Before its first message a new chat starts from the last pick, like the model.
@@ -523,6 +525,7 @@ describe('App', () => {
         ['assistant', 'partial'],
         ['user', 'actually, do this instead'],
       ]);
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
       expect(saved.map((m: { role: string; status?: string }) => `${m.role}${m.status ? `:${m.status}` : ''}`)).toEqual(['user', 'assistant:stopped', 'user', 'assistant:done']);
     });
@@ -605,6 +608,7 @@ describe('App', () => {
       expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
       expect(bodyOf(fetchMock, 1).messages).toEqual(bodyOf(fetchMock, 0).messages);
       // The failed attempt was replaced, not kept next to the answer.
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages).toHaveLength(2);
     });
 
@@ -671,6 +675,7 @@ describe('App', () => {
       await screen.findByText('ok');
       await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
       expect(bodyOf(fetchMock, 0).model).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b');
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].model).toBe('whiterabbitneo-2.5-qwen2.5-coder-7b');
 
       // The choice belongs to this conversation: a new chat starts on the pick for new chats.
@@ -736,6 +741,7 @@ describe('App', () => {
       expect(summaryBody.messages[1].content).toContain('partial answ lorem');
       expect(summaryBody.messages[1].content).toContain('[this reply was stopped by the user before it ended]');
       // Nothing is removed from the saved chat.
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
       expect(saved).toHaveLength(9);
       expect(saved[4]).toMatchObject({ role: 'summary', content: SUMMARY_TEXT, covered: 4, auto: false });
@@ -771,6 +777,7 @@ describe('App', () => {
       expect(isSummary(chats[0]?.[1])).toBe(true);
       expect(bodyOf(fetchMock, 1).messages[0].content).toContain(SUMMARY_TEXT);
       expect(screen.getByText('Compacted: 4 earlier messages replaced by a summary')).toBeTruthy();
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
       expect(saved.find((m: { role: string }) => m.role === 'summary')).toMatchObject({ auto: true });
     });
@@ -831,6 +838,7 @@ describe('App', () => {
       expect(auto.checked).toBe(true);
       expect(document.getElementById('compact-hint')?.textContent).toContain('reaches 80% of the context');
       fireEvent.click(auto);
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.autoCompact).toBe(false);
       expect(document.getElementById('compact-hint')?.textContent).toMatch(/^Manual: nothing is summarised/);
       // Past 80% of the window the automatic mode would summarise first; here the chat is sent whole.
@@ -855,6 +863,7 @@ describe('App', () => {
       await waitFor(() => expect((screen.getByRole('button', { name: 'Compact chat' }) as HTMLButtonElement).disabled).toBe(false));
       expect(screen.queryByText(/Compacted:/)).toBeNull();
       expect(screen.queryByRole('alert')).toBeNull();
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages).toHaveLength(8);
     });
 
@@ -887,6 +896,7 @@ describe('App', () => {
       expect(within(trace).getByText('42')).toBeTruthy();
       expect(bodyOf(fetchMock, 0)).toMatchObject({ tool_choice: 'auto', tools: [{ function: { name: 'calculator' } }, { function: { name: 'current_time' } }] });
       expect(bodyOf(fetchMock, 1).messages.slice(-2)).toMatchObject([{ role: 'assistant', content: null, tool_calls: [{ id: 'c1' }] }, { role: 'tool', tool_call_id: 'c1', content: '42' }]);
+      await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].messages;
       expect(saved.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
       // The next question re-sends the whole exchange, calls and results included.
@@ -1297,10 +1307,11 @@ describe('App', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/v1/chat/reset') && (init as RequestInit | undefined)?.method === 'POST')).toBe(true);
     fireEvent.click(within(nav).getByRole('button', { name: 'Delete all' }));
     expect(within(nav).getByText('No conversations yet.')).toBeTruthy();
+    await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations).toEqual([]);
   });
 
-  it('deletes an unreadable copy from the banner', () => {
+  it('deletes an unreadable copy from the banner', async () => {
     localStorage.setItem(STORAGE_KEY, '{"version":99,"secret":"keep-me"}');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     mockFetch(() => sseResponse([FINISH]));
@@ -1309,6 +1320,7 @@ describe('App', () => {
     expect(banner.textContent).toContain('set aside');
     fireEvent.click(within(banner).getByRole('button', { name: 'Delete all' }));
     expect(Object.keys(localStorage).filter((k) => k.startsWith(BACKUP_KEY))).toEqual([]);
+    await act(async () => undefined);   // the save is a passive effect: let it run before reading the store
     expect(localStorage.getItem(STORAGE_KEY)).not.toContain('keep-me');
   });
 
