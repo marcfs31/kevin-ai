@@ -286,6 +286,57 @@ class Reaper(Base):
         self.assertEqual(chat_tools.reap_safely(m), ["fake"])
 
 
+class ListingCache(Base):
+    """The tool list is kept from a server's last start, so opening the chat does not start every enabled server."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config({"fake": stdio()})
+        self.serve()
+
+    def listing(self, query=""):
+        return self.http("GET", "/tools/servers/fake/tools" + query)[1]
+
+    def state(self):
+        return self.http("GET", "/tools/status")[1]["servers"][0]["state"]
+
+    def test_a_stopped_server_is_answered_from_the_kept_list_without_starting(self):
+        first = self.listing()
+        self.assertFalse(first["cached"])
+        self.http("POST", "/tools/servers/fake/stop", {})
+        self.assertEqual(self.state(), "stopped")
+        again = self.listing()
+        self.assertTrue(again["cached"])
+        self.assertEqual(again["tools"], first["tools"])
+        self.assertEqual(self.state(), "stopped")     # still not running: nothing was started
+        # A call starts it, as before.
+        self.assertEqual(self.http("POST", "/tools/servers/fake/call", {"name": "echo", "arguments": {"text": "x"}})[0], 200)
+        self.assertEqual(self.state(), "ready")
+
+    def test_fresh_starts_the_server_and_asks_again(self):
+        self.listing()
+        self.http("POST", "/tools/servers/fake/stop", {})
+        doc = self.listing("?fresh=1")
+        self.assertFalse(doc["cached"])
+        self.assertEqual(self.state(), "ready")
+
+    def test_a_changed_start_command_makes_the_kept_list_stale(self):
+        self.listing()
+        self.http("POST", "/tools/servers/fake/stop", {})
+        self.write_config({"fake": stdio("--other-flag-that-changes-the-fingerprint")})
+        self.assertEqual(self.state(), "stopped")
+        with mock.patch.object(chat_tools.Manager, "_ensure", side_effect=chat_tools.ToolError("start_failed", "would start", 502)):
+            status, doc = self.http("GET", "/tools/servers/fake/tools")
+        self.assertEqual((status, doc["error"]["code"]), (502, "start_failed"))    # not answered from the old list
+
+    def test_a_network_server_still_needs_the_internet_for_a_kept_list(self):
+        self.write_config({"fake": stdio(network=True)})
+        self.assertEqual(self.http("GET", "/tools/servers/fake/tools")[1]["error"]["code"], "internet_off")
+        self.listing("?internet=1")
+        self.http("POST", "/tools/servers/fake/stop", {})
+        self.assertEqual(self.http("GET", "/tools/servers/fake/tools")[1]["error"]["code"], "internet_off")
+
+
 class Pagination(Base):
     def test_every_page_of_tools_is_collected(self):
         self.write_config({"fake": stdio("--pages")})

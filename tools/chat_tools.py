@@ -25,7 +25,9 @@ chat_server.py forwards them), so the page's CSP stays 'self' only.
 Endpoints (JSON; every request but /tools/status needs a loopback Origin or none, and a POST needs
 Content-Type: application/json):
   GET  /tools/status                          the servers, the catalog and the limits
-  GET  /tools/servers/<id>/tools[?internet=1] the tools of a configured server (starts it)
+  GET  /tools/servers/<id>/tools[?internet=1&fresh=1]
+                                              the tools of a configured server: from the list kept at its
+                                              last start, or (no list yet, or fresh=1) by starting it
   POST /tools/servers/<id>/call               {"name", "arguments", "internet"}
   POST /tools/servers/<id>/stop
   POST /tools/catalog/<id>/add                {"internet"}: writes the catalog entry into the config
@@ -663,7 +665,46 @@ class Manager:
 
     # -- tools
 
-    def tools(self, sid, internet):
+    def _cache_file(self, sid):
+        return os.path.join(self.state_dir, "tools", sid + ".json")
+
+    @staticmethod
+    def _fingerprint(spec):
+        """What the tool list depends on: how the server is started (its pinned package or address)."""
+        return json.dumps([spec["kind"], spec.get("command"), spec.get("args"), spec.get("url")])
+
+    def _cached_tools(self, sid, spec):
+        try:
+            with open(self._cache_file(sid), encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(doc, dict) or doc.get("fingerprint") != self._fingerprint(spec) or not isinstance(doc.get("tools"), list):
+            return None
+        return doc["tools"]
+
+    def _store_tools(self, sid, spec, tools):
+        try:
+            os.makedirs(os.path.dirname(self._cache_file(sid)), exist_ok=True)
+            tmp = self._cache_file(sid) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"fingerprint": self._fingerprint(spec), "tools": tools}, f)
+            os.replace(tmp, self._cache_file(sid))
+        except OSError:
+            pass    # a cache that cannot be written only costs a start next time
+
+    def tools(self, sid, internet, fresh=False):
+        """The tools of a server. One that is not running is answered from the list kept from its last start,
+        so opening the chat does not start every enabled server; `fresh` starts it and asks again."""
+        spec = self.spec(sid)
+        self._gate(spec, internet)
+        if not fresh:
+            with self.lock:
+                run = self.running.get(sid)
+            if not (run and not run["client"].dead):
+                cached = self._cached_tools(sid, spec)
+                if cached is not None:
+                    return {"ok": True, "tools": cached, "cached": True}
         run = self._ensure(sid, internet)
         client = run["client"]
         if run["tools"] is None or client.stale:
@@ -676,8 +717,9 @@ class Manager:
                     break
             client.stale = False
             run["tools"] = normalize_tools(listing)
+            self._store_tools(sid, spec, run["tools"])
         run["last"] = time.monotonic()
-        return {"ok": True, "tools": run["tools"]}
+        return {"ok": True, "tools": run["tools"], "cached": False}
 
     def call(self, sid, name, arguments, internet):
         if not isinstance(name, str) or not TOOL_NAME.match(name):
@@ -900,8 +942,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if name == "status":
             return mgr.status()
         if name == "tools":
-            flag = urllib.parse.parse_qs(query).get("internet", ["0"])[0]
-            return mgr.tools(groups[0], flag == "1")
+            qs = urllib.parse.parse_qs(query)
+            return mgr.tools(groups[0], qs.get("internet", ["0"])[0] == "1", qs.get("fresh", ["0"])[0] == "1")
         doc = self.body()
         internet = doc.get("internet") is True
         if name == "call":
