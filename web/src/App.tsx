@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { Composer } from './components/Composer';
 import { MessageView, errorText } from './components/MessageView';
 import { ApprovalCard, type Answer } from './components/ApprovalCard';
+import { SettingsIcon } from './components/Icons';
 import { ChatStats } from './components/ChatStats';
 import { ChatModelSelect } from './components/ChatModelSelect';
 import { ModeSelects } from './components/ModeSelects';
@@ -491,6 +492,7 @@ function Chat({ state, setState, storage, notice }: {
           aria-controls="settings"
           onClick={() => setSettingsOpen((o) => !o)}
         >
+          <SettingsIcon />
           {t('settings.open')}
         </button>
       </header>

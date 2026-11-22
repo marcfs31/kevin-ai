@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { I18nProvider } from '../i18n';
 import { Composer } from './Composer';
-import { FileIcon, ImageIcon } from './Icons';
+import { FileIcon, ImageIcon, SettingsIcon } from './Icons';
 
 describe('icons', () => {
   it('are drawn inline, decorative, and in the text colour', () => {
@@ -10,10 +10,11 @@ describe('icons', () => {
       <>
         <FileIcon />
         <ImageIcon />
+        <SettingsIcon />
       </>,
     );
     const svgs = [...container.querySelectorAll('svg')];
-    expect(svgs).toHaveLength(2);
+    expect(svgs).toHaveLength(3);
     for (const s of svgs) {
       expect(s.getAttribute('aria-hidden')).toBe('true');
       expect(s.getAttribute('stroke')).toBe('currentColor');
@@ -33,5 +34,13 @@ describe('icons', () => {
       expect(button.querySelector('svg.icon')).toBeTruthy();
       expect(button.textContent).toBe(name);
     }
+  });
+
+  it('has a gear on the Settings button in the app header, with the same name', async () => {
+    const { App } = await import('../App');
+    render(<App storage={window.localStorage} languages={['en-US']} />);
+    const button = await screen.findByRole('button', { name: 'Settings' });
+    expect(button.querySelector('svg.icon')).toBeTruthy();
+    expect(button.textContent).toBe('Settings');
   });
 });
