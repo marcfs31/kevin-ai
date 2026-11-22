@@ -39,6 +39,8 @@ export function mockFetch(chat: Handler, models: () => Response = () => modelsRe
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith('/v1/models')) return models();
+    // The page asks which projects exist whenever tools are on: none, unless a test says otherwise.
+    if (url === '/tools/projects') return new Response(JSON.stringify({ ok: true, projects: [], freeGb: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     return chat(url, init);
   });
   vi.stubGlobal('fetch', fn);

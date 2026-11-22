@@ -18,6 +18,7 @@ export function ApprovalCard({ request, onAnswer }: { request: ApprovalRequest; 
       <p id={`${id}-d`} className="hint">
         {!request.readOnly ? t('approval.hint') : request.network ? t('approval.hintNetwork') : t('approval.hintReadOnly')}
       </p>
+      {request.description && <p className="approval-what">{request.description.length > 300 ? `${request.description.slice(0, 300)}…` : request.description}</p>}
       <p className="hint">{t('approval.args')}</p>
       <pre>{request.args}</pre>
       <div className="approval-actions">

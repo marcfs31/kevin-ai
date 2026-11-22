@@ -1,7 +1,7 @@
 // Turns the tools the user turned on into what one agent run needs: the definitions to offer at a
 // step, whether a call needs the user's OK, and running it. Nothing here throws at the agent: a
 // failure is a result the model can read.
-import { ApiError, toolsCall, toolsSearch, type WireTool } from './api';
+import { ApiError, toolsCall, toolsSearch, type ProjectInfo, type WireTool } from './api';
 import type { ToolCall, InternetConfig, ToolsConfig } from './storage';
 import { allowKey, builtinSpecs, findToolsSpec, toWire, webSearchSpec, type ToolSpec } from './toolRegistry';
 import { searchSpecs, selectTools } from './toolSelect';
@@ -23,6 +23,8 @@ export interface ApprovalRequest {
   /** The arguments as the model wrote them, pretty-printed and cut. */
   args: string;
   readOnly: boolean;
+  /** What the tool says it does: for an allowlisted command this is the exact argv that will run. */
+  description: string;
 }
 
 export interface ToolHost {
@@ -97,6 +99,21 @@ export interface HostInput {
   mcp: ToolSpec[];
   config: ToolsConfig;
   internet: InternetConfig;
+  /** The project this chat works in, when one is chosen and the service still lists it. */
+  project?: ProjectInfo | null;
+}
+
+/** Said once when a project is chosen: where the agent works and the rules the service enforces anyway. */
+export function projectGuidance(p: ProjectInfo): string {
+  const commands = p.commands.map((c) => `run_${p.id}_${c}`);
+  return [
+    `You are working in the project "${p.title}". Every project tool already acts on it; do not name another.`,
+    'Look before you change: read the files and call git_status first. Make changes on a branch from git_branch_create, commit small steps, and run the tests before you commit.',
+    `${p.defaultBranch} is the default branch${p.allowMain ? '' : ' and commits there are refused'}. Do not push or open a pull request unless the user asks.`,
+    commands.length ? `Commands you can run: ${commands.join(', ')}.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 /** When to use the tools, for a small model that otherwise answers from memory. Short: every word is prompt the server must read once. */
@@ -116,7 +133,11 @@ export function toolGuidance(o: { search: boolean; mcp: boolean }): string {
   return lines.join(' ');
 }
 
+/** The id of the tool service's built-in project server. */
+export const PROJECT_SERVER = 'project';
+
 export function createToolHost(i: HostInput): ToolHost {
+  const project = i.project ?? null;
   const enabled = i.mcp.filter((s) => {
     if (s.source.kind !== 'mcp') return false;
     const server = i.config.servers[s.source.server];
@@ -127,7 +148,7 @@ export function createToolHost(i: HostInput): ToolHost {
   const byName = new Map([...pinned, ...enabled].map((s) => [s.name, s]));
   return {
     external: enabled.length > 0 || searchOn,
-    guidance: toolGuidance({ search: searchOn, mcp: enabled.length > 0 }),
+    guidance: [toolGuidance({ search: searchOn, mcp: enabled.length > 0 }), project ? projectGuidance(project) : ''].filter(Boolean).join(' '),
     definitions: (query, unlocked) =>
       selectTools({ pinned, candidates: enabled, query, budgetTokens: i.config.budgetTokens, maxTools: MAX_TOOLS_PER_STEP, unlocked }).map(toWire),
     approval(call) {
@@ -136,7 +157,7 @@ export function createToolHost(i: HostInput): ToolHost {
       const server = spec.source.kind === 'mcp' ? spec.source.server : null;
       return {
         callId: call.id, tool: spec.name, allowKey: allowKey(spec), title: spec.source.kind === 'mcp' ? `${spec.source.server} · ${spec.source.tool}` : spec.name,
-        server, network: spec.network, args: prettyArguments(call.arguments), readOnly: spec.readOnly,
+        server, network: spec.network, args: prettyArguments(call.arguments), readOnly: spec.readOnly, description: spec.description,
       };
     },
     async run(call, signal, unlock) {
@@ -160,8 +181,11 @@ export function createToolHost(i: HostInput): ToolHost {
             if (!query) return fail('query must be a non-empty string');
             return await toolsSearch(query, i.internet.searchUrl, signal);
           }
-          case 'mcp':
-            return await toolsCall(spec.source.server, spec.source.tool, parsed.args, i.internet.on, signal);
+          case 'mcp': {
+            // The chat's own project always wins over a name the model wrote, so a tool call cannot wander to another project.
+            const args = spec.source.server === PROJECT_SERVER && project ? { ...parsed.args, project: project.id } : parsed.args;
+            return await toolsCall(spec.source.server, spec.source.tool, args, i.internet.on, signal);
+          }
         }
       } catch (e) {
         return fail(describe(e));

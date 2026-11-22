@@ -212,6 +212,28 @@ async function toolsJson(url: string, init: RequestInit): Promise<Record<string,
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d);
 
+/** A project the owner registered on a host: what the page may know (no paths, no token). */
+export interface ProjectInfo {
+  id: string;
+  title: string;
+  defaultBranch: string;
+  allowMain: boolean;
+  hasRemote: boolean;
+  commands: string[];
+}
+
+export async function toolsProjects(signal?: AbortSignal, host: ToolsHost = 'server'): Promise<ProjectInfo[]> {
+  const j = await toolsJson(`${toolsBase(host)}/projects`, { signal });
+  return (Array.isArray(j.projects) ? j.projects : []).flatMap((v): ProjectInfo[] => {
+    const p = obj(v);
+    if (!p || typeof p.id !== 'string') return [];
+    return [{
+      id: p.id, title: str(p.title, p.id), defaultBranch: str(p.defaultBranch, 'main'), allowMain: p.allowMain === true, hasRemote: p.hasRemote === true,
+      commands: Array.isArray(p.commands) ? p.commands.filter((c): c is string => typeof c === 'string') : [],
+    }];
+  });
+}
+
 export async function toolsStatus(signal?: AbortSignal, host: ToolsHost = 'server'): Promise<ToolsStatus> {
   const j = await toolsJson(`${toolsBase(host)}/status`, { signal });
   const servers = (Array.isArray(j.servers) ? j.servers : []).flatMap((v): McpServerStatus[] => {

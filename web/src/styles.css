@@ -627,6 +627,9 @@ button:has(> .icon) { display: inline-flex; align-items: center; gap: 0.45rem; }
 
 .chat-model { display: inline-flex; align-items: center; gap: 0.4rem; }
 .chat-model select { font: inherit; font-size: 0.8125rem; max-inline-size: 16rem; }
+.project-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; padding-block: 0.4rem; padding-inline: 1.25rem; border-block-end: 1px solid var(--line); font-size: 0.8125rem; }
+.git-chip { font-family: var(--mono); overflow-wrap: anywhere; }
+.approval-what { margin: 0 0 0.25rem; overflow-wrap: anywhere; }
 
 .chat-tools { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .chat-tools .spacer { flex: 1; }
