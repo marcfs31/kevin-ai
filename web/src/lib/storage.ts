@@ -173,11 +173,11 @@ export interface State {
 
 export const DEFAULT_SETTINGS: Settings = {
   systemPrompt: '',
-  temperature: 0.7,
+  temperature: 0.8,
   maxTokens: null,
-  imagePreset: 512,
+  imagePreset: 1024,
   locale: 'auto',
-  tools: false,
+  tools: true,
   maxSteps: 20,
   autoCompact: true,
   toolsConfig: { servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [] },
@@ -333,7 +333,7 @@ function settings(v: unknown): Settings {
     maxTokens: typeof m === 'number' && Number.isInteger(m) && m > 0 ? m : null,
     imagePreset: (IMAGE_PRESETS as readonly unknown[]).includes(o.imagePreset) ? (o.imagePreset as ImagePreset) : DEFAULT_SETTINGS.imagePreset,
     locale: o.locale === 'en' || o.locale === 'es' ? o.locale : 'auto',
-    tools: o.tools === true,
+    tools: typeof o.tools === 'boolean' ? o.tools : DEFAULT_SETTINGS.tools,
     maxSteps: typeof o.maxSteps === 'number' && Number.isInteger(o.maxSteps) && o.maxSteps >= 1 && o.maxSteps <= MAX_STEPS_LIMIT ? o.maxSteps : DEFAULT_SETTINGS.maxSteps,
     autoCompact: typeof o.autoCompact === 'boolean' ? o.autoCompact : DEFAULT_SETTINGS.autoCompact,
     toolsConfig: toolsConfig(o.toolsConfig),

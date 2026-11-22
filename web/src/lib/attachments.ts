@@ -230,3 +230,13 @@ export function newId(): string {
   counter += 1;
   return `${Date.now().toString(36)}-${counter.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/** The most characters of a file the preview shows; longer ones are cut and say so. */
+export const PREVIEW_MAX_CHARS = 50_000;
+
+/** What was sent as text besides what the user typed: the attached text files and PDF pages. Empty when there were none. */
+export function sentFileText(content: string | ContentPart[], typed: string): string {
+  const text = contentText(content);
+  const files = typed && text.endsWith(typed) ? text.slice(0, text.length - typed.length) : text;
+  return files.trim();
+}

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useI18n, type I18n } from '../i18n';
 import type { ApiError, ContentPart } from '../lib/api';
-import { isAllowedImageDataUrl } from '../lib/attachments';
+import { isAllowedImageDataUrl, sentFileText } from '../lib/attachments';
 import type { AssistantMessage, Message, Stats, SummaryMessage, ToolMessage, UserMessage } from '../lib/storage';
 import { liveCount, replyCount } from '../lib/tokens';
 import type { LiveInfo } from '../lib/agent';
 import { estimateWaitSeconds, etaParts } from '../lib/estimate';
 import { CopyButton, Markdown } from './Markdown';
+import { Preview, PreviewImage, PreviewText } from './Preview';
 import { TokenLine } from './TokenLine';
 
 const KNOWN_CODES = new Set([
@@ -143,6 +144,7 @@ function imageParts(content: string | ContentPart[]): Extract<ContentPart, { typ
 function User({ m, onDelete, onRegenerate }: { m: UserMessage; onDelete?: () => void; onRegenerate?: () => void }) {
   const { t } = useI18n();
   const images = imageParts(m.content);
+  const files = sentFileText(m.content, m.typed);
   return (
     <article className="msg user" aria-label={t('message.you')}>
       <p className="role">{t('message.you')}</p>
@@ -150,13 +152,23 @@ function User({ m, onDelete, onRegenerate }: { m: UserMessage; onDelete?: () => 
         <ul className="msg-images" aria-label={t('message.images')}>
           {images.map((p, i) => (
             <li key={i}>
-              <img src={p.image_url.url} alt="" className="msg-thumb" />
+              <details className="preview preview-image">
+                <summary aria-label={t('preview.image', { n: i + 1 })}>
+                  <img src={p.image_url.url} alt="" className="msg-thumb" />
+                </summary>
+                <PreviewImage src={p.image_url.url} label={t('preview.image', { n: i + 1 })} />
+              </details>
             </li>
           ))}
         </ul>
       )}
       {m.typed && <p className="typed">{m.typed}</p>}
       {m.attachmentNames.length > 0 && <p className="attached">{t('message.attached', { names: m.attachmentNames.join(', ') })}</p>}
+      {m.attachmentNames.length > 0 && files !== '' && (
+        <Preview label={t('preview.sent')}>
+          <PreviewText text={files} />
+        </Preview>
+      )}
       {(onDelete || onRegenerate) && (
         <div className="msg-foot">
           {onRegenerate && (

@@ -5,6 +5,7 @@ import {
   ACCEPT_ATTRIBUTE, AttachError, DEFAULT_MAX_PIXELS, checkText, classifyFile, estimateAttachment, maxBytes, newId, parsePageRange,
   selectPdf, type Attachment,
 } from '../lib/attachments';
+import { Preview, PreviewImage, PreviewText } from './Preview';
 import { WARN_WAIT_SECONDS } from '../lib/estimate';
 import { imageToPng } from '../lib/image';
 import { finePointer } from '../lib/pointer';
@@ -271,6 +272,19 @@ function AttachmentItem({ a, info, onRemove, onRange }: { a: Attachment; info: S
           ×
         </button>
       </div>
+      <Preview label={t('preview.show', { name: a.name })}>
+        {a.kind === 'image' && <PreviewImage src={a.dataUrl} label={a.name} />}
+        {a.kind === 'text' && <PreviewText text={a.text} />}
+        {a.kind === 'pdf' && sel && (
+          <>
+            {sel.text && <PreviewText text={sel.text} />}
+            {sel.images.map((img, i) => (
+              <PreviewImage key={i} src={img.dataUrl} label={t('preview.page', { name: a.name })} />
+            ))}
+          </>
+        )}
+        {a.kind === 'pdf' && !sel && <p className="error">{t('composer.pdfRangeInvalid')}</p>}
+      </Preview>
       {a.kind === 'pdf' && (
         <div className="pdf-range">
           <label htmlFor={rangeId}>{t('composer.pdfPages', { name: a.name })}</label>

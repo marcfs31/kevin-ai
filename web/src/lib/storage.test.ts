@@ -66,7 +66,7 @@ describe('migrate', () => {
     expect(state?.conversations.map((c) => c.model)).toEqual([null, 'rabbit', null]);
   });
 
-  it('loads tool calls and results, and settings from before tools existed with tools off', () => {
+  it('loads tool calls and results, and settings from before tools existed with the defaults (tools on)', () => {
     const state = migrate({
       version: 1,
       settings: { systemPrompt: 'x' },
@@ -76,7 +76,8 @@ describe('migrate', () => {
         { id: 'x', role: 'tool', content: 'no call id' },
       ] }],
     });
-    expect(state?.settings).toMatchObject({ tools: false, maxSteps: 20 });
+    expect(state?.settings).toMatchObject({ tools: true, maxSteps: 20 });
+    expect(migrate({ version: 1, settings: { tools: false } })?.settings.tools).toBe(false);
     expect(state?.conversations[0]?.messages).toMatchObject([
       { toolCalls: [{ id: 'k', name: 'f', arguments: '{}' }], stepLimit: 3 },
       { role: 'tool', toolCallId: 'k', isError: true },

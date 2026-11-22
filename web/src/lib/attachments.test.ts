@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ServerInfo } from './api';
 import {
   AttachError, DEFAULT_MAX_PIXELS, MAX_BODY_BYTES, MAX_DECODE_SIDE, MAX_IMAGES, buildUserContent, checkText, classifyFile,
-  estimateAttachment, fence, fitSize, isAllowedImageDataUrl, joinTextItems, parsePageRange, selectPdf, type Attachment,
+  estimateAttachment, fence, fitSize, isAllowedImageDataUrl, joinTextItems, parsePageRange, selectPdf, sentFileText, type Attachment,
 } from './attachments';
 import { checkContext, estimateImageTokens, estimateTextTokens, estimateWaitSeconds, etaParts } from './estimate';
 import { requestBody } from './api';
@@ -290,5 +290,15 @@ describe('toWire hardening', () => {
     expect(toWire('', [img])[0]?.content).toEqual([expect.objectContaining({ type: 'image_url' }), { type: 'text', text: 'what is this' }]);
     expect(toWire('', [img], false)[0]?.content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringContaining('cannot read images') }), { type: 'text', text: 'what is this' }]);
     expect(toWire('', [hi('plain')], false)[0]?.content).toBe('plain');
+  });
+});
+
+describe('sentFileText', () => {
+  it('is what was sent besides the typed text, and empty when nothing was attached', () => {
+    expect(sentFileText('hello', 'hello')).toBe('');
+    expect(sentFileText('a.txt\n```\nbody\n```\n\nsummarise it', 'summarise it')).toBe('a.txt\n```\nbody\n```');
+    expect(sentFileText([{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }, { type: 'text', text: 'what is this' }], 'what is this')).toBe('');
+    // A message with only a file has nothing typed: the whole text is the file.
+    expect(sentFileText('a.txt\n```\nbody\n```', '')).toBe('a.txt\n```\nbody\n```');
   });
 });
