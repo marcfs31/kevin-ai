@@ -5,6 +5,7 @@
 """
 
 import base64
+import gzip
 import http.client
 import http.server
 import json
@@ -301,6 +302,53 @@ class ApiTest(ProxyTest):
             resp, _ = self.request("GET", "/health")
         self.assertEqual(resp.status, 200)
         self.assertEqual(seen, {"connect": chat_server.CONNECT_TIMEOUT_S, "request": self.proxy.upstream_timeout})
+
+
+class GzipTest(ProxyTest):
+    def get(self, path, encoding=None, method="GET"):
+        hdr = {"Accept-Encoding": encoding} if encoding else {}
+        return self.request(method, path, headers=hdr)
+
+    def big_asset(self):
+        with open(os.path.join(self.dist, "assets", "big.js"), "w") as f:
+            f.write("console.log('hello');\n" * 400)
+        return "/assets/big.js"
+
+    def test_a_text_file_is_gzipped_when_asked_and_decodes_to_the_same_bytes(self):
+        path = self.big_asset()
+        raw = self.get(path)[1]
+        resp, packed = self.get(path, "gzip, deflate, br")
+        self.assertEqual(resp.getheader("Content-Encoding"), "gzip")
+        self.assertEqual(resp.getheader("Vary"), "Accept-Encoding")
+        self.assertEqual(int(resp.getheader("Content-Length")), len(packed))
+        self.assertLess(len(packed), len(raw) // 10)
+        self.assertEqual(gzip.decompress(packed), raw)
+        self.assertIsNone(self.get(path)[0].getheader("Content-Encoding"))
+
+    def test_not_gzipped_when_refused_unknown_or_too_small_and_never_for_images(self):
+        path = self.big_asset()
+        for enc in ("identity", "gzip;q=0", "br", "gzip;q=junk"):
+            resp, body = self.get(path, enc)
+            self.assertIsNone(resp.getheader("Content-Encoding"), enc)
+            self.assertEqual(resp.getheader("Vary"), "Accept-Encoding")
+        self.assertIsNone(self.get("/assets/app.js", "gzip")[0].getheader("Content-Encoding"))       # 14 bytes: not worth it
+        with open(os.path.join(self.dist, "assets", "logo.png"), "wb") as f:
+            f.write(b"\x89PNG" + b"0" * 2000)
+        resp, _ = self.get("/assets/logo.png", "gzip")
+        self.assertIsNone(resp.getheader("Content-Encoding"))
+        self.assertIsNone(resp.getheader("Vary"))
+
+    def test_head_reports_the_compressed_length_and_the_cache_follows_a_changed_file(self):
+        path = self.big_asset()
+        resp, body = self.get(path, "gzip", method="HEAD")
+        self.assertEqual(body, b"")
+        packed_len = int(resp.getheader("Content-Length"))
+        self.assertEqual(packed_len, len(self.get(path, "gzip")[1]))
+        with open(os.path.join(self.dist, "assets", "big.js"), "w") as f:
+            f.write("console.log('changed');\n" * 900)
+        os.utime(os.path.join(self.dist, "assets", "big.js"), None)
+        again = self.get(path, "gzip")[1]
+        self.assertEqual(gzip.decompress(again), ("console.log('changed');\n" * 900).encode())
 
 
 class ToolsTest(ProxyTest):

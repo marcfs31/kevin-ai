@@ -5,7 +5,8 @@
                    [--upstream http://127.0.0.1:8080] [--upstream-timeout 3600]
                    [--tools-upstream http://127.0.0.1:8081]
 
-- GET of a file under --dist is served with its MIME type and a strict Content-Security-Policy;
+- GET of a file under --dist is served with its MIME type and a strict Content-Security-Policy, gzipped
+  when the browser accepts it (text files only; the compressed bytes are kept until the file changes);
   "/" is index.html. No directory listings; a path that resolves outside --dist is a 404.
 - /v1/* and /health go to --upstream unchanged, and the answer comes back as it arrives
   (server-sent events are not buffered). When the browser goes away, the upstream connection is
@@ -36,6 +37,7 @@ import select
 import socket
 import sys
 import urllib.parse
+import zlib
 
 MAX_BODY = 24 * 1024 * 1024
 CLIENT_TIMEOUT_S = 60
@@ -71,7 +73,28 @@ MIME = {
     ".txt": "text/plain; charset=utf-8",
 }
 
+# Text files worth compressing; images and fonts are already compressed.
+COMPRESSIBLE = {".html", ".js", ".mjs", ".css", ".json", ".map", ".svg", ".txt"}
+MIN_COMPRESS_BYTES = 512
+
 LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}
+
+
+def accepts_gzip(header):
+    """True when an Accept-Encoding header lists gzip (or *) with a quality above zero."""
+    for item in (header or "").split(","):
+        name, _, params = item.strip().partition(";")
+        if name.strip().lower() not in ("gzip", "x-gzip", "*"):
+            continue
+        q = params.strip().lower()
+        if q.startswith("q="):
+            try:
+                if float(q[2:]) <= 0:
+                    return False
+            except ValueError:
+                return False
+        return True
+    return False
 
 
 def is_loopback(host):
@@ -208,9 +231,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ext = os.path.splitext(target)[1].lower()
         with open(target, "rb") as f:
             body = f.read()
+        gzipped = ext in COMPRESSIBLE and len(body) >= MIN_COMPRESS_BYTES and accepts_gzip(self.headers.get("Accept-Encoding"))
+        if gzipped:
+            body = self.server.gzip_of(target, body)
         self.send_response(200)
         self.common_headers()
         self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
+        if ext in COMPRESSIBLE:
+            self.send_header("Vary", "Accept-Encoding")
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(body)))
         immutable = rel.startswith("/assets/")
         self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-cache")
@@ -344,7 +374,22 @@ class Server(http.server.ThreadingHTTPServer):
         self.api_key = api_key or None
         self.upstream_timeout = upstream_timeout
         self.files = index_dist(self.dist)
+        self.gzipped = {}        # (path, mtime, size) -> compressed bytes: dist is a few MB and changes only when a build is deployed
         super().__init__(addr, Handler)
+
+    def gzip_of(self, path, body):
+        """The gzip of a file's bytes, kept until the file changes."""
+        try:
+            key = (path, os.stat(path).st_mtime_ns, len(body))
+        except OSError:
+            key = (path, 0, len(body))
+        packed = self.gzipped.get(key)
+        if packed is None:
+            packer = zlib.compressobj(9, zlib.DEFLATED, 31)
+            packed = packer.compress(body) + packer.flush()
+            self.gzipped = {k: v for k, v in self.gzipped.items() if k[0] != path}
+            self.gzipped[key] = packed
+        return packed
 
     def find_file(self, url_path):
         """The file for a URL path, re-reading dist once on a miss (a new build was deployed)."""

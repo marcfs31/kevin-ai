@@ -555,6 +555,11 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   .fields { grid-template-columns: 1fr; }
 }
 
+/* On a phone the model row stacks into about 6.8rem once it has loaded; keep that room while it connects so the page does not jump. */
+@media (max-width: 30rem) {
+  .server { min-block-size: 6.8rem; }
+}
+
 @media (max-width: 22rem) {
   .top h1 { font-size: 1.125rem; }
   .msg.user { max-inline-size: 100%; }
