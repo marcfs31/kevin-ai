@@ -388,6 +388,14 @@ class ProjectHost:
         if self.audit is not None:
             self.audit.log(project, tool, chat_audit.summarize(tool, args), ok, text)
 
+    def summary(self):
+        """What the chat page may show about the projects: ids, titles, rules and command names, never paths or tokens."""
+        projects = self.projects()
+        return {"projects": [
+            {"id": p["id"], "title": p["title"], "defaultBranch": p["defaultBranch"], "allowMain": p["allowMain"],
+             "hasRemote": bool(p.get("remote")), "commands": sorted(p["commands"])}
+            for p in projects.values()], "freeGb": shutil.disk_usage(self.base).free // GB}
+
     def problem(self):
         """The reason the registry cannot be used, or None."""
         try:

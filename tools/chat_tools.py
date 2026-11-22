@@ -27,6 +27,7 @@ chat_server.py forwards them), so the page's CSP stays 'self' only.
 Endpoints (JSON; every request but /tools/status needs a loopback Origin or none, and a POST needs
 Content-Type: application/json):
   GET  /tools/status                          the servers, the catalog and the limits
+  GET  /tools/projects                        the registered projects (ids, titles, branch rules, command names)
   GET  /tools/servers/<id>/tools[?internet=1&fresh=1]
                                               the tools of a configured server: from the list kept at its
                                               last start, or (no list yet, or fresh=1) by starting it
@@ -843,6 +844,7 @@ def web_search(search_url, query, count, allow=(), own_port=None):
 
 ROUTES = (
     ("GET", re.compile(r"^/tools/status$"), "status"),
+    ("GET", re.compile(r"^/tools/projects$"), "projects"),
     ("GET", re.compile(r"^/tools/servers/([a-z0-9_-]+)/tools$"), "tools"),
     ("POST", re.compile(r"^/tools/servers/([a-z0-9_-]+)/call$"), "call"),
     ("POST", re.compile(r"^/tools/servers/([a-z0-9_-]+)/stop$"), "stop"),
@@ -957,6 +959,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         mgr = self.server.manager
         if name == "status":
             return mgr.status()
+        if name == "projects":
+            if mgr.projects is None:
+                return {"projects": [], "freeGb": None}
+            try:
+                return mgr.projects.summary()
+            except chat_projects.RegistryError as e:
+                raise ToolError("registry_unusable", f"the project registry cannot be used: {e}", 409) from None
         if name == "tools":
             qs = urllib.parse.parse_qs(query)
             return mgr.tools(groups[0], qs.get("internet", ["0"])[0] == "1", qs.get("fresh", ["0"])[0] == "1")

@@ -366,6 +366,20 @@ class ProjectServer(Base):
         self.assertEqual(self.http("GET", "/tools/status")[1]["servers"], [])
         self.assertEqual(self.http("GET", "/tools/servers/project/tools")[1]["error"]["code"], "unknown_server")
 
+    def test_the_projects_endpoint_lists_ids_and_rules_but_no_paths_and_refuses_cross_site(self):
+        self.start()
+        status, doc = self.http("GET", "/tools/projects")
+        self.assertEqual(status, 200)
+        self.assertEqual(doc["projects"], [{"id": "demo", "title": "Demo", "defaultBranch": "main", "allowMain": False, "hasRemote": False, "commands": []}])
+        self.assertNotIn(self.base, json.dumps(doc))
+        self.assertEqual(self.http("GET", "/tools/projects", headers={"Origin": "https://evil.example"})[0], 403)
+        self.serve()                                  # no --projects-base: an empty list, not an error
+        self.assertEqual(self.http("GET", "/tools/projects")[1]["projects"], [])
+        with open(self.registry, "w") as f:
+            f.write("{")
+        self.start()
+        self.assertEqual(self.http("GET", "/tools/projects")[1]["error"]["code"], "registry_unusable")
+
     def test_it_stays_listed_when_the_mcp_config_is_unreadable(self):
         with open(self.cfg, "w") as f:
             f.write("{nope")
