@@ -1,7 +1,7 @@
 {
   "name": "lm-chat-web",
   "private": true,
-  "version": "0.2.29",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
     "node": ">=24"

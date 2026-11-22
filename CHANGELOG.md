@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-11-22
 
 ### Fixed
 - The thinking text is drawn as Markdown like the answer (bold, italics, lists, maths), not as raw text with asterisks. There a single-asterisk span (*Total weight:*) is drawn bold, as models mean it; the answer keeps the standard italics. LaTeX written as \\( ... \\) and \\[ ... \\] is drawn like the dollar forms, in the thinking text and the answer.
