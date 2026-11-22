@@ -194,6 +194,22 @@ SearXNG to the search engines it is configured for, and nowhere else. The packag
 searches a loopback address other than its own port; a private address on the network must be listed
 when starting it (`chat_tools.py --search-allow 192.168.1.20:8888`).
 
+### Projects for the agent (files; git and commands follow)
+
+`chat_tools.py --projects-base DIR` adds a built-in server **project** to the tool service of that host: file tools
+(`project_list`, `fs_read`, `fs_list`, `fs_search`, `fs_write`, `fs_edit`) on the projects listed in an owner-edited
+registry, `~/.config/lm-chat/projects.json` (`--projects-registry` to move it):
+
+```json
+{"projects": {"demo": {"title": "Demo", "root": "demo"}}}
+```
+
+A `root` must resolve to a folder inside the base, so the agent only reaches folders you put there. Paths it gives
+are relative to the project, never absolute, never `..`, never through a symlink that leaves the project, never
+under `.git`. Writes stop at 2 MB a file and when the disk would drop under `--projects-min-free-gb` (default 5;
+use 20 on the model server, whose second SSD also holds the models). One copy of the service runs per host, the
+server and the Mac, and a project lives on the host whose service is asked.
+
 ## Ubuntu Server installation
 
 These are the choices made on the OptiPlex during the Ubuntu Server installer. Use them

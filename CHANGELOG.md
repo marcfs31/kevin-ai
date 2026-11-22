@@ -6,12 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.6] - 2026-11-22
+## [0.3.7] - 2026-11-22
 
 ### Added
 - A second tool-service host, the Mac: `/tools-local/*` in the Vite dev proxy (`LM_TOOLS_LOCAL_URL`, default `http://127.0.0.1:8082`) and in `tools/chat_server.py` (`--tools-local-upstream`; 404 `tools_local_not_configured` when unset; the same Origin check, Sec-Fetch-Site passing and no credentials as `/tools/*`; the prefix becomes `/tools/` upstream).
 - Every `tools*` function in `web/src/lib/api.ts` takes an optional host (`'server' | 'local'`, default `'server'`).
 - `scripts/start-local-chat-tools.sh` starts the tool service on this Mac (127.0.0.1:8082, own config and state, pid file, `--stop`).
+
+## [0.3.6] - 2026-11-22
+
+### Added
+- Tool service: a built-in **project** server (`--projects-base`, `tools/chat_projects.py`) with file tools for the agent (`project_list`, `fs_read`, `fs_list`, `fs_search`, `fs_write`, `fs_edit`) on projects listed in an owner-edited registry. Paths are relative and jailed to the project (no `..`, no symlink out, nothing under `.git`), writes are capped and refused when the disk is short of free space, and the server runs in the service's process so it does not use up the MCP running limit. First step of projects, git and workflows for the agent.
+
+## [0.3.5] - 2026-11-22
+
+### Added
+- `AGENTS.md` (and `CLAUDE.md` pointing to it): the release rule (every merged PR is a tagged version), the gate, the Lighthouse rule and where to edit ([#109](https://github.com/marcfs31/kevin-ai/pull/109)).
 
 ## [0.3.4] - 2026-11-22
 
