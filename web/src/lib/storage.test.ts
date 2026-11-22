@@ -25,16 +25,16 @@ describe('tools and internet settings', () => {
 });
 
 describe('effort and speed per conversation', () => {
-  it('load with the middle defaults when absent or not a known value, and keep a valid pair', () => {
+  it('load with the defaults (high, thorough) when absent or not a known value, and keep a valid pair', () => {
     const state = migrate({
       version: 1,
       conversations: [
         { id: 'a', messages: [] },
-        { id: 'b', effort: 'high', speed: 'fast', messages: [] },
+        { id: 'b', effort: 'low', speed: 'fast', messages: [] },
         { id: 'c', effort: 'max', speed: 7, messages: [] },
       ],
     });
-    expect(state?.conversations.map((c) => [c.effort, c.speed])).toEqual([['medium', 'balanced'], ['high', 'fast'], ['medium', 'balanced']]);
+    expect(state?.conversations.map((c) => [c.effort, c.speed])).toEqual([['high', 'thorough'], ['low', 'fast'], ['high', 'thorough']]);
   });
 });
 

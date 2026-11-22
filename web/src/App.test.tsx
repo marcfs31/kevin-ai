@@ -428,12 +428,12 @@ describe('App', () => {
     const pick = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
     const chatCalls = (fetchMock: ReturnType<typeof mockFetch>) => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/completions'));
 
-    it('sit next to the model picker with the middle values, and choosing a speed sets the effort it starts from', async () => {
+    it('sit next to the model picker with High and Thorough, and choosing a speed sets the effort it starts from', async () => {
       mockFetch(() => sseResponse([FINISH]));
       renderApp();
       await screen.findByText('Model: qwen3.5-4b');
-      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('medium');
-      expect((screen.getByLabelText('Speed') as HTMLSelectElement).value).toBe('balanced');
+      expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('high');
+      expect((screen.getByLabelText('Speed') as HTMLSelectElement).value).toBe('thorough');
       pick('Speed', 'fast');
       expect((screen.getByLabelText('Effort') as HTMLSelectElement).value).toBe('low');
       pick('Speed', 'thorough');
@@ -722,7 +722,7 @@ describe('App', () => {
       ]).flat();
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ version: 1, activeId: 'c', settings: {}, conversations: [{ id: 'c', title: 'Fruit', createdAt: 1, updatedAt: 1, model, messages }] }),
+        JSON.stringify({ version: 1, activeId: 'c', settings: {}, conversations: [{ id: 'c', title: 'Fruit', createdAt: 1, updatedAt: 1, model, effort: 'medium', speed: 'balanced', messages }] }),
       );
     }
     const isSummary = (init?: RequestInit) => String(JSON.parse(String(init?.body)).messages[0].content).startsWith('You compress');
