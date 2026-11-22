@@ -19,7 +19,7 @@ import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
 import { loadMcpSpecs, type McpLoad } from './lib/mcpLoad';
-import { createToolHost, type ApprovalRequest } from './lib/toolHost';
+import { PROJECT_SERVER, createToolHost, type ApprovalRequest } from './lib/toolHost';
 import { DEFAULT_EFFORT, DEFAULT_SPEED, SPEED_EFFORT, resolveModes, type Effort, type Speed } from './lib/modes';
 import { assess } from './lib/request';
 import { estimateWireTokens, liveCount } from './lib/tokens';
@@ -108,17 +108,17 @@ function Chat({ state, setState, storage, notice }: {
   }, [toolsOn, serverKey, internetOn, mcpKey, mcpReload]);
   const mcpSpecs = toolsOn && mcp.key === mcpKey ? (mcp.load?.specs ?? []) : [];
   // The projects the owner registered on the model server (none when the service has no projects base or cannot be reached).
+  const projectsOn = toolsOn && serverKey.split(',').includes(PROJECT_SERVER);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   useEffect(() => {
-    if (!toolsOn) return setProjects([]);
+    if (!projectsOn) return;
     const controller = new AbortController();
     toolsProjects(controller.signal).then(setProjects, () => {
       if (!controller.signal.aborted) setProjects([]);
     });
     return () => controller.abort();
-  }, [toolsOn, mcpReload]);
+  }, [projectsOn, mcpReload]);
   const [draftProject, setDraftProject] = useState<string | null>(null);
-  const [gitTick, setGitTick] = useState(0);
   // The user is asked before a tool that is not read-only runs; Stop answers no.
   const [approval, setApproval] = useState<{ request: ApprovalRequest; answer: (a: Answer) => void } | null>(null);
   const approve = (request: ApprovalRequest, signal: AbortSignal) =>
@@ -150,10 +150,8 @@ function Chat({ state, setState, storage, notice }: {
   const [draftSpeed, setDraftSpeed] = useState<Speed>(DEFAULT_SPEED);
   const effort = active ? active.effort : draftEffort;
   const projectId = active ? active.projectId : draftProject;
-  const project = projects.find((p) => p.id === projectId) ?? null;
-  useEffect(() => {
-    if (!busy) setGitTick((n) => n + 1);
-  }, [busy]);
+  const shownProjects = projectsOn ? projects : [];
+  const project = shownProjects.find((p) => p.id === projectId) ?? null;
   const speed = active ? active.speed : draftSpeed;
   const modes = resolveModes(effort, speed, state.settings);
   // Context window and vision follow the model chosen, so everything below reads `info`.
@@ -565,12 +563,12 @@ function Chat({ state, setState, storage, notice }: {
             </button>
           </p>
         )}
-        {toolsOn && (
+        {projectsOn && (
           <ProjectBar
-            projects={projects}
+            projects={shownProjects}
             projectId={projectId}
             disabled={busy}
-            refreshKey={gitTick}
+            refreshKey={busy ? -1 : (active?.messages.length ?? 0)}
             onChange={(id) => (active ? updateConv(active.id, (c) => ({ ...c, projectId: id })) : setDraftProject(id))}
           />
         )}
