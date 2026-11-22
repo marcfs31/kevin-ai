@@ -1,7 +1,7 @@
 // English UI strings. Every key must exist in every locale (see i18n.test.ts).
 // Plural keys end in .one / .other (plus any category Intl.PluralRules returns).
 export const en = {
-  'app.title': 'Local chat',
+  'app.title': 'Kevin AI',
   'app.empty': 'Ask something. Conversations stay in this browser and go only to your own server.',
   'app.busyElsewhere': 'A reply is being written in another chat. You can read this one; sending waits until it ends.',
   'app.skip': 'Skip to the message box',

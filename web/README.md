@@ -1,5 +1,7 @@
 # Chat web app for lm-serve
 
+The app is called **Kevin AI**; its logo (Orbit) is `public/logo.svg`, used in the header and as the tab icon.
+
 A browser chat for `bin/lm-serve`: streaming replies with a Stop button, conversations kept
 only in this browser, attachments (text and code files, PDFs, images when the server can read
 them), English and Spanish. No accounts, no telemetry, no CDN: every byte the page loads

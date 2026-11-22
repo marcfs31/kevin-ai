@@ -2,7 +2,7 @@
 import type { MessageKey } from './en';
 
 export const es: Record<MessageKey, string> & Record<string, string> = {
-  'app.title': 'Chat local',
+  'app.title': 'Kevin AI',
   'app.empty': 'Pregunta lo que quieras. Las conversaciones se quedan en este navegador y solo van a tu propio servidor.',
   'app.busyElsewhere': 'Se está escribiendo una respuesta en otro chat. Puedes leer este; enviar espera a que termine.',
   'app.skip': 'Ir al cuadro de mensaje',
