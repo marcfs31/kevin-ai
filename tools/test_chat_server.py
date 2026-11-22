@@ -122,14 +122,16 @@ class ProxyTest(unittest.TestCase):
             f.write("outside")
         self.upstream = start(FakeUpstream())
         self.tools_upstream = start(FakeUpstream())
+        self.tools_local_upstream = start(FakeUpstream())
         url = "http://127.0.0.1:%d" % self.upstream.server_address[1]
         tools_url = "http://127.0.0.1:%d" % self.tools_upstream.server_address[1]
+        tools_local_url = "http://127.0.0.1:%d" % self.tools_local_upstream.server_address[1]
         self.proxy = start(chat_server.Server(("127.0.0.1", 0), self.dist, url, self.password, self.api_key,
-                                              tools_upstream=tools_url))
+                                              tools_upstream=tools_url, tools_local_upstream=tools_local_url))
         self.port = self.proxy.server_address[1]
 
     def tearDown(self):
-        for s in (self.proxy, self.upstream, self.tools_upstream):
+        for s in (self.proxy, self.upstream, self.tools_upstream, self.tools_local_upstream):
             s.shutdown()
             s.server_close()
         self.tmp.cleanup()
@@ -410,6 +412,63 @@ class ToolsTest(ProxyTest):
         finally:
             proxy.shutdown()
             proxy.server_close()
+
+
+class ToolsLocalTest(ProxyTest):
+    def test_tools_local_goes_to_the_local_service_with_the_prefix_rewritten(self):
+        resp, _ = self.request("GET", "/tools-local/status?x=1")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(self.tools_local_upstream.requests[-1][:2], ("GET", "/tools/status?x=1"))
+        self.assertEqual(self.tools_upstream.requests, [])
+        self.assertEqual(self.upstream.requests, [])
+        self.request("GET", "/tools/status")
+        self.assertEqual(len(self.tools_local_upstream.requests), 1)
+        self.assertEqual(self.tools_upstream.requests[-1][1], "/tools/status")
+
+    def test_headers_and_body_are_those_of_tools(self):
+        self.request("POST", "/tools-local/search", body=b'{"query":"x"}', headers={
+            "Content-Type": "application/json", "Origin": "http://127.0.0.1:%d" % self.port, "Sec-Fetch-Site": "same-origin",
+            "Authorization": "Bearer from-browser", "Cookie": "a=b"})
+        method, path, headers, body = self.tools_local_upstream.requests[-1]
+        self.assertEqual((method, path, body), ("POST", "/tools/search", b'{"query":"x"}'))
+        self.assertEqual(headers["Sec-Fetch-Site"], "same-origin")
+        for name in ("Origin", "Authorization", "Cookie"):
+            self.assertNotIn(name, headers)
+
+    def test_cross_site_is_refused_and_never_reaches_the_service(self):
+        hdr = {"Content-Type": "application/json", "Host": "localhost:8000"}
+        resp, _ = self.request("POST", "/tools-local/search", body=b"{}", headers={**hdr, "Origin": "http://localhost:8000"})
+        self.assertEqual(resp.status, 200)
+        before = len(self.tools_local_upstream.requests)
+        resp, data = self.request("POST", "/tools-local/search", body=b"{}", headers={**hdr, "Origin": "https://evil.example"})
+        self.assertEqual((resp.status, json.loads(data)["error"]["code"]), (403, "forbidden"))
+        self.assertEqual(len(self.tools_local_upstream.requests), before)
+
+    def test_unset_is_404_and_the_server_one_still_works(self):
+        proxy = start(chat_server.Server(("127.0.0.1", 0), self.dist, "http://127.0.0.1:1", None, None,
+                                         tools_upstream="http://127.0.0.1:%d" % self.tools_upstream.server_address[1]))
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", proxy.server_address[1], timeout=10)
+            conn.request("GET", "/tools-local/status")
+            resp = conn.getresponse()
+            self.assertEqual((resp.status, json.loads(resp.read())["error"]["code"]), (404, "tools_local_not_configured"))
+            conn.request("GET", "/tools/status")
+            self.assertEqual(conn.getresponse().status, 200)
+            conn.close()
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
+
+    def test_a_down_local_service_is_a_502(self):
+        self.tools_local_upstream.shutdown()
+        self.tools_local_upstream.server_close()
+        resp, data = self.request("GET", "/tools-local/status")
+        self.assertEqual((resp.status, json.loads(data)["error"]["code"]), (502, "upstream_unreachable"))
+        self.tools_local_upstream = start(FakeUpstream())  # for tearDown
+
+    def test_a_bad_upstream_is_refused_at_start(self):
+        with self.assertRaises(ValueError):
+            chat_server.Server(("127.0.0.1", 0), self.dist, "http://127.0.0.1:1", None, None, tools_local_upstream="ftp://x")
 
 
 class KeyTest(ProxyTest):
