@@ -123,12 +123,15 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   built-in tools run in the page and touch nothing outside it.
 - **MCP tools and web search (Settings > Tools and internet).** With `tools/chat_tools.py` running and reachable at `/tools/*`
   (`LM_TOOLS_URL`), the tools of the MCP servers turned on are fetched from it (one server at a
-  time) and offered as `server__tool`. Only a **budget** of definitions is sent each step
-  (default about 1,500 tokens, at most 12): the built-ins, `find_tools`, and the tools that best
-  match your message by keyword; `find_tools(query)` lets the model name what it needs and
-  unlocks those tools for the rest of the message. A call to a tool that is not read-only (or
-  to any tool, in "always" mode) shows a card with the exact arguments and runs only after
-  Allow once or Always allow this tool; Deny, or Stop, refuses it and the model is told. With
+  time) and offered as `server__tool`. The service keeps each server's tool list from its last start, so
+  opening the chat does not start the servers; they start when a tool is called. Only a **budget** of
+  definitions is sent each step (default 1,500 tokens on top of the always-sent built-ins and `find_tools`,
+  at most 30 tools): the tools that best match your message by keyword; `find_tools(query)` lets the model name what it needs and
+  unlocks those tools for the rest of the message. A call to a tool that is not read-only, or that
+  reaches the network (such as fetch: a URL can carry what the model read out of the machine), or to any
+  tool in "always" mode, shows a card with the arguments (each long value cut on its own, so no key is
+  hidden) and runs only after Allow once or Always allow this tool (stored as `server/tool`); the card
+  takes focus itself, so a stray key press does not answer it. `web_search` is not asked about; Deny, or Stop, refuses it and the model is told. With
   nobody to ask, such a call is refused. Tool results are marked in the system message as data,
   never instructions. Servers that reach the network, and `web_search` (a SearXNG address), are
   offered only while the internet switch is on; it is off by default, a badge in the header shows
