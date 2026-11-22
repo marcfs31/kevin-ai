@@ -166,6 +166,22 @@ The service starts a server when it is first used, stops it after five idle minu
 three at once and none while less than 700 MiB of memory is available. The files tool may only
 touch `~/chat-files`.
 
+### A second copy of the tool service on this Mac
+
+For work that has to run on the Mac itself, run another copy here, on 127.0.0.1:8082, with its own config
+and state (`~/.config/lm-chat/mcp.json` is shared with other tools, so it is not used):
+
+```bash
+scripts/start-local-chat-tools.sh          # starts it (replacing one this script started); pid file in the state dir
+scripts/start-local-chat-tools.sh --stop   # stops that one only
+```
+
+It uses `~/.config/kevin-ai/mcp-local.json` and `~/.local/share/kevin-ai` (pid file `chat-tools-local.pid`, log
+`chat-tools-local.log`); `LM_LOCAL_TOOLS_CONFIG` and `LM_LOCAL_TOOLS_STATE` change them and `--port N` the port.
+The chat reaches it at `/tools-local/*`: the dev proxy uses `LM_TOOLS_LOCAL_URL` (default `http://127.0.0.1:8082`) and
+`tools/chat_server.py --tools-local-upstream http://127.0.0.1:8082` does the same (without the option the path is a
+404). The checks are those of `/tools/*`, and the prefix becomes `/tools/` upstream. No tunnel is needed.
+
 ### Web search for the chat (SearXNG)
 
 `scripts/setup-remote-searxng.sh` installs SearXNG on the same machine (a pinned commit, in `~/opt/searxng`
