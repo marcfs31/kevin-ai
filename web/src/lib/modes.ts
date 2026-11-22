@@ -10,8 +10,8 @@ export type Effort = (typeof EFFORTS)[number];
 export const SPEEDS = ['fast', 'balanced', 'thorough'] as const;
 export type Speed = (typeof SPEEDS)[number];
 
-export const DEFAULT_EFFORT: Effort = 'medium';
-export const DEFAULT_SPEED: Speed = 'balanced';
+export const DEFAULT_EFFORT: Effort = 'high';
+export const DEFAULT_SPEED: Speed = 'thorough';
 
 /** The effort each speed starts from. */
 export const SPEED_EFFORT: Record<Speed, Effort> = { fast: 'low', balanced: 'medium', thorough: 'high' };

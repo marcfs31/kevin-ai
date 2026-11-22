@@ -15,7 +15,7 @@ All notable changes to this project are documented here. The format follows
 - `make test` runs the tool service's Python tests and the web chat's lint, typecheck, tests and build.
 
 ### Changed
-- Web chat defaults: temperature 0.8, image size 1,024 px, tools on; at most 50 tool steps per message (default 20, was 8).
+- Web chat defaults: effort High and speed Thorough (thinking on, answers up to 4,096 tokens, images at 1,024 px, compaction at 90% of the window); temperature 0.8, image size 1,024 px, tools on; at most 50 tool steps per message (default 20, was 8).
 - The tool budget counts only the tools beyond the always-sent ones; the per-step cap is 30 tools.
 - A read-only tool that reaches the network (fetch) now asks first; "always allow" is stored as `server/tool` (entries saved under the old names ask again).
 - The tool service lists a stopped server's tools from the list kept at its last start, so opening the chat no longer starts every enabled server.

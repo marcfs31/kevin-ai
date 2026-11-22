@@ -33,9 +33,9 @@ describe('resolveModes', () => {
 });
 
 describe('defaults and guards', () => {
-  it('starts each speed from its own effort, and the defaults are the middle', () => {
+  it('starts each speed from its own effort, and the defaults are the top ones', () => {
     expect(SPEED_EFFORT).toEqual({ fast: 'low', balanced: 'medium', thorough: 'high' });
-    expect([DEFAULT_EFFORT, DEFAULT_SPEED]).toEqual(['medium', 'balanced']);
+    expect([DEFAULT_EFFORT, DEFAULT_SPEED]).toEqual(['high', 'thorough']);
   });
 
   it('accepts only the known values', () => {
