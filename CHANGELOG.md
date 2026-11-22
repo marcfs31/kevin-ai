@@ -4,18 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.4] - 2026-11-22
+
+### Changed
+- The select arrows (effort, speed and every other select) are drawn inside the box with room around them instead of against its edge, and the items of the header row are separated by a thin rule instead of a dot; the dot that sat inside the "Internet on" pill is gone. On a phone the separators give way to spacing.
+- The Settings, Attach files and Attach image buttons have a gear, a file and an image icon (drawn inline, nothing to load), and attached files that are not images show the file icon in their row.
+
+## [0.3.3] - 2026-11-22
 
 ### Added
 - `scripts/lighthouse.sh`: builds the web chat, serves it with `tools/chat_server.py` and runs Lighthouse (desktop and mobile, pinned version); it fails unless every category is 100.
 - `tools/chat_server.py` gzips text files (HTML, JS, CSS, JSON, SVG) for browsers that accept it and keeps the compressed bytes until the file changes: the 791 kB script is 237 kB on the wire.
 
+### Fixed
+- On a phone the model row keeps its stacked height while it connects, so the page no longer jumps (Lighthouse mobile layout shift 0.17).
+- The robots.txt that Lighthouse read as blocking indexing is removed (SEO 66 to 100).
+
+## [0.3.2] - 2026-11-22
+
 ### Changed
-- The select arrows (effort, speed and every other select) are drawn inside the box with room around them instead of against its edge, and the items of the header row are separated by a thin rule instead of a dot; the dot that sat inside the "Internet on" pill is gone. On a phone the separators give way to spacing. The Attach files and Attach image buttons have a file and an image icon (drawn inline, nothing to load), and attached files that are not images show the file icon in their row.
 - Type scale with real steps (13 px interface text, 16 px section titles, 20 px dialog titles, 25 px for the Kevin AI name), the Settings dialog is set apart by its border and the backdrop without a wide shadow, and the model button has 8 px of side padding.
 
 ### Fixed
-- The page no longer jumps down when the model row loads (the header keeps the height it needs; on a phone the model row keeps its stacked height), which Lighthouse scored as a layout shift of 0.2 on desktop and 0.17 on mobile.
+- The page no longer jumps down when the model row loads (the header keeps the height it needs), which Lighthouse scored as a layout shift of 0.2 on desktop.
 - The page has a description for search engines.
 
 ## [0.3.1] - 2026-11-22
