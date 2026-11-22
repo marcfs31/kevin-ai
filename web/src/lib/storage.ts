@@ -4,6 +4,7 @@ import type { ContentPart } from './api';
 import { IMAGE_PRESETS, type ImagePreset } from './attachments';
 import { DEFAULT_EFFORT, DEFAULT_SPEED, isEffort, isSpeed, type Effort, type Speed } from './modes';
 import { obj } from './sse';
+import { normalizeWorkflow, type Workflow } from './workflows';
 
 export const STORAGE_KEY = 'lm-chat';
 export const BACKUP_KEY = 'lm-chat.unreadable';
@@ -122,6 +123,8 @@ export interface Conversation {
   speed: Speed;
   /** The project (a registry id on the model server) the agent works in for this chat; null = none. */
   projectId: string | null;
+  /** The workflow this chat is following (its steps and where each stands); null = none. */
+  workflow: Workflow | null;
   messages: Message[];
 }
 
@@ -293,7 +296,8 @@ function conversation(v: unknown): Conversation | null {
   return {
     id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), model,
     effort: isEffort(o.effort) ? o.effort : DEFAULT_EFFORT, speed: isSpeed(o.speed) ? o.speed : DEFAULT_SPEED,
-    projectId: typeof o.projectId === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(o.projectId) ? o.projectId : null, messages,
+    projectId: typeof o.projectId === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(o.projectId) ? o.projectId : null,
+    workflow: normalizeWorkflow(o.workflow), messages,
   };
 }
 

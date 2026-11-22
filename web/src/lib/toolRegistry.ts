@@ -8,7 +8,9 @@ export const WEB_SEARCH = 'web_search';
 /** The longest function name the OpenAI-style tools field takes. */
 const NAME_MAX = 64;
 
-export type ToolSource = { kind: 'builtin' } | { kind: 'search' } | { kind: 'find' } | { kind: 'mcp'; server: string; tool: string };
+export const WORKFLOW_STEP = 'workflow_step';
+
+export type ToolSource = { kind: 'builtin' } | { kind: 'search' } | { kind: 'find' } | { kind: 'workflow' } | { kind: 'mcp'; server: string; tool: string };
 
 export interface ToolSpec {
   /** The name the model sees and calls. */
@@ -61,6 +63,25 @@ export function findToolsSpec(): ToolSpec {
     { type: 'object', properties: { query: { type: 'string', description: 'What you want to do.' } }, required: ['query'] },
     true,
     { kind: 'find' },
+  );
+}
+
+/** Ticks a step of the chat's workflow. It only changes the checklist on this page, so it never asks. */
+export function workflowStepSpec(): ToolSpec {
+  return make(
+    WORKFLOW_STEP,
+    'Mark a step of the current workflow as done, skipped or blocked, with a short note. Answers with the next step.',
+    {
+      type: 'object',
+      properties: {
+        step: { type: 'integer', description: 'The step number, from 1.' },
+        status: { type: 'string', enum: ['done', 'skipped', 'blocked'] },
+        note: { type: 'string', description: 'One short sentence about what was done or what blocks it.' },
+      },
+      required: ['step', 'status'],
+    },
+    true,
+    { kind: 'workflow' },
   );
 }
 

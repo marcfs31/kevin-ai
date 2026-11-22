@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type ToolsConfig } from './storage';
 import { MAX_TOOLS_PER_STEP, builtinHost, createToolHost, needsApproval, toolGuidance } from './toolHost';
 import { allowKey, mcpSpecs, type McpTool, type ToolSpec } from './toolRegistry';
+import { startWorkflow } from './workflows';
 
 const config = (over: Partial<ToolsConfig> = {}): ToolsConfig => ({ ...DEFAULT_SETTINGS.toolsConfig, servers: { fs: { on: true, disabledTools: [] } }, ...over });
 const internet = (on = false, searchUrl = '') => ({ on, searchUrl });
@@ -267,5 +268,42 @@ describe('createToolHost with a project', () => {
     const request = host(demo).approval(call('project__git_commit', { message: 'm' }));
     expect(request?.description).toBe('Commit what is staged.');
     expect(host(demo).approval(call('project__git_status'))).toBeNull();
+  });
+});
+
+describe('createToolHost with a workflow', () => {
+  const wf = startWorkflow({ id: 'ship', title: 'Ship it', steps: ['Run the tests', 'Commit', 'Push'] });
+  const host = (workflow: typeof wf | null, onWorkflowChange = vi.fn()) => ({ onWorkflowChange, h: createToolHost({ mcp: [], config: config(), internet: internet(), workflow, onWorkflowChange }) });
+
+  it('offers workflow_step and the checklist only while a workflow runs, and never asks before ticking', () => {
+    const { h } = host(wf);
+    expect(h.definitions('x', new Set()).map((d) => d.function.name)).toContain('workflow_step');
+    expect(h.guidance).toContain('"Ship it"');
+    expect(h.guidance).toContain('1. [todo] Run the tests');
+    expect(h.approval(call('workflow_step', { step: 1, status: 'done' }))).toBeNull();
+    const none = host(null).h;
+    expect(none.definitions('x', new Set()).map((d) => d.function.name)).not.toContain('workflow_step');
+    expect(none.guidance).not.toContain('workflow');
+  });
+
+  it('ticks the step, tells the page, and answers with the next step; several ticks in one run build on each other', async () => {
+    const { h, onWorkflowChange } = host(wf);
+    const first = await h.run(call('workflow_step', { step: 1, status: 'done', note: 'green' }), signal(), noUnlock);
+    expect(first).toEqual({ content: 'step 1 is now done. Next: 2. [todo] Commit', isError: false });
+    expect(onWorkflowChange).toHaveBeenCalledTimes(1);
+    await h.run(call('workflow_step', { step: '2', status: 'skipped' }), signal(), noUnlock);
+    const last = onWorkflowChange.mock.calls[1]?.[0] as typeof wf;
+    expect(last.steps.map((s) => s.status)).toEqual(['done', 'skipped', 'todo']);
+    expect(last.steps[0]?.note).toBe('green');
+    expect(wf.steps[0]?.status).toBe('todo');          // the chat's own checklist is not mutated
+  });
+
+  it('refuses a bad step or status and changes nothing', async () => {
+    const { h, onWorkflowChange } = host(wf);
+    for (const args of [{ step: 0, status: 'done' }, { step: 4, status: 'done' }, { step: 1.5, status: 'done' }, { step: 1, status: 'finished' }, { step: 1 }, {}]) {
+      const r = await h.run(call('workflow_step', args), signal(), noUnlock);
+      expect(r.isError, JSON.stringify(args)).toBe(true);
+    }
+    expect(onWorkflowChange).not.toHaveBeenCalled();
   });
 });

@@ -220,6 +220,37 @@ describe('App', () => {
       expect(calls(f)).toHaveLength(1);
     });
 
+    it('follows a workflow of the project: the model ticks a step, the checklist and the saved chat follow', async () => {
+      const inner = setup({ tool: 'workflow_step', args: '{"step":1,"status":"done","note":"tests pass"}', servers: { project: { on: true, disabledTools: [] } } });
+      const flows = { workflows: [{ id: 'ship', title: 'Ship it', steps: ['Run the tests', 'Commit'] }] };
+      const wrapped = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/tools/projects') return json({ ok: true, projects: [{ id: 'demo', title: 'Demo', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: [] }], freeGb: 400 });
+        if (url.endsWith('/call') && String(init?.body).includes('"fs_read"')) return json({ ok: true, content: `.kevin/workflows.json lines 1-1 of 1\n${JSON.stringify(flows)}`, isError: false });
+        if (url.endsWith('/call') && String(init?.body).includes('"git_status"')) return json({ ok: true, content: '## main\nno changes', isError: false });
+        return inner(input, init);
+      });
+      vi.stubGlobal('fetch', wrapped);
+      renderApp();
+      await waitFor(() => expect(urls(inner).some((u) => u.includes('/tools/servers/project/tools'))).toBe(true));
+      fireEvent.change(await screen.findByLabelText('Project'), { target: { value: 'demo' } });
+      fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
+      expect(await screen.findByText('0 of 2 steps resolved')).toBeTruthy();
+      typeAndSend('ship it');
+      expect(await screen.findByText('all done')).toBeTruthy();
+      expect(await screen.findByText('1 of 2 steps resolved')).toBeTruthy();
+      expect(screen.queryByRole('alertdialog')).toBeNull();                 // ticking a step never asks
+      const system = String((bodyOf(inner, 0).messages as { content: string }[])[0]?.content);
+      expect(system).toContain('You are following the workflow "Ship it"');
+      expect(system).toContain('1. [todo] Run the tests');
+      const second = bodyOf(inner, 1).messages as { role: string; content: string }[];
+      expect(second.find((m) => m.role === 'tool')?.content).toBe('step 1 is now done. Next: 2. [todo] Commit');
+      await act(async () => undefined);
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].workflow;
+      expect(saved.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'todo']);
+      expect(saved.steps[0].note).toBe('tests pass');
+    });
+
     it('works in the chosen project: shows its git state, tells the model, and always sends its id', async () => {
       const inner = setup({ tool: 'project__read_file', args: '{"project":"other","path":"a.txt"}', servers: { project: { on: true, disabledTools: [] } } });
       const wrapped = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

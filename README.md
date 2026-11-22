@@ -363,6 +363,19 @@ project a chat works in. The page then tells the model the project's rules and c
 project's id to the project tools whatever the model wrote, shows the branch and the number of changed files
 (read with `git_status`) and shows the exact command on the approval card.
 
+**Workflows** are saved step recipes. A project keeps them in its own repository, in `.kevin/workflows.json` (they
+are prompts, not permissions: what the agent may do is still decided by your registry):
+
+```json
+{"workflows": [{"id": "fix-bug", "title": "Fix a bug",
+                "steps": ["Reproduce it", "Write a failing test", "Fix it on a kevin/ branch", "Run the tests", "Commit"]}]}
+```
+
+With a project chosen, the **Workflow** bar above the composer lists them (at most 20, 12 steps of 200 characters
+each). Start one and the chat shows its checklist; the model is told the steps and ticks each with `workflow_step`
+(done, skipped or blocked, with a short note), which never asks for approval because it only changes the checklist.
+You can tick or untick a step yourself, and stop the workflow. The checklist is saved with the chat.
+
 #### Setting up projects (owner steps)
 
 1. **Start the service with a projects base.** `scripts/start-remote-chat-tools.sh --update` now passes
@@ -925,7 +938,7 @@ A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the
   config, and the project tools above. The page offers only the tools that fit a token budget, tells a small
   model when to use them, and asks before anything that changes something; see Settings > Tools.
 - **Projects.** A project per chat, a git chip with the branch and the changed files, approval cards that
-  show the exact command.
+  show the exact command, and workflows: step checklists from `.kevin/workflows.json` that the model ticks off.
 - **Privacy and quality.** No telemetry, no remote resources, a test that fails if the code names a remote
   URL, axe in the test suite, Lighthouse 100.
 
