@@ -17,13 +17,33 @@ v0.3.2 and v0.3.3 had to be tagged afterwards the same way.
   Check first that the tagged commit's `web/package.json` says X.Y.Z. Never move or delete a pushed tag.
 - A PR that was merged without a tag gets one on its last commit (annotated, message says it was tagged
   afterwards); the next release commit brings the manifests up to date.
+- Find the next number from the tags, not from memory: `git tag -l 'v*' --sort=version:refname | tail -3`.
+  Tag only after CI is green and the PR is merged; never tag a branch commit, which a rebase-merge rewrites.
+- State the tag in the closing report: the version, the commit, and that the pushed tag was checked
+  (`git ls-remote --tags origin vX.Y.Z`).
 
 ## Gate (run before opening a PR, quote the output)
 
 - `make test`: the C tests, the shell tests under `tests/scripts`, the tool service and proxy Python tests,
   and the web lint, typecheck, vitest and build (`tests/scripts/test_web_and_tools.sh`, needs Node).
-- `scripts/lighthouse.sh`: Lighthouse on the production build, desktop and mobile; it must stay at 100 in
-  every category. Measure that, not the Vite dev server.
+- `scripts/lighthouse.sh` for any change under `web/`, `tools/chat_server.py` or `index.html` (see below).
+
+## Lighthouse: 100 in every category, desktop and mobile
+
+Rule (owner, 2026-11-22). Why: the first report scored 47 on the Vite dev server; the production build
+reached 100 only after four fixes, and a header change dropped mobile to 92 until its height was re-measured.
+
+- A change under `web/`, `tools/chat_server.py` or `index.html` runs `scripts/lighthouse.sh` (needs Chrome and
+  the network, so it is not in CI) and quotes its output in the PR. Below 100 is a bug in that PR, not a note.
+- Measure the production build as `chat_server.py` serves it, never the Vite dev server (78 unbundled files
+  and an HTML answer for every unknown path make its score meaningless).
+- What has cost points, so check these first:
+  - text sent uncompressed (gzip lives in `chat_server.py`);
+  - content that arrives after the first paint pushing the page down: reserve its height (`.top` is 4.75rem,
+    the phone `.server` row 7.125rem up to 28rem). Re-measure the loaded height at 360, 412 and 480 px whenever
+    a control in that row changes size;
+  - a `robots.txt` with `Disallow: /` (Lighthouse reads it as blocked from indexing: ship none);
+  - a missing meta description; a heavy dependency loaded up front (lazy-load it, as the PDF reader is).
 
 ## Where to edit
 
