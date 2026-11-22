@@ -138,13 +138,14 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   padding-block-end: 0.45rem;
   padding-inline-start: max(1rem, env(safe-area-inset-left));
   padding-inline-end: max(1rem, env(safe-area-inset-right));
-  min-block-size: 3.1rem;
+  /* The height of the header once the model row has loaded (two lines on a desktop), so the page does not jump down when it does. */
+  min-block-size: 4.75rem;
   background: var(--paper);
   border-block-end: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 0.45rem; min-inline-size: 0; }
-.logo { flex: none; inline-size: 1.5rem; block-size: 1.5rem; }
-.top h1 { display: flex; align-items: center; gap: 0.45rem; font-size: 0.9375rem; font-weight: 650; letter-spacing: -0.012em; line-height: 1.2; margin: 0; }
+.logo { flex: none; inline-size: 1.75rem; block-size: 1.75rem; }
+.top h1 { display: flex; align-items: center; gap: 0.5rem; font-size: 1.5625rem; font-weight: 650; letter-spacing: -0.012em; line-height: 1.2; margin: 0; }
 .server {
   justify-self: end;
   color: var(--muted);
@@ -166,7 +167,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   font-size: inherit;
   color: inherit;
   min-block-size: 2.25rem;
-  padding-inline: 0.35rem;
+  padding-inline: 0.5rem;
   border-radius: var(--radius);
 }
 .model-picker-panel {
@@ -306,7 +307,6 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) + 0.15rem);
-  box-shadow: 0 12px 40px rgb(12 14 18 / 0.28);
   overflow: hidden;
 }
 .settings-modal-head {
@@ -322,7 +322,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 }
 .settings-modal-head h2 {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: 1.25rem;
   font-weight: 650;
   letter-spacing: -0.015em;
 }
@@ -353,7 +353,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   border: none;
 }
 .settings + .settings { border-block-start: 1px solid var(--line); }
-.settings h2 { margin: 0; font-size: 0.9375rem; font-weight: 650; letter-spacing: -0.011em; }
+.settings h2 { margin: 0; font-size: 1rem; font-weight: 650; letter-spacing: -0.011em; }
 .fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -556,7 +556,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 }
 
 @media (max-width: 22rem) {
-  .top h1 { font-size: 0.875rem; }
+  .top h1 { font-size: 1.125rem; }
   .msg.user { max-inline-size: 100%; }
 }
 
@@ -640,7 +640,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .main > .note { margin-inline: auto; inline-size: min(calc(100% - 2.5rem), var(--measure)); }
 
 .internet-badge { padding: 0.1rem 0.5rem; border: 1px solid var(--warn); border-radius: 999px; color: var(--warn); font-size: 0.75rem; font-weight: 600; }
-.tools-panel h3 { margin: 0 0 0.25rem; font-size: 0.9375rem; }
+.tools-panel h3 { margin: 0 0 0.25rem; font-size: 1rem; }
 .tool-servers, .tool-list, .tool-catalog { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .tool-list { margin-block-start: 0.4rem; padding-inline-start: 1rem; }
 .approval { margin-inline: auto; inline-size: min(calc(100% - 2.5rem), var(--measure)); border: 2px solid var(--warn); border-radius: var(--radius); padding: 0.75rem 1rem; }

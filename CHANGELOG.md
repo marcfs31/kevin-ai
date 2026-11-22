@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Type scale with real steps (13 px interface text, 16 px section titles, 20 px dialog titles, 25 px for the Kevin AI name), the Settings dialog is set apart by its border and the backdrop without a wide shadow, and the model button has 8 px of side padding.
+
+### Fixed
+- The page no longer jumps down when the model row loads (the header keeps the height it needs), which a Lighthouse run scored as a 0.2 layout shift.
+- The page has a description for search engines and a robots.txt that keeps crawlers out.
+
 ## [0.3.1] - 2026-11-22
 
 ### Changed
