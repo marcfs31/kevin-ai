@@ -15,6 +15,18 @@ describe('Kevin AI branding', () => {
     expect([en['app.title'], es['app.title']]).toEqual(['Kevin AI', 'Kevin AI']);
   });
 
+  it('describes itself for search and keeps crawlers out of a private chat', () => {
+    expect(read('index.html')).toMatch(/<meta name="description" content="[^"]{40,}" \/>/);
+    expect(read('public/robots.txt')).toBe('User-agent: *\nDisallow: /\n');
+  });
+
+  it('reserves the header height the loaded model row needs, so the page does not jump when the model answers', () => {
+    const css = read('src/styles.css');
+    expect(css).toMatch(/\.top \{[^}]*min-block-size: 4\.75rem;/);
+    // The settings dialog is set apart by its border and the backdrop, not by a border plus a wide shadow too.
+    expect(css.match(/\.settings-modal \{[^}]*\}/)?.[0]).not.toContain('box-shadow');
+  });
+
   it('ships the Orbit logo as a self-contained SVG: a disc, a ring, a K and a dot, with no script, link or remote reference', () => {
     const svg = read('public/logo.svg');
     expect(svg).toContain('viewBox="0 0 96 96"');
