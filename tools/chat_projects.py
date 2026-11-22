@@ -25,6 +25,8 @@ import shutil
 import tempfile
 import time
 
+from chat_jail import GB, PathError, ToolFail, inside, int_arg, looks_binary, rel_of, resolve  # noqa: F401  (re-exported)
+
 PROTOCOL_VERSION = "2025-06-18"
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 MAX_READ_BYTES = 200 * 1024
@@ -38,25 +40,12 @@ MAX_SEARCH_FILE = 1024 * 1024
 MAX_PATTERN = 200
 SEARCH_SECONDS = 10
 IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", "dist", "build"}
-GB = 1024 ** 3
-
-
-class RegistryError(ValueError):
-    pass
-
-
-class PathError(Exception):
-    pass
-
-
-class ToolFail(Exception):
-    """A tool could not do what was asked; the message goes back to the model as the result."""
 
 
 # ---- registry ----------------------------------------------------------------------------------
 
-def inside(root, path):
-    return path == root or path.startswith(root + os.sep)
+class RegistryError(ValueError):
+    pass
 
 
 def load_registry(path, base):
@@ -89,36 +78,6 @@ def load_registry(path, base):
 
 
 # ---- the path jail -----------------------------------------------------------------------------
-
-def resolve(root, rel):
-    """The real path of `rel` inside `root`, or PathError. `root` is already a real path."""
-    if rel is None or rel == "":
-        rel = "."
-    if not isinstance(rel, str) or "\x00" in rel:
-        raise PathError("the path must be a text path")
-    if os.path.isabs(rel) or rel.startswith("~"):
-        raise PathError("use a path relative to the project root")
-    parts = [p for p in re.split(r"[\\/]+", rel) if p not in ("", ".")]
-    if ".." in parts:
-        raise PathError(".. is not allowed")
-    if ".git" in parts:
-        raise PathError(".git is not available to file tools")
-    real = os.path.realpath(os.path.join(root, *parts))
-    if not inside(root, real):
-        raise PathError("the path leaves the project (a symlink?)")
-    if ".git" in os.path.relpath(real, root).split(os.sep):
-        raise PathError(".git is not available to file tools")
-    return real
-
-
-def rel_of(root, real):
-    r = os.path.relpath(real, root)
-    return "." if r == "." else r.replace(os.sep, "/")
-
-
-def looks_binary(chunk):
-    return b"\x00" in chunk
-
 
 # ---- tools -------------------------------------------------------------------------------------
 
@@ -156,14 +115,6 @@ TOOLS = [
 TOOLS_VERSION = hashlib.sha256(json.dumps(TOOLS, sort_keys=True).encode()).hexdigest()[:12]
 
 
-def _int(v, default, low, high):
-    if v is None:
-        return default
-    if isinstance(v, bool) or not isinstance(v, int):
-        raise ToolFail("expected a whole number")
-    return max(low, min(high, v))
-
-
 def _text_file(real, rel):
     if not os.path.exists(real):
         raise ToolFail(f"{rel} does not exist")
@@ -186,10 +137,10 @@ def fs_read(root, args, host):
     lines = _text_file(real, rel).splitlines()
     if not lines:
         return f"{rel} is empty"
-    first = _int(args.get("offset"), 1, 1, 10 ** 9)
+    first = int_arg(args.get("offset"), 1, 1, 10 ** 9)
     if first > len(lines):
         return f"{rel} has {len(lines)} lines; offset {first} is past the end"
-    count = _int(args.get("limit"), DEFAULT_READ_LINES, 1, MAX_READ_LINES)
+    count = int_arg(args.get("limit"), DEFAULT_READ_LINES, 1, MAX_READ_LINES)
     chosen, used = [], 0
     for line in lines[first - 1:first - 1 + count]:
         used += len(line.encode("utf-8")) + 1
@@ -205,7 +156,7 @@ def fs_list(root, args, host):
     real = resolve(root, args.get("path"))
     if not os.path.isdir(real):
         raise ToolFail(f"{rel_of(root, real)} is not a folder")
-    depth = _int(args.get("depth"), 1, 1, 3)
+    depth = int_arg(args.get("depth"), 1, 1, 3)
     out, more = [], 0
 
     def walk(folder, level):
