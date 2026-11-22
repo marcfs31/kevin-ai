@@ -99,6 +99,7 @@ export const en = {
   'mode.hint': 'Effort: low answers briefly without thinking, medium answers at your normal length without thinking, high thinks first and may write long answers. Speed: fast sends smaller images and compacts the chat at 50% of the window, balanced uses your settings, thorough keeps full-size images and compacts at 90%. Choosing a speed also sets the effort it starts from.',
   'approval.title': 'Allow {tool}?',
   'approval.hint': 'The model asked to run this and it may change something. Nothing runs until you answer; Stop also refuses it.',
+  'approval.hintNetwork': 'This tool reaches the internet, so what the model gives it, such as a web address or text, can leave this machine. Nothing runs until you answer; Stop also refuses it.',
   'approval.hintReadOnly': 'You chose to be asked before every tool call. Nothing runs until you answer; Stop also refuses it.',
   'approval.args': 'Arguments',
   'approval.allow': 'Allow once',

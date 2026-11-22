@@ -18,6 +18,8 @@ export interface ApprovalRequest {
   allowKey: string;
   title: string;
   server: string | null;
+  /** It reaches the network: what it is given can leave this machine. */
+  network: boolean;
   /** The arguments as the model wrote them, pretty-printed and cut. */
   args: string;
   readOnly: boolean;
@@ -39,7 +41,10 @@ const fail = (text: string): ToolResult => ({ content: `error: ${text}`, isError
 export function needsApproval(spec: ToolSpec, config: Pick<ToolsConfig, 'approval' | 'alwaysAllow'>): boolean {
   if (config.approval === 'never' || config.alwaysAllow.includes(allowKey(spec))) return false;
   if (config.approval === 'always') return true;
-  return !spec.readOnly;
+  // A server's own readOnlyHint says it changes nothing, not that it keeps what it is given to itself: a tool
+  // that reaches the network (fetch a URL) is a way out for what the model read, so it asks too.
+  // web_search is left out on purpose: a query carries little and asking each time would make it unusable.
+  return !spec.readOnly || (spec.source.kind === 'mcp' && spec.network);
 }
 
 /** The two built-in tools and nothing else: what the chat offered before MCP. */
@@ -131,7 +136,7 @@ export function createToolHost(i: HostInput): ToolHost {
       const server = spec.source.kind === 'mcp' ? spec.source.server : null;
       return {
         callId: call.id, tool: spec.name, allowKey: allowKey(spec), title: spec.source.kind === 'mcp' ? `${spec.source.server} · ${spec.source.tool}` : spec.name,
-        server, args: prettyArguments(call.arguments), readOnly: spec.readOnly,
+        server, network: spec.network, args: prettyArguments(call.arguments), readOnly: spec.readOnly,
       };
     },
     async run(call, signal, unlock) {

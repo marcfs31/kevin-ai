@@ -4,7 +4,7 @@ import { I18nProvider } from '../i18n';
 import type { ApprovalRequest } from '../lib/toolHost';
 import { ApprovalCard } from './ApprovalCard';
 
-const request: ApprovalRequest = { callId: 'c', tool: 'fs__write', title: 'fs · write', server: 'fs', args: '{}', readOnly: false };
+const request: ApprovalRequest = { callId: 'c', tool: 'fs__write', title: 'fs · write', allowKey: 'fs/write', server: 'fs', network: false, args: '{}', readOnly: false };
 
 describe('ApprovalCard', () => {
   it('puts focus on the card and not on a button, so a stray Enter or Space answers nothing', () => {

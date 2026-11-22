@@ -16,7 +16,7 @@ export function ApprovalCard({ request, onAnswer }: { request: ApprovalRequest; 
     <section ref={card} tabIndex={-1} className="approval" role="alertdialog" aria-labelledby={`${id}-t`} aria-describedby={`${id}-d`}>
       <h2 id={`${id}-t`}>{t('approval.title', { tool: request.title })}</h2>
       <p id={`${id}-d`} className="hint">
-        {request.readOnly ? t('approval.hintReadOnly') : t('approval.hint')}
+        {!request.readOnly ? t('approval.hint') : request.network ? t('approval.hintNetwork') : t('approval.hintReadOnly')}
       </p>
       <p className="hint">{t('approval.args')}</p>
       <pre>{request.args}</pre>

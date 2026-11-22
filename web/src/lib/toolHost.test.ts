@@ -41,6 +41,24 @@ describe('needsApproval', () => {
   });
 });
 
+describe('needsApproval and the network', () => {
+  const [get] = mcpSpecs('fetch', [tool('fetch', true)], new Set(), true) as [ToolSpec];
+  const [read] = mcpSpecs('fs', [tool('read', true)], new Set(), false) as [ToolSpec];
+
+  it('asks before a read-only tool that reaches the network, because a URL carries what the model read out of the machine', () => {
+    expect([needsApproval(get, config()), needsApproval(read, config())]).toEqual([true, false]);
+    expect(needsApproval(get, config({ alwaysAllow: [allowKey(get)] }))).toBe(false);
+    expect(needsApproval(get, config({ approval: 'never' }))).toBe(false);
+  });
+
+  it('puts the network on the approval request, and leaves web search free', () => {
+    const h = createToolHost({ mcp: [get, read], config: config({ servers: { fetch: { on: true, disabledTools: [] }, fs: { on: true, disabledTools: [] } } }), internet: internet(true, 'http://127.0.0.1:8888') });
+    expect(h.approval(call('fetch__fetch', { url: 'https://example.org' }))).toMatchObject({ network: true, readOnly: true });
+    expect(h.approval(call('fs__read'))).toBeNull();
+    expect(h.approval(call('web_search', { query: 'x' }))).toBeNull();
+  });
+});
+
 describe('allowKey', () => {
   it('is the server and the tool, so a collision suffix on the model-facing name cannot move a permission to another tool', () => {
     const taken = new Set<string>();
@@ -108,7 +126,7 @@ describe('createToolHost: approval', () => {
     const h = createToolHost({ mcp: specs(tool('read', true), tool('write', false)), config: config(), internet: internet() });
     expect(h.approval(call('fs__read'))).toBeNull();
     expect(h.approval(call('fs__write', { path: '/x', text: 'hi' }, 'k'))).toEqual({
-      callId: 'k', tool: 'fs__write', allowKey: 'fs/write', title: 'fs · write', server: 'fs', args: JSON.stringify({ path: '/x', text: 'hi' }, null, 2), readOnly: false,
+      callId: 'k', tool: 'fs__write', allowKey: 'fs/write', title: 'fs · write', server: 'fs', network: false, args: JSON.stringify({ path: '/x', text: 'hi' }, null, 2), readOnly: false,
     });
   });
 
