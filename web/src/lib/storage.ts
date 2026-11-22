@@ -152,7 +152,7 @@ export interface ToolsConfig {
   /** Tokens of tool definitions sent per step, beyond the built-in tools (see lib/toolSelect.ts). */
   budgetTokens: number;
   approval: ApprovalMode;
-  /** Tools (by the name the model sees) the user chose to stop being asked about. */
+  /** Tools (as server/tool, see allowKey) the user chose to stop being asked about. */
   alwaysAllow: string[];
 }
 
@@ -309,7 +309,7 @@ function toolsConfig(v: unknown): ToolsConfig {
     servers,
     budgetTokens: typeof budget === 'number' && Number.isInteger(budget) && budget >= MIN_TOOL_BUDGET && budget <= MAX_TOOL_BUDGET ? budget : DEFAULT_SETTINGS.toolsConfig.budgetTokens,
     approval: (APPROVAL_MODES as readonly unknown[]).includes(o.approval) ? (o.approval as ApprovalMode) : DEFAULT_SETTINGS.toolsConfig.approval,
-    alwaysAllow: strings(o.alwaysAllow, 500),
+    alwaysAllow: strings(o.alwaysAllow, 500, 200),
   };
 }
 
@@ -319,8 +319,8 @@ function internetConfig(v: unknown): InternetConfig {
   return { on: o.on === true, searchUrl: url.length <= 300 ? url : '' };
 }
 
-function strings(v: unknown, max: number): string[] {
-  return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 128))].slice(0, max) : [];
+function strings(v: unknown, max: number, longest = 128): string[] {
+  return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= longest))].slice(0, max) : [];
 }
 
 function settings(v: unknown): Settings {

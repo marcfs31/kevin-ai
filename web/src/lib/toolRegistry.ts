@@ -32,6 +32,12 @@ export interface McpTool {
   tokens: number;
 }
 
+/** What "always allow" is stored under: the server and the tool's own name, which do not change when two tools'
+ * model-facing names collide and one gets a suffix. Built-ins are known by their name. */
+export function allowKey(spec: ToolSpec): string {
+  return spec.source.kind === 'mcp' ? `${spec.source.server}/${spec.source.tool}` : spec.name;
+}
+
 export const estimateTokens = (def: unknown): number => Math.ceil(JSON.stringify(def).length / 3.5);
 
 export function toWire(spec: ToolSpec): WireTool {

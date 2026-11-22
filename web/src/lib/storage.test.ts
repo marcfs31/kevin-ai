@@ -10,7 +10,7 @@ describe('tools and internet settings', () => {
   });
 
   it('keep a valid configuration', () => {
-    const cfg = { servers: { fs: { on: true, disabledTools: ['write_file'] } }, budgetTokens: 3000, approval: 'always', alwaysAllow: ['fs__read_file'] };
+    const cfg = { servers: { fs: { on: true, disabledTools: ['write_file'] } }, budgetTokens: 3000, approval: 'always', alwaysAllow: ['fs/read_file'] };
     expect(load({ toolsConfig: cfg, internet: { on: true, searchUrl: ' http://127.0.0.1:8888 ' } })).toMatchObject({ toolsConfig: cfg, internet: { on: true, searchUrl: 'http://127.0.0.1:8888' } });
   });
 
