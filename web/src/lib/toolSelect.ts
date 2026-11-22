@@ -71,3 +71,12 @@ export function selectTools(i: SelectInput): ToolSpec[] {
   }
   return out;
 }
+
+/** About how many of `enabled` fit in `budgetTokens` next to the always-sent tools, judged by their average size.
+ * An estimate for the settings screen: the tools actually sent are the ones that match the message. */
+export function fitCount(enabled: ToolSpec[], pinnedTokens: number, budgetTokens: number, maxTools: number, pinnedCount: number): number {
+  if (!enabled.length) return 0;
+  const average = enabled.reduce((n, s) => n + s.tokens, 0) / enabled.length;
+  const byBudget = Math.floor(Math.max(0, budgetTokens - pinnedTokens) / average);
+  return Math.max(0, Math.min(enabled.length, byBudget, maxTools - pinnedCount));
+}

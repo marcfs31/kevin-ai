@@ -8,7 +8,7 @@ import { searchSpecs, selectTools } from './toolSelect';
 import { parseArguments, runTool, toolDefinitions, type ToolResult } from './tools';
 
 /** Most definitions in one request, however large the budget. */
-export const MAX_TOOLS_PER_STEP = 12;
+export const MAX_TOOLS_PER_STEP = 30;
 
 export interface ApprovalRequest {
   callId: string;
