@@ -268,6 +268,7 @@ function Chat({ state, setState, storage, notice }: {
         maxTokens: modes.maxTokens,
         thinking: modes.thinking,
         compactAt: modes.compactAt,
+        cacheKey: `${convId}|${requestModel ?? ''}`,
         tools: toolsOn ? createToolHost({ mcp: mcpSpecs, config: state.settings.toolsConfig, internet: state.settings.internet }) : undefined,
         approve,
         info,
