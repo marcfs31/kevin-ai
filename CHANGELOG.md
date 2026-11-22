@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.11] - 2026-11-22
+
+### Security
+- `katex` is pinned to 0.18.2 with an npm override (`rehype-katex` 7.0.1 still asks for 0.16): fixes the Dependabot advisory on trust-restriction bypass through prototype pollution.
+
 ## [0.3.10] - 2026-11-22
 
 ### Added
