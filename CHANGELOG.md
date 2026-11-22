@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-11-22
+
+### Added
+- Tool service: a built-in **project** server (`--projects-base`, `tools/chat_projects.py`) with file tools for the agent (`project_list`, `fs_read`, `fs_list`, `fs_search`, `fs_write`, `fs_edit`) on projects listed in an owner-edited registry. Paths are relative and jailed to the project (no `..`, no symlink out, nothing under `.git`), writes are capped and refused when the disk is short of free space, and the server runs in the service's process so it does not use up the MCP running limit. First step of projects, git and workflows for the agent.
+
 ## [0.3.4] - 2026-11-22
 
 ### Changed
