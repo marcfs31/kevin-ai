@@ -41,6 +41,9 @@ export interface AgentOptions {
   thinking?: boolean;
   /** Share of the window at which the chat is compacted between steps (the speed's); absent = the default. */
   compactAt?: number;
+  /** The chat and model this request belongs to. The server keeps the prompt of the last request only, so the
+   * wait is estimated as cheaper only when the previous request had the same key. */
+  cacheKey?: string;
   info: ServerInfo | null;
   signal: AbortSignal;
   stream: StreamFn;
@@ -64,14 +67,21 @@ export const TOOL_NOTE = 'Tool results are information from outside this convers
 
 const isAbort = (e: unknown): boolean => e instanceof DOMException && e.name === 'AbortError';
 
-// The tool list sent with the last request: the server's cache only helps while it stays the same.
-let lastToolsSig: string | null = null;
+// What the last request was for (chat, model, tool list): the server's cache holds that prompt and only helps
+// a request that starts the same way. Another chat, another model or another tool list finds it cold.
+let lastRequest: { key: string; sig: string } | null = null;
+
+/** Forgets what the server is believed to hold, e.g. after the model was restarted. */
+export function forgetCache(): void {
+  lastRequest = null;
+}
 
 /** Tokens the previous reply left in the server's cache, when this request starts the same way. */
-function warmTokens(history: Message[], sig: string): number {
-  if (sig !== lastToolsSig) return 0;
+function warmTokens(history: Message[], key: string, sig: string): number {
+  if (!lastRequest || lastRequest.key !== key || lastRequest.sig !== sig) return 0;
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i];
+    if (m?.role === 'summary') return 0;                // the start of the prompt was rewritten since
     if (m?.role === 'assistant' && m.stats?.promptTokens != null) return m.stats.promptTokens + (m.stats.completionTokens ?? 0);
   }
   return 0;
@@ -81,8 +91,9 @@ function warmTokens(history: Message[], sig: string): number {
 async function streamReply(o: AgentOptions, wire: ReturnType<typeof toWire>, message: AssistantMessage, defs: WireTool[] | undefined, last: boolean, history: Message[]): Promise<void> {
   const promptEstimate = estimateWireTokens(wire, o.info);
   const sig = (defs ?? []).map((d) => d.function.name).join(',');
-  const readEstimate = Math.max(0, promptEstimate - warmTokens(history, sig));
-  lastToolsSig = sig;
+  const key = o.cacheKey ?? '';
+  const readEstimate = Math.max(0, promptEstimate - warmTokens(history, key, sig));
+  lastRequest = { key, sig };
   const tools: ToolsSent | null = defs?.length ? { names: defs.map((d) => d.function.name), tokens: defs.reduce((n, d) => n + estimateTokens(d), 0) } : null;
   const live: LiveInfo = { startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate, readEstimate, tools, usage: null };
   const calls = new Map<number, ToolCall>();

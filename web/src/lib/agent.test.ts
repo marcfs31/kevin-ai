@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TOOL_NOTE, runAgent, type AgentOptions, type StreamFn } from './agent';
+import { TOOL_NOTE, forgetCache, runAgent, type AgentOptions, type StreamFn } from './agent';
 import { ApiError, type ServerInfo } from './api';
 import { applyCompaction } from './compact';
 import { DEFAULT_SETTINGS, type AssistantMessage, type Message, type UserMessage } from './storage';
@@ -160,6 +160,36 @@ describe('runAgent', () => {
     expect((withTools.committed[0] as AssistantMessage).stats?.tools?.tokens).toBeGreaterThan(0);
     const without = await drive([say('a')], { settings: { ...settings, tools: false } });
     expect((without.committed[0] as AssistantMessage).stats?.tools).toBeNull();
+  });
+
+  it('counts the cache only for the same chat and model, and not after a compaction or forgetting', async () => {
+    const stats = { ttftMs: 1, tokensPerSecond: 1, promptTokens: 400, cachedTokens: null, completionTokens: 20, promptEstimate: 400, completionEstimate: 20 };
+    const prior: AssistantMessage = { id: 'a', role: 'assistant', content: 'earlier', reasoning: '', status: 'done', error: null, createdAt: 0, stats };
+    const long: UserMessage = { ...user, id: 'u2', content: 'x'.repeat(3500), typed: 'x'.repeat(3500) };
+    const readOf = async (history: Message[], cacheKey: string) => {
+      const lives: number[][] = [];
+      const up = upstream([say('ok')]);
+      await runAgent({
+        history, settings: { ...settings, tools: false }, model: null, info: null, cacheKey, signal: new AbortController().signal, stream: up.stream,
+        onLive: (_m, info) => lives.push([info.promptEstimate, info.readEstimate]), onCommit: () => undefined,
+      });
+      return lives[0] as [number, number];
+    };
+    forgetCache();
+    const [total, cold] = await readOf([user, prior, long], 'c1|m');
+    expect(cold).toBe(total);                                    // nothing was sent before: all of it is read
+    const [, warm] = await readOf([user, prior, long], 'c1|m');
+    expect(warm).toBe(total - 420);                              // the same chat and model: the earlier reply is cached
+    const [, otherChat] = await readOf([user, prior, long], 'c2|m');
+    expect(otherChat).toBe(total);                               // another chat evicted it
+    await readOf([user, prior, long], 'c1|m');
+    const summary: Message = { id: 's', role: 'summary', content: 's', covered: 2, auto: true, createdAt: 0 };
+    const [compactedTotal, compacted] = await readOf([user, prior, summary, long], 'c1|m');
+    expect(compacted).toBe(compactedTotal);                      // the start was rewritten: nothing is cached
+    await readOf([user, prior, long], 'c1|m');
+    forgetCache();
+    const [, forgotten] = await readOf([user, prior, long], 'c1|m');
+    expect(forgotten).toBe(total);
   });
 
   it('expects to read only what the server has not cached, and all of it when the tools changed', async () => {
