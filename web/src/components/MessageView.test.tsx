@@ -68,7 +68,7 @@ describe('MessageView reading ETA', () => {
       <I18nProvider locale="en">
         <MessageView
           m={assistant({ content: '' })}
-          live={{ startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate: 1440, readEstimate: 1440, usage: null }}
+          live={{ startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate: 1440, readEstimate: 1440, tools: null, usage: null }}
         />
       </I18nProvider>,
     );
@@ -80,7 +80,7 @@ describe('MessageView reading ETA', () => {
       <I18nProvider locale="en">
         <MessageView
           m={assistant({ content: '' })}
-          live={{ startedAt: performance.now() - 130_000, firstAt: null, chunks: 0, promptEstimate: 1440, readEstimate: 1440, usage: null }}
+          live={{ startedAt: performance.now() - 130_000, firstAt: null, chunks: 0, promptEstimate: 1440, readEstimate: 1440, tools: null, usage: null }}
         />
       </I18nProvider>,
     );

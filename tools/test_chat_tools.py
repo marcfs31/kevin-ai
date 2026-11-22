@@ -527,8 +527,13 @@ class Front(Base):
         self.assertEqual(self.http("POST", "/tools/search", raw=b"[1]")[0], 400)
 
     def test_an_oversized_body_is_refused(self):
-        status, doc = self.http("POST", "/tools/search", raw=b"{" + b" " * (chat_tools.MAX_BODY + 10) + b"}")
-        self.assertEqual(status, 413)
+        # Only the header is sent: the answer comes before any body is read, so there is no race with the
+        # server closing the connection while a large body is still being written.
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+            sock.sendall(b"POST /tools/search HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+                         b"Content-Length: " + str(chat_tools.MAX_BODY + 10).encode() + b"\r\n\r\n")
+            head = sock.recv(4096)
+        self.assertTrue(head.startswith(b"HTTP/1.1 413"), head)
 
     def test_a_cross_site_post_is_refused_and_a_loopback_origin_is_fine(self):
         self.assertEqual(self.http("POST", "/tools/servers/fake/stop", {}, {"Origin": "https://evil.example"})[0], 403)

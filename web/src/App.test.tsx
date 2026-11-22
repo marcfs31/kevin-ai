@@ -1496,7 +1496,7 @@ describe('live scroll stickiness', () => {
     fireEvent.scroll(log);
 
     const first = ctrls[0];
-    expect(first).toBeDefined();
+    if (!first) throw new Error('the first reply was never requested');
     await act(async () => {
       first.push(delta(' more'));
     });
@@ -1518,7 +1518,7 @@ describe('live scroll stickiness', () => {
     expect(scrollTop).toBe(2000);
 
     const second = ctrls[1];
-    expect(second).toBeDefined();
+    if (!second) throw new Error('the second reply was never requested');
     await act(async () => {
       second.push(FINISH);
       second.push(DONE);

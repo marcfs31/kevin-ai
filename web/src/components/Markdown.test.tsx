@@ -37,8 +37,7 @@ describe('Markdown code copy', () => {
     expect(buttons).toHaveLength(1);
     const pre = container.querySelector('pre');
     const first = buttons[0];
-    expect(pre).toBeTruthy();
-    expect(first).toBeTruthy();
+    if (!pre || !first) throw new Error('the code block or its first Copy code button is missing');
     expect(first.compareDocumentPosition(pre) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -54,9 +53,7 @@ describe('Markdown code copy', () => {
     const pre = container.querySelector('pre');
     const first = buttons[0];
     const second = buttons[1];
-    expect(pre).toBeTruthy();
-    expect(first).toBeTruthy();
-    expect(second).toBeTruthy();
+    if (!pre || !first || !second) throw new Error('the code block or one of its Copy code buttons is missing');
     expect(first.compareDocumentPosition(pre) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(pre.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
