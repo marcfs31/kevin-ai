@@ -35,6 +35,16 @@ export function remarkMathGuard() {
   return (tree: MdNode) => walk(tree);
 }
 
+/** In the thinking text models write *Total weight:* with single asterisks and mean bold, so there an
+ * emphasis is drawn as strong. The answer keeps the standard meaning (single asterisks are italics). */
+export function remarkEmphasisAsBold() {
+  const walk = (node: MdNode) => {
+    if (node.type === 'emphasis') node.type = 'strong';
+    node.children?.forEach(walk);
+  };
+  return (tree: MdNode) => walk(tree);
+}
+
 // MathML only: the browser draws it, so no stylesheet and no fonts are needed and the strict CSP stays as it is.
 const KATEX = { output: 'mathml', throwOnError: false, strict: 'ignore', trust: false } as const;
 
@@ -106,9 +116,9 @@ const components: Components = {
   img: ({ alt, src }) => <span className="img-alt">[{alt || (typeof src === 'string' ? src : '')}]</span>,
 };
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, emphasisAsBold = false }: { text: string; emphasisAsBold?: boolean }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkMathGuard, remarkHtmlAsText]} rehypePlugins={[[rehypeKatex, KATEX]]} components={components}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkMathGuard, remarkHtmlAsText, ...(emphasisAsBold ? [remarkEmphasisAsBold] : [])]} rehypePlugins={[[rehypeKatex, KATEX]]} components={components}>
       {text}
     </ReactMarkdown>
   );

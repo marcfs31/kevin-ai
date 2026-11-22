@@ -129,10 +129,30 @@ describe('thinking text', () => {
       </I18nProvider>,
     );
     const body = container.querySelector('.think-body');
-    expect(body?.querySelector('strong')?.textContent).toBe('Total weight:');
-    expect(body?.querySelector('em')?.textContent).toBe('note');
+    expect([...(body?.querySelectorAll('strong') ?? [])].map((n) => n.textContent)).toEqual(['Total weight:', 'note']);
+    expect(body?.querySelector('em')).toBeNull();                 // single asterisks mean bold in thinking
     expect(body?.querySelectorAll('li')).toHaveLength(2);
     expect(body?.textContent).not.toContain('*');
+  });
+
+  it('keeps the standard meaning in the answer: single asterisks are italics there', () => {
+    const { container } = render(
+      <I18nProvider locale="en">
+        <MessageView m={assistant({ content: '*Total weight:* **12 g**', reasoning: '' })} />
+      </I18nProvider>,
+    );
+    expect(container.querySelector('.md em')?.textContent).toBe('Total weight:');
+    expect(container.querySelector('.md strong')?.textContent).toBe('12 g');
+  });
+
+  it('shows the screenshot line in thinking as bold with the text after it', () => {
+    const { container } = render(
+      <I18nProvider locale="en">
+        <MessageView m={assistant({ content: 'x', reasoning: '*Total Weight:* 1.0 g to 1.2 g' })} />
+      </I18nProvider>,
+    );
+    expect(container.querySelector('.think-body strong')?.textContent).toBe('Total Weight:');
+    expect(container.querySelector('.think-body')?.textContent).toBe('Total Weight: 1.0 g to 1.2 g');
   });
 
   it('shows raw HTML in thinking as text, as in the answer', () => {
