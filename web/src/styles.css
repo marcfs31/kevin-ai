@@ -117,6 +117,19 @@ input, select, textarea {
   max-inline-size: 100%;
   min-block-size: 2.25rem;
 }
+/* The native arrow sits against the edge of the box. Draw our own, in the muted colour, with room around it. */
+select {
+  appearance: none;
+  padding-inline-end: 2.1rem;
+  cursor: pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 1.15rem) 52%, calc(100% - 0.8rem) 52%;
+  background-size: 0.35rem 0.35rem, 0.35rem 0.35rem;
+  background-repeat: no-repeat;
+}
+select:disabled { cursor: default; opacity: 0.7; }
 input[type='range'], input[type='checkbox'] { min-block-size: auto; padding: 0; }
 textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 
@@ -159,8 +172,25 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   min-inline-size: 0;
   text-align: end;
 }
-.server span + span::before { content: '·'; margin-inline: 0.4rem; }
-.server .model-picker + span::before { content: '·'; margin-inline: 0.4rem; }
+/* A thin rule between the items of the row, not a dot that reads as a bullet. */
+.server span + span::before,
+.server .model-picker + span::before {
+  content: '';
+  display: inline-block;
+  inline-size: 1px;
+  block-size: 1.15em;
+  margin-inline: 0.55rem 0.7rem;
+  vertical-align: middle;
+  background: var(--border);
+}
+.server .internet-badge::before { content: none; }
+.server .internet-badge { margin-inline-start: 0.7rem; }
+/* Where the row wraps a rule would open a line; the gap between the items is enough. */
+@media (max-width: 48rem) {
+  .server { gap: 0.5rem 1rem; }
+  .server span + span::before, .server .model-picker + span::before { display: none; }
+  .server .internet-badge { margin-inline-start: 0; }
+}
 .model-picker { position: relative; display: inline-flex; align-items: center; }
 .model-picker-trigger {
   font: inherit;
@@ -555,9 +585,9 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   .fields { grid-template-columns: 1fr; }
 }
 
-/* On a phone the model row stacks into about 6.8rem once it has loaded; keep that room while it connects so the page does not jump. */
-@media (max-width: 30rem) {
-  .server { min-block-size: 6.8rem; }
+/* On a phone (360 to 448 px) the model row stacks into 114 px once it has loaded; keep that room while it connects so the page does not jump. */
+@media (max-width: 28rem) {
+  .server { min-block-size: 7.125rem; }
 }
 
 @media (max-width: 22rem) {
@@ -644,7 +674,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 }
 .main > .note { margin-inline: auto; inline-size: min(calc(100% - 2.5rem), var(--measure)); }
 
-.internet-badge { padding: 0.1rem 0.5rem; border: 1px solid var(--warn); border-radius: 999px; color: var(--warn); font-size: 0.75rem; font-weight: 600; }
+.internet-badge { padding: 0.15rem 0.65rem; border: 1px solid var(--warn); border-radius: 999px; color: var(--warn); font-size: 0.75rem; font-weight: 600; }
 .tools-panel h3 { margin: 0 0 0.25rem; font-size: 1rem; }
 .tool-servers, .tool-list, .tool-catalog { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .tool-list { margin-block-start: 0.4rem; padding-inline-start: 1rem; }

@@ -29,7 +29,16 @@ describe('Kevin AI branding', () => {
   });
 
   it('keeps the phone header at the height the loaded model row needs, so mobile does not shift either', () => {
-    expect(read('src/styles.css')).toMatch(/@media \(max-width: 30rem\) \{\s*\.server \{ min-block-size: 6\.8rem; \}/);
+    expect(read('src/styles.css')).toMatch(/@media \(max-width: 28rem\) \{\s*\.server \{ min-block-size: 7\.125rem; \}/);
+  });
+
+  it('draws its own select arrow with room around it, and separates the header items with a rule, not a dot', () => {
+    const css = read('src/styles.css');
+    expect(css).toMatch(/\nselect \{[^}]*appearance: none;[^}]*padding-inline-end: 2\.1rem;[^}]*linear-gradient/);
+    expect(css).not.toContain("content: '·'");
+    expect(css).toMatch(/\.server span \+ span::before,[^}]*inline-size: 1px;/);
+    expect(css).toMatch(/\.server \.internet-badge::before \{ content: none; \}/);   // no separator inside the pill
+    expect(css).toMatch(/@media \(max-width: 48rem\) \{\s*\.server \{ gap: 0\.5rem 1rem; \}/);
   });
 
   it('ships the Orbit logo as a self-contained SVG: a disc, a ring, a K and a dot, with no script, link or remote reference', () => {
