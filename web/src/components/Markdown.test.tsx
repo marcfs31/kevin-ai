@@ -58,3 +58,54 @@ describe('Markdown code copy', () => {
     expect(pre.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
+
+describe('Markdown maths', () => {
+  const show = (text: string) =>
+    render(
+      <I18nProvider locale="en">
+        <Markdown text={text} />
+      </I18nProvider>,
+    ).container;
+
+  it('draws inline LaTeX as MathML instead of printing the dollar signs and commands', () => {
+    const c = show('**Sodium bicarbonate ($\\text{NaHCO}_3$):** $1.0 \\text{ g}$ to $1.2 \\text{ g}$');
+    expect(c.querySelectorAll('math')).toHaveLength(3);
+    expect(c.querySelector('msub')).toBeTruthy();                 // the 3 under NaHCO
+    // The MathML keeps the TeX source in an annotation the browser does not draw; what is drawn has neither.
+    const drawn = c.cloneNode(true) as HTMLElement;
+    drawn.querySelectorAll('annotation').forEach((n) => n.remove());
+    expect((drawn.textContent ?? '').replace(/\s+/g, ' ')).toBe('Sodium bicarbonate (NaHCO3): 1.0 g to 1.2 g');
+  });
+
+  it('draws a $$ block as display maths', () => {
+    const c = show('Area:\n\n$$\nA = \\pi r^2\n$$');
+    expect(c.querySelector('math[display="block"]')).toBeTruthy();
+  });
+
+  it('leaves prices as text, and a lone dollar sign', () => {
+    const c = show('It costs $5 to $10 each, and $3 more.');
+    expect(c.querySelector('math')).toBeNull();
+    expect(c.textContent).toBe('It costs $5 to $10 each, and $3 more.');
+    expect(show('Pay $20').querySelector('math')).toBeNull();
+  });
+
+  it('leaves code alone and shows broken LaTeX without crashing', () => {
+    const code = show('Use `$x$` in a shell: `echo $HOME`');
+    expect(code.querySelector('math')).toBeNull();
+    expect(code.textContent).toContain('$x$');
+    const broken = show('Oops $\\frac{1$ here');
+    expect(broken.textContent).toContain('here');
+  });
+
+  it('needs no inline style, so the strict style-src CSP holds', () => {
+    const c = show('$x^2 + \\frac{a}{b}$ and $$\\sum_{i=1}^n i$$');
+    expect(c.querySelector('math')).toBeTruthy();
+    expect(c.querySelectorAll('[style]')).toHaveLength(0);
+  });
+
+  it('does not let LaTeX turn into a link or raw HTML', () => {
+    const c = show('$\\href{javascript:alert(1)}{click}$ <b>raw</b>');
+    expect(c.querySelector('a')).toBeNull();
+    expect(c.querySelector('b')).toBeNull();
+  });
+});
