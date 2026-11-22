@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.16] - 2026-11-23
+
+### Changed
+- `AGENTS.md`: where to edit the project tools and the project picker, and three rules for agents: never loosen what the agent can do in a project (jail, no force or delete, default branch, token only through askpass, fixed argv, audit, a negative test per new tool), never make the page ask for something that can fail on load, and never put the registry or token file into the repository, logs or fixtures.
+
 ## [0.3.15] - 2026-11-23
 
 ### Added
