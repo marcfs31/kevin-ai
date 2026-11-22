@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-11-22
+
+### Changed
+- The web package is named `kevin-ai` (was `lm-chat-web`) in `web/package.json` and `web/package-lock.json`.
+
 ## [0.3.7] - 2026-11-22
 
 ### Added
