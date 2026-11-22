@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Web chat: LaTeX in replies (`$...$` inline, `$$...$$` as a block) is drawn as MathML with KaTeX, which needs no stylesheet or fonts so the CSP is unchanged; a price such as "$5 to $10" stays text. Adds `remark-math` and `rehype-katex` (MIT); the bundle grows by about 83 KB gzipped.
+
 ## [0.2.29] - 2026-11-22
 
 ### Changed

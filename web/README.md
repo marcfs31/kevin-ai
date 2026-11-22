@@ -148,7 +148,10 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   they got; failed replies are left out, even when they streamed some text.
 - **Thinking.** `reasoning_content` (lm-serve `--think`) goes in a collapsible block.
 - **Markdown** with GitHub tables and code blocks with a copy button. Raw HTML in a reply is shown
-  as text; images in a reply are never loaded (they could be remote trackers).
+  as text; images in a reply are never loaded (they could be remote trackers). LaTeX (`$...$`
+  inline, `$$...$$` as a block) is drawn as MathML, which the browser renders itself, so there is no
+  stylesheet or font to load and the CSP is unchanged; a price like "$5 to $10" stays text, and
+  maths in code is left alone.
 - **Conversations** are saved in `localStorage` under `lm-chat` (schema version 1): rename,
   delete, delete all. A saved document missing a newer field loads with its default; one that
   cannot be read is copied aside to `lm-chat.unreadable.<time>` rather than overwritten.
@@ -205,6 +208,7 @@ Runtime:
 | `react`, `react-dom` | The UI. |
 | `react-markdown` | Renders replies as Markdown to React elements, without `dangerouslySetInnerHTML`. |
 | `remark-gfm` | Tables, strikethrough and task lists, which models write often. |
+| `remark-math`, `rehype-katex` | LaTeX in replies, drawn as MathML (KaTeX is pulled in by `rehype-katex`; all MIT). |
 | `pdfjs-dist` | Reads PDF text and renders text-less pages; its worker is bundled locally. |
 
 Development:

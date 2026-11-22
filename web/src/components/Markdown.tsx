@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import { useI18n } from '../i18n';
 
 interface MdNode {
@@ -17,6 +19,24 @@ export function remarkHtmlAsText() {
   };
   return (tree: MdNode) => walk(tree);
 }
+
+/** A price is not a formula: "costs $5 to $10" must stay text. Inline maths that opens or closes with a
+ * space is a pair of dollar signs around prose, so it goes back to the text it was written as. */
+export function remarkMathGuard() {
+  const walk = (node: MdNode) => {
+    // Only nodes that have children get the key: a leaf with `children: undefined` is read as an unknown parent.
+    if (!node.children) return;
+    node.children = node.children.map((child): MdNode => {
+      if (child.type === 'inlineMath' && /^\s|\s$/.test(child.value ?? '')) return { type: 'text', value: '$' + (child.value ?? '') + '$' };
+      walk(child);
+      return child;
+    });
+  };
+  return (tree: MdNode) => walk(tree);
+}
+
+// MathML only: the browser draws it, so no stylesheet and no fonts are needed and the strict CSP stays as it is.
+const KATEX = { output: 'mathml', throwOnError: false, strict: 'ignore', trust: false } as const;
 
 /** Prefers a second Copy when the block is taller than one viewport thumb-reach. */
 export const DUAL_COPY_MIN_HEIGHT_PX = 320;
@@ -88,7 +108,7 @@ const components: Components = {
 
 export function Markdown({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlAsText]} components={components}>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkMathGuard, remarkHtmlAsText]} rehypePlugins={[[rehypeKatex, KATEX]]} components={components}>
       {text}
     </ReactMarkdown>
   );
