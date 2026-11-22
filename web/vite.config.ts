@@ -9,6 +9,8 @@ import { serveControl } from './serve-control-plugin';
 const upstream = process.env.LM_SERVE_URL ?? 'http://127.0.0.1:8080';
 // The tool service (tools/chat_tools.py): MCP servers and web search, behind /tools/*.
 const toolsUpstream = process.env.LM_TOOLS_URL ?? 'http://127.0.0.1:8081';
+// A second copy of it on this Mac (scripts/start-local-chat-tools.sh), behind /tools-local/*.
+const toolsLocalUpstream = process.env.LM_TOOLS_LOCAL_URL ?? 'http://127.0.0.1:8082';
 
 // pdf.js fetches its image decoders by fixed name from `wasmUrl` (see src/lib/pdf.ts): serve
 // them at /pdfjs/ in dev and copy them to dist/pdfjs/ in the build, with their licences.
@@ -45,6 +47,8 @@ export default defineConfig({
     proxy: {
       '/v1': { target: upstream, changeOrigin: true },
       '/health': { target: upstream, changeOrigin: true },
+      // Before '/tools': a string key matches by prefix, and '/tools-local' starts with '/tools'.
+      '/tools-local': { target: toolsLocalUpstream, changeOrigin: true, rewrite: (p) => p.replace(/^\/tools-local/, '/tools') },
       '/tools': { target: toolsUpstream, changeOrigin: true },
     },
   },

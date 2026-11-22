@@ -36,14 +36,14 @@ describe('privacy', () => {
           "send('/v1/chat/reset'",
           "send('/v1/chat/completions'",
         ]);
-        // The tool service's paths: same-origin /tools/*, nothing else.
+        // The tool service's paths: same-origin /tools/* or /tools-local/* (toolsBase), nothing else.
         expect(f.text.match(/toolsJson\(\s*[`']([^`'?]*)/g)?.map((m) => m.replace(/^toolsJson\(\s*[`']/, ''))).toEqual([
-          '/tools/status',
-          '/tools/servers/${encodeURIComponent(server)}/tools',
-          '/tools/servers/${encodeURIComponent(server)}/call',
-          '/tools/search',
-          '/tools/servers/${encodeURIComponent(server)}/stop',
-          '/tools/catalog/${encodeURIComponent(id)}/add',
+          '${toolsBase(host)}/status',
+          '${toolsBase(host)}/servers/${encodeURIComponent(server)}/tools',
+          '${toolsBase(host)}/servers/${encodeURIComponent(server)}/call',
+          '${toolsBase(host)}/search',
+          '${toolsBase(host)}/servers/${encodeURIComponent(server)}/stop',
+          '${toolsBase(host)}/catalog/${encodeURIComponent(id)}/add',
         ]);
       } else expect(calls, f.path).toEqual([]);
     }

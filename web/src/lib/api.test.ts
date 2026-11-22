@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DONE, FINISH, USAGE, delta, sseResponse } from '../test/helpers';
-import { ApiError, infoForModel, parseModels, requestBody, resetServer, streamChat } from './api';
+import {
+  ApiError, infoForModel, parseModels, requestBody, resetServer, streamChat,
+  toolsAddCatalog, toolsCall, toolsList, toolsSearch, toolsStatus, toolsStop, type ToolsHost,
+} from './api';
 import type { StreamEvent } from './sse';
 
 describe('parseModels', () => {
@@ -144,5 +147,43 @@ describe('streamChat', () => {
   it('reports an unreachable server as status 0', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
     await expect(streamChat(req, new AbortController().signal, () => {})).rejects.toMatchObject({ status: 0 });
+  });
+});
+
+describe('the tool service host', () => {
+  const calls = () => {
+    const fetchMock = vi.fn(async () => new Response('{"servers":[],"catalog":[],"tools":[],"content":"","added":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  };
+  const run = async (host?: ToolsHost) => {
+    const f = calls();
+    await toolsStatus(undefined, host);
+    await toolsList('s a', true, undefined, host);
+    await toolsCall('s a', 't', {}, false, undefined, host);
+    await toolsSearch('q', 'https://x/?q={q}', undefined, host);
+    await toolsStop('s a', host);
+    await toolsAddCatalog('c', true, host);
+    return f.mock.calls.map((c) => String((c as unknown[])[0]));
+  };
+
+  it('goes to /tools by default and for the server', async () => {
+    const want = ['/tools/status', '/tools/servers/s%20a/tools?internet=1', '/tools/servers/s%20a/call', '/tools/search', '/tools/servers/s%20a/stop', '/tools/catalog/c/add'];
+    expect(await run()).toEqual(want);
+    expect(await run('server')).toEqual(want);
+  });
+
+  it('goes to /tools-local for the local host, on every call', async () => {
+    expect(await run('local')).toEqual([
+      '/tools-local/status', '/tools-local/servers/s%20a/tools?internet=1', '/tools-local/servers/s%20a/call', '/tools-local/search',
+      '/tools-local/servers/s%20a/stop', '/tools-local/catalog/c/add',
+    ]);
+  });
+
+  it('never mixes the two prefixes', async () => {
+    const local = await run('local');
+    expect(local.every((u) => u.startsWith('/tools-local/'))).toBe(true);
+    const server = await run('server');
+    expect(server.some((u) => u.startsWith('/tools-local'))).toBe(false);
   });
 });

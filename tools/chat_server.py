@@ -3,7 +3,7 @@
 
     chat_server.py [--host 127.0.0.1] [--port 8000] [--dist web/dist]
                    [--upstream http://127.0.0.1:8080] [--upstream-timeout 3600]
-                   [--tools-upstream http://127.0.0.1:8081]
+                   [--tools-upstream http://127.0.0.1:8081] [--tools-local-upstream http://127.0.0.1:8082]
 
 - GET of a file under --dist is served with its MIME type and a strict Content-Security-Policy, gzipped
   when the browser accepts it (text files only; the compressed bytes are kept until the file changes);
@@ -14,6 +14,8 @@
 - /tools/* goes to --tools-upstream (tools/chat_tools.py, default http://127.0.0.1:8081) the same
   way. A request whose Origin is not this server's own address is refused here, and Sec-Fetch-Site
   is passed on so that service can refuse a cross-site request too. LM_SERVE_API_KEY is for lm-serve only and is not sent there.
+- /tools-local/* goes to --tools-local-upstream (a second copy of the tool service, on this Mac) with the
+  same checks and headers, and the prefix is rewritten to /tools/ upstream. Without that option it is a 404.
 - LM_SERVE_API_KEY in the environment is sent upstream as "Authorization: Bearer <key>"; it is
   never sent to the browser, and the browser's own Authorization and Cookie headers are dropped.
 - It listens on 127.0.0.1. A --host that is not loopback needs CHAT_PASSWORD in the
@@ -144,7 +146,7 @@ def response_headers(upstream):
 
 
 def is_api(path):
-    return path == "/health" or path.startswith("/v1/") or path.startswith("/tools/")
+    return path == "/health" or path.startswith("/v1/") or path.startswith("/tools/") or path.startswith("/tools-local/")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -260,11 +262,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return True
 
     def proxy(self):
-        tools = urllib.parse.urlsplit(self.path).path.startswith("/tools/")
-        up = self.server.tools_upstream if tools else self.server.upstream
+        path = urllib.parse.urlsplit(self.path).path
+        local = path.startswith("/tools-local/")
+        tools = local or path.startswith("/tools/")
+        up = self.server.tools_local_upstream if local else self.server.tools_upstream if tools else self.server.upstream
         if up is None:
-            self.send_json_error(404, "tools_not_configured", "no tool service is configured")
+            if local:
+                self.send_json_error(404, "tools_local_not_configured", "no local tool service is configured")
+            else:
+                self.send_json_error(404, "tools_not_configured", "no tool service is configured")
             return
+        target = "/tools/" + self.path[len("/tools-local/"):] if local else self.path
         who = "the tool service" if tools else "lm-serve"
         if tools:
             # The tool service only knows loopback origins, so the check is made here, against the host the
@@ -310,7 +318,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 conn.connect()
                 conn.sock.settimeout(self.server.upstream_timeout)
-                conn.request(self.command, self.path, body=body, headers=headers)
+                conn.request(self.command, target, body=body, headers=headers)
             except OSError:
                 self.send_json_error(502, "upstream_unreachable", f"{who} is not reachable")
                 return
@@ -360,7 +368,7 @@ class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, dist, upstream, password, api_key, upstream_timeout=3600, tools_upstream=None):
+    def __init__(self, addr, dist, upstream, password, api_key, upstream_timeout=3600, tools_upstream=None, tools_local_upstream=None):
         family = socket.AF_INET6 if ":" in addr[0] else socket.AF_INET
         self.address_family = family
         self.dist = os.path.realpath(dist)
@@ -370,6 +378,9 @@ class Server(http.server.ThreadingHTTPServer):
         self.tools_upstream = urllib.parse.urlsplit(tools_upstream) if tools_upstream else None
         if self.tools_upstream and (self.tools_upstream.scheme not in ("http", "https") or not self.tools_upstream.hostname):
             raise ValueError(f"bad --tools-upstream {tools_upstream!r}")
+        self.tools_local_upstream = urllib.parse.urlsplit(tools_local_upstream) if tools_local_upstream else None
+        if self.tools_local_upstream and (self.tools_local_upstream.scheme not in ("http", "https") or not self.tools_local_upstream.hostname):
+            raise ValueError(f"bad --tools-local-upstream {tools_local_upstream!r}")
         self.password = password
         self.api_key = api_key or None
         self.upstream_timeout = upstream_timeout
@@ -410,6 +421,8 @@ def main(argv=None, env=None):
     ap.add_argument("--upstream", default="http://127.0.0.1:8080")
     ap.add_argument("--tools-upstream", default="http://127.0.0.1:8081",
                     help="the tool service (tools/chat_tools.py) that /tools/* goes to")
+    ap.add_argument("--tools-local-upstream", default=None,
+                    help="a second tool service (on this Mac) that /tools-local/* goes to; none = 404")
     ap.add_argument("--upstream-timeout", type=float, default=3600.0,
                     help="seconds lm-serve may stay silent before the request fails (default 3600)")
     args = ap.parse_args(argv)
@@ -418,7 +431,7 @@ def main(argv=None, env=None):
         sys.exit(f"chat_server: {args.dist}/index.html not found: build the app first (npm run build in web/)")
     try:
         server = Server((args.host, args.port), args.dist, args.upstream, password, env.get("LM_SERVE_API_KEY"),
-                        args.upstream_timeout, args.tools_upstream)
+                        args.upstream_timeout, args.tools_upstream, args.tools_local_upstream)
     except (OSError, ValueError) as e:
         sys.exit(f"chat_server: {e}")
     host = f"[{args.host}]" if ":" in args.host else args.host

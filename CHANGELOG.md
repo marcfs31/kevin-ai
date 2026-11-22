@@ -12,6 +12,13 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 - The path jail and shared helpers moved to `tools/chat_jail.py`.
 
+## [0.3.7] - 2026-11-22
+
+### Added
+- A second tool-service host, the Mac: `/tools-local/*` in the Vite dev proxy (`LM_TOOLS_LOCAL_URL`, default `http://127.0.0.1:8082`) and in `tools/chat_server.py` (`--tools-local-upstream`; 404 `tools_local_not_configured` when unset; the same Origin check, Sec-Fetch-Site passing and no credentials as `/tools/*`; the prefix becomes `/tools/` upstream).
+- Every `tools*` function in `web/src/lib/api.ts` takes an optional host (`'server' | 'local'`, default `'server'`).
+- `scripts/start-local-chat-tools.sh` starts the tool service on this Mac (127.0.0.1:8082, own config and state, pid file, `--stop`).
+
 ## [0.3.6] - 2026-11-22
 
 ### Added
