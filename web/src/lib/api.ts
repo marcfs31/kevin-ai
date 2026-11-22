@@ -160,7 +160,12 @@ export async function resetServer(signal?: AbortSignal): Promise<void> {
   if (!res.ok) throw await errorFrom(res);
 }
 
-// ---- the tool service (tools/chat_tools.py), reached through the same-origin /tools/* paths ----
+// ---- the tool service (tools/chat_tools.py), reached through the same-origin /tools/* paths (and /tools-local/* for the Mac's copy) ----
+
+/** Which tool service a call goes to: the model server's (`/tools`) or the one on this Mac (`/tools-local`). */
+export type ToolsHost = 'server' | 'local';
+
+const toolsBase = (host: ToolsHost): string => (host === 'local' ? '/tools-local' : '/tools');
 
 export interface McpServerStatus {
   id: string;
@@ -207,8 +212,8 @@ async function toolsJson(url: string, init: RequestInit): Promise<Record<string,
 
 const str = (v: unknown, d = ''): string => (typeof v === 'string' ? v : d);
 
-export async function toolsStatus(signal?: AbortSignal): Promise<ToolsStatus> {
-  const j = await toolsJson('/tools/status', { signal });
+export async function toolsStatus(signal?: AbortSignal, host: ToolsHost = 'server'): Promise<ToolsStatus> {
+  const j = await toolsJson(`${toolsBase(host)}/status`, { signal });
   const servers = (Array.isArray(j.servers) ? j.servers : []).flatMap((v): McpServerStatus[] => {
     const s = obj(v);
     if (!s || typeof s.id !== 'string') return [];
@@ -225,8 +230,8 @@ export async function toolsStatus(signal?: AbortSignal): Promise<ToolsStatus> {
   return { servers, catalog, configError: typeof j.configError === 'string' ? j.configError : null };
 }
 
-export async function toolsList(server: string, internet: boolean, signal?: AbortSignal): Promise<McpTool[]> {
-  const j = await toolsJson(`/tools/servers/${encodeURIComponent(server)}/tools?internet=${internet ? '1' : '0'}`, { signal });
+export async function toolsList(server: string, internet: boolean, signal?: AbortSignal, host: ToolsHost = 'server'): Promise<McpTool[]> {
+  const j = await toolsJson(`${toolsBase(host)}/servers/${encodeURIComponent(server)}/tools?internet=${internet ? '1' : '0'}`, { signal });
   return (Array.isArray(j.tools) ? j.tools : []).flatMap((v): McpTool[] => {
     const t = obj(v);
     if (!t || typeof t.name !== 'string') return [];
@@ -246,20 +251,20 @@ function toolResult(j: Record<string, unknown>): ToolCallResult {
   return { content: str(j.content), isError: j.isError === true };
 }
 
-export async function toolsCall(server: string, name: string, args: Record<string, unknown>, internet: boolean, signal?: AbortSignal): Promise<ToolCallResult> {
-  return toolResult(await toolsJson(`/tools/servers/${encodeURIComponent(server)}/call`, { method: 'POST', signal, body: JSON.stringify({ name, arguments: args, internet }) }));
+export async function toolsCall(server: string, name: string, args: Record<string, unknown>, internet: boolean, signal?: AbortSignal, host: ToolsHost = 'server'): Promise<ToolCallResult> {
+  return toolResult(await toolsJson(`${toolsBase(host)}/servers/${encodeURIComponent(server)}/call`, { method: 'POST', signal, body: JSON.stringify({ name, arguments: args, internet }) }));
 }
 
-export async function toolsSearch(query: string, searchUrl: string, signal?: AbortSignal): Promise<ToolCallResult> {
-  return toolResult(await toolsJson('/tools/search', { method: 'POST', signal, body: JSON.stringify({ query, searchUrl, internet: true }) }));
+export async function toolsSearch(query: string, searchUrl: string, signal?: AbortSignal, host: ToolsHost = 'server'): Promise<ToolCallResult> {
+  return toolResult(await toolsJson(`${toolsBase(host)}/search`, { method: 'POST', signal, body: JSON.stringify({ query, searchUrl, internet: true }) }));
 }
 
-export async function toolsStop(server: string): Promise<void> {
-  await toolsJson(`/tools/servers/${encodeURIComponent(server)}/stop`, { method: 'POST', body: '{}' });
+export async function toolsStop(server: string, host: ToolsHost = 'server'): Promise<void> {
+  await toolsJson(`${toolsBase(host)}/servers/${encodeURIComponent(server)}/stop`, { method: 'POST', body: '{}' });
 }
 
-export async function toolsAddCatalog(id: string, internet: boolean): Promise<boolean> {
-  return (await toolsJson(`/tools/catalog/${encodeURIComponent(id)}/add`, { method: 'POST', body: JSON.stringify({ internet }) })).added === true;
+export async function toolsAddCatalog(id: string, internet: boolean, host: ToolsHost = 'server'): Promise<boolean> {
+  return (await toolsJson(`${toolsBase(host)}/catalog/${encodeURIComponent(id)}/add`, { method: 'POST', body: JSON.stringify({ internet }) })).added === true;
 }
 
 export function requestBody(req: ChatRequest): string {
