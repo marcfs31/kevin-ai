@@ -15,6 +15,9 @@ check '[[ "$out" == *"tools/chat_tools.py"*"--host 127.0.0.1"*"--port 8082"* ]]'
 check '[[ "$out" == *"--config $home/.config/kevin-ai/mcp-local.json"* ]]' "own config path, not the shared lm-chat one, got: $out"
 check '[[ "$out" == *"--state-dir $home/.local/share/kevin-ai"* ]]' "state dir, got: $out"
 check '[[ "$out" != *"lm-chat"* ]]' "must not touch ~/.config/lm-chat, got: $out"
+check '[[ "$out" == *"--projects-base $home/KevinProjects --projects-registry $home/.config/kevin-ai/projects-local.json"* ]]' "projects base and its own registry, got: $out"
+out=$(LM_LOCAL_PROJECTS_BASE= run --dry-run)
+check '[[ "$out" != *"--projects-base"* ]]' "an empty base should turn projects off, got: $out"
 out=$(run --dry-run --port 8123)
 check '[[ "$out" == *"--port 8123"* ]]' "--port not passed on, got: $out"
 out=$(LM_LOCAL_TOOLS_CONFIG=/x/c.json LM_LOCAL_TOOLS_STATE=/x/s run --dry-run)

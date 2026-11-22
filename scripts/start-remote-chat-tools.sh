@@ -42,12 +42,16 @@ main() {
   local target=${LM_TOOLS_SSH:-toor@192.168.1.96}
   local repo=${LM_TOOLS_REPO:-'$HOME/kevin-ai'}
   local opt=${LM_TOOLS_OPT:-'$HOME/opt'}
+  # Where the agent's projects live on the model server (the second SSD); an empty LM_PROJECTS_BASE turns projects off.
+  local projects=${LM_PROJECTS_BASE-/mnt/models/kevin-projects}
+  local minfree=${LM_PROJECTS_MIN_FREE_GB:-20}
+  [[ "$minfree" =~ ^[0-9]+$ ]] || { echo "start-remote-chat-tools.sh: LM_PROJECTS_MIN_FREE_GB must be a whole number" >&2; exit 2; }
 
   local remote_script
   remote_script=$(cat <<'EOS'
 set -euo pipefail
 expand_home() { local v=$1; if [[ "$v" == '$HOME/'* ]]; then printf '%s\n' "$HOME/${v#'$HOME/'}"; else printf '%s\n' "$v"; fi; }
-REPO=$(expand_home "$1"); OPT=$(expand_home "$2"); PORT=$3; UPDATE=$4
+REPO=$(expand_home "$1"); OPT=$(expand_home "$2"); PORT=$3; UPDATE=$4; PROJECTS=$(expand_home "$5"); MINFREE=$6
 LOG=$HOME/logs/chat-tools.log
 mkdir -p "$(dirname "$LOG")"
 if [[ "$UPDATE" == 1 ]]; then git -C "$REPO" pull --ff-only -q; fi
@@ -57,7 +61,18 @@ if pgrep -f "tools/chat_tools.py" >/dev/null; then
   for _ in $(seq 1 50); do pgrep -f "tools/chat_tools.py" >/dev/null || break; sleep 0.2; done
   if pgrep -f "tools/chat_tools.py" >/dev/null; then echo "the old tool service did not stop" >&2; exit 1; fi
 fi
-PATH="$OPT/tool-bin:$PATH" nohup python3 "$REPO/tools/chat_tools.py" --host 127.0.0.1 --port "$PORT" >"$LOG" 2>&1 &
+ARGS=(--host 127.0.0.1 --port "$PORT")
+if [[ -n "$PROJECTS" ]]; then
+  mkdir -p "$PROJECTS"
+  ARGS+=(--projects-base "$PROJECTS" --projects-min-free-gb "$MINFREE")
+fi
+# The GitHub token (KEVIN_GITHUB_TOKEN) and other secrets for the service live in a file only its owner can read.
+ENVFILE=$HOME/.config/kevin-ai/tool-service.env
+if [[ -f "$ENVFILE" ]]; then
+  [[ "$(stat -c %a "$ENVFILE")" == 600 ]] || { echo "$ENVFILE must have mode 600" >&2; exit 1; }
+  set -a; . "$ENVFILE"; set +a
+fi
+PATH="$OPT/tool-bin:$PATH" nohup python3 "$REPO/tools/chat_tools.py" "${ARGS[@]}" >"$LOG" 2>&1 &
 ok=0
 for _ in $(seq 1 50); do
   if curl -sf --connect-timeout 1 "http://127.0.0.1:$PORT/tools/status" >/dev/null; then ok=1; break; fi
@@ -69,7 +84,7 @@ echo "tool service up on 127.0.0.1:$PORT (log $LOG)"
 EOS
 )
   local quoted
-  quoted=$(quote_for_remote "$repo" "$opt" "$port" "$update")
+  quoted=$(quote_for_remote "$repo" "$opt" "$port" "$update" "$projects" "$minfree")
   exec ssh -o BatchMode=yes -o ConnectTimeout=10 "$target" "bash -s -- $quoted" <<<"$remote_script"
 }
 
