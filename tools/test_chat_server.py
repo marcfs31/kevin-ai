@@ -313,16 +313,26 @@ class ToolsTest(ProxyTest):
         self.assertEqual(self.upstream.requests[-1][1], "/health")
         self.assertEqual(len(self.tools_upstream.requests), 1)
 
-    def test_post_body_and_the_browsers_origin_reach_the_tool_service_but_not_its_credentials(self):
+    def test_post_body_and_fetch_site_reach_the_tool_service_but_not_its_credentials_or_origin(self):
         self.request("POST", "/tools/search", body=b'{"query":"x"}', headers={
-            "Content-Type": "application/json", "Origin": "http://127.0.0.1:5173", "Sec-Fetch-Site": "same-origin",
+            "Content-Type": "application/json", "Origin": "http://127.0.0.1:%d" % self.port, "Sec-Fetch-Site": "same-origin",
             "Authorization": "Bearer from-browser", "Cookie": "a=b"})
         method, path, headers, body = self.tools_upstream.requests[-1]
         self.assertEqual((method, path, body), ("POST", "/tools/search", b'{"query":"x"}'))
-        self.assertEqual(headers["Origin"], "http://127.0.0.1:5173")
         self.assertEqual(headers["Sec-Fetch-Site"], "same-origin")
+        self.assertNotIn("Origin", headers)
         self.assertNotIn("Authorization", headers)
         self.assertNotIn("Cookie", headers)
+
+    def test_a_page_served_from_another_address_than_loopback_still_works_and_another_site_does_not(self):
+        # The browser names the address it used in both Host and Origin, e.g. a LAN address.
+        hdr = {"Content-Type": "application/json", "Host": "192.168.1.5:8000", "Origin": "http://192.168.1.5:8000"}
+        resp, _ = self.request("POST", "/tools/search", body=b"{}", headers=hdr)
+        self.assertEqual(resp.status, 200)
+        before = len(self.tools_upstream.requests)
+        resp, data = self.request("POST", "/tools/search", body=b"{}", headers={**hdr, "Origin": "https://evil.example"})
+        self.assertEqual((resp.status, json.loads(data)["error"]["code"]), (403, "forbidden"))
+        self.assertEqual(len(self.tools_upstream.requests), before)
 
     def test_the_origin_is_not_passed_to_lm_serve(self):
         self.request("GET", "/health", headers={"Origin": "http://127.0.0.1:5173", "Sec-Fetch-Site": "same-origin"})

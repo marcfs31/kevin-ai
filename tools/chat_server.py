@@ -11,8 +11,8 @@
   (server-sent events are not buffered). When the browser goes away, the upstream connection is
   closed, which stops lm-serve's reply, even while it is still reading the prompt.
 - /tools/* goes to --tools-upstream (tools/chat_tools.py, default http://127.0.0.1:8081) the same
-  way, with the browser's Origin and Sec-Fetch-Site passed on so that service can refuse a
-  cross-site request. LM_SERVE_API_KEY is for lm-serve only and is not sent there.
+  way. A request whose Origin is not this server's own address is refused here, and Sec-Fetch-Site
+  is passed on so that service can refuse a cross-site request too. LM_SERVE_API_KEY is for lm-serve only and is not sent there.
 - LM_SERVE_API_KEY in the environment is sent upstream as "Authorization: Bearer <key>"; it is
   never sent to the browser, and the browser's own Authorization and Cookie headers are dropped.
 - It listens on 127.0.0.1. A --host that is not loopback needs CHAT_PASSWORD in the
@@ -236,6 +236,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_json_error(404, "tools_not_configured", "no tool service is configured")
             return
         who = "the tool service" if tools else "lm-serve"
+        if tools:
+            # The tool service only knows loopback origins, so the check is made here, against the host the
+            # browser used: a page of this app passes whatever address it is served on, another site does not.
+            origin = self.headers.get("Origin")
+            if origin and urllib.parse.urlsplit(origin).netloc != (self.headers.get("Host") or ""):
+                self.send_json_error(403, "forbidden", "cross-site request")
+                return
         length = self.headers.get("Content-Length")
         body = None
         if length is not None:
@@ -258,7 +265,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         headers = {"Host": up.netloc}
-        for name in ("Content-Type", "Accept") + (("Origin", "Sec-Fetch-Site") if tools else ()):
+        for name in ("Content-Type", "Accept") + (("Sec-Fetch-Site",) if tools else ()):
             if self.headers.get(name):
                 headers[name] = self.headers[name]
         if body is not None:
