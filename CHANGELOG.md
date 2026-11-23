@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.25] - 2026-11-23
+
+### Changed
+- `AGENTS.md`: Kevin's SemVer. The first major comes at `0.3.31`: the release after it is `1.0.0`, which ships alone. From then on a minor holds patches 0 to 31 and a major holds minors 0 to 13 (`1.13.31` is followed by `2.0.0`).
+
 ## [0.3.24] - 2026-11-23
 
 ### Added
