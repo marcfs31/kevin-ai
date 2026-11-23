@@ -38,7 +38,10 @@ describe('Kevin AI branding', () => {
     expect(css).toMatch(/--chevron: linear-gradient\([^;]*linear-gradient\(/);
     // The model picker is a real button: a box like the selects, and the shared button hover must not drop its arrow.
     expect(css).toMatch(/\.model-picker-trigger \{[^}]*border: 1px solid var\(--border\);[^}]*border-radius: var\(--radius\);/);
-    expect(css).toMatch(/\.model-picker-trigger:hover:not\(:disabled\) \{[^}]*background-image: var\(--chevron\);/);
+    // The shared button hover resets the whole `background` shorthand, so the picker's hover must say image, position, size
+    // and repeat again, or the two gradients stretch over the button (seen on the real page).
+    expect(css).toMatch(/\.model-picker-trigger:hover:not\(:disabled\) \{[^}]*background-image: var\(--chevron\);[^}]*background-position: var\(--chevron-position\);[^}]*background-size: var\(--chevron-size\);[^}]*background-repeat: no-repeat;/);
+    expect(css).toMatch(/--chevron-size: 0\.35rem 0\.35rem, 0\.35rem 0\.35rem;/);
     expect(css).not.toContain("content: '·'");
     expect(css).toMatch(/\.server span \+ span::before,[^}]*inline-size: 1px;/);
     expect(css).toMatch(/\.server \.internet-badge::before \{ content: none; \}/);   // no separator inside the pill
