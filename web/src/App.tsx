@@ -16,6 +16,7 @@ import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
 import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, toolsProjects, type HostedProject, type ServerInfo, type ToolsHost } from './lib/api';
 import { ProjectBar } from './components/ProjectBar';
 import { WorkflowBar } from './components/WorkflowBar';
+import { useWide } from './lib/viewport';
 import type { ToolSpec } from './lib/toolRegistry';
 import { setStep, startWorkflow, type Workflow } from './lib/workflows';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
@@ -28,7 +29,7 @@ import { assess } from './lib/request';
 import { estimateWireTokens, liveCount } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
 import {
-  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, truncateFrom, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State,
+  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, truncateFrom, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State, type StatsPane,
   type Message, type UserMessage,
 } from './lib/storage';
 
@@ -436,6 +437,11 @@ function Chat({ state, setState, storage, notice }: {
   };
 
   const updateSettings = (settings: Settings) => setState((s) => ({ ...s, settings }));
+  // The "This chat" pane on the right. auto = shown on wide screens only; the toggle makes the choice explicit.
+  const wide = useWide();
+  const statsPane = state.settings.statsPane;
+  const statsShown = statsPane === 'open' || (statsPane === 'auto' && wide);
+  const setStatsPane = (pane: StatsPane) => updateSettings({ ...state.settings, statsPane: pane });
 
   const forgetServer = () => {
     void resetServer().then(
@@ -473,7 +479,7 @@ function Chat({ state, setState, storage, notice }: {
   const canCompact = active !== null && planCompaction(active.messages) !== null;
 
   return (
-    <div className={`app${sidebarOpen ? ' sidebar-open' : ''}`}>
+    <div className={`app${sidebarOpen ? ' sidebar-open' : ''}${statsPane === 'closed' ? '' : ` stats-${statsPane}`}`}>
       <a className="skip" href="#composer-input">
         {t('app.skip')}
       </a>
@@ -670,15 +676,6 @@ function Chat({ state, setState, storage, notice }: {
             )}
           </p>
         )}
-        <ChatStats
-          messages={messages}
-          systemPrompt={state.settings.systemPrompt}
-          autoCompact={state.settings.autoCompact}
-          compactAt={modes.compactAt}
-          info={info}
-          live={live && live.convId === active?.id ? liveCount(live.info.usage, live.info.promptEstimate, live.info.chunks) : null}
-          liveTools={live && live.convId === active?.id ? live.info.tools : null}
-        />
         <div className="chat-tools" role="group" aria-label={t('compact.group')}>
           <label className="check">
             <input
@@ -690,6 +687,11 @@ function Chat({ state, setState, storage, notice }: {
             {t('compact.auto')}
           </label>
           <span className="spacer" />
+          {!statsShown && (
+            <button type="button" onClick={() => setStatsPane('open')}>
+              {t('statsPane.show')}
+            </button>
+          )}
           <button type="button" onClick={() => void compactNow()} disabled={busy || !canCompact} aria-describedby="compact-hint">
             {t('compact.button')}
           </button>
@@ -704,6 +706,29 @@ function Chat({ state, setState, storage, notice }: {
         )}
         <Composer busy={busy} info={info} imagePreset={modes.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} canRedirect={busy && runConv !== null && runConv === active?.id && !compacting && !redirecting} onRedirect={(tx, a) => void redirectNow(tx, a)} onStop={stop} inputRef={inputRef} />
       </main>
+      {statsPane !== 'closed' && (
+        <aside className="stats-pane" aria-label={t('statsPane.label')}>
+          <div className="stats-pane-head">
+            <h2>{t('chatStats.label')}</h2>
+            <button type="button" onClick={() => setStatsPane('closed')}>
+              {t('statsPane.hide')}
+            </button>
+          </div>
+          {messages.length === 0 && !live ? (
+            <p className="hint">{t('statsPane.empty')}</p>
+          ) : (
+            <ChatStats
+              messages={messages}
+              systemPrompt={state.settings.systemPrompt}
+              autoCompact={state.settings.autoCompact}
+              compactAt={modes.compactAt}
+              info={info}
+              live={live && live.convId === active?.id ? liveCount(live.info.usage, live.info.promptEstimate, live.info.chunks) : null}
+              liveTools={live && live.convId === active?.id ? live.info.tools : null}
+            />
+          )}
+        </aside>
+      )}
     </div>
   );
 }

@@ -25,6 +25,7 @@
   --space-4: 1rem;
   --radius: 0.5rem;
   --sidebar: 15.5rem;
+  --stats: 20rem;
   --measure: 42rem;
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -698,15 +699,20 @@ section.workflow-bar { display: block; border: 1px solid var(--line); border-rad
 }
 
 /* This chat: the context window as one bar of coloured boxes, and the totals as boxes under it. */
-.chat-stats { display: flex; flex-direction: column; gap: 0.35rem; }
-.chat-stats, .chat-tools { margin-inline: auto; inline-size: min(calc(100% - 2.5rem), var(--measure)); }
+.chat-stats { display: flex; flex-direction: column; gap: 0.6rem; }
+.chat-tools { margin-inline: auto; inline-size: min(calc(100% - 2.5rem), var(--measure)); }
 .ctx-wrap { position: relative; }
-.ctx-bar, .chat-boxes { display: flex; flex-wrap: wrap; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.ctx-bar { border-radius: 6px; overflow: hidden; }
+.chat-boxes { display: flex; flex-wrap: wrap; gap: 2px; margin: 0; padding: 0; list-style: none; }
+/* The context window as a slim strip; every figure is also written in the legend under it, so colour is never the only cue. */
+.ctx-bar { display: flex; gap: 2px; block-size: 0.9rem; border-radius: 999px; overflow: hidden; }
 .ctx-bar.near { outline: 2px solid var(--warn); outline-offset: 1px; }
-.seg, .box { display: flex; flex-direction: column; justify-content: center; min-inline-size: max-content; padding: 0.3rem 0.6rem; line-height: 1.2; }
-.seg { flex-basis: 0; }
-.box { border-radius: 6px; flex: 0 0 auto; }
+.seg { flex-basis: 0; min-inline-size: 3px; }
+.box { display: flex; flex-direction: column; justify-content: center; padding: 0.3rem 0.6rem; line-height: 1.2; border-radius: 6px; flex: 0 0 auto; }
+.ctx-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.8125rem; }
+.legend-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 0.5rem; }
+.swatch { inline-size: 0.7rem; block-size: 0.7rem; border-radius: 3px; }
+.legend-label { color: var(--muted); }
+.legend-value { font-weight: 700; font-variant-numeric: tabular-nums; }
 .box-label { font-size: 0.6875rem; letter-spacing: 0.02em; }
 .box-value { font-size: 0.9375rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .seg-prompt, .box-prompt { background: var(--accent); color: var(--accent-text); }
@@ -716,6 +722,35 @@ section.workflow-bar { display: block; border: 1px solid var(--line); border-rad
 .box-plain { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
 .ctx-mark { position: absolute; inset-block: -3px; inline-size: 0; border-inline-start: 2px dashed var(--text); pointer-events: none; }
 .ctx-caption { margin: 0; }
+
+/* The pane on the right: this chat's stats and the tools sent. It is a third grid column on wide screens; on a phone it is a
+   sheet under the chat, and only when the user opened it. */
+.stats-pane { grid-area: stats; display: flex; flex-direction: column; gap: 0.9rem; min-inline-size: 0; min-block-size: 0; overflow: auto; padding: 0.9rem 1rem; border-inline-start: 1px solid var(--line); background: var(--surface); }
+.stats-pane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.stats-pane-head h2 { margin: 0; font-size: 1rem; }
+.stats-pane .hint { margin: 0; }
+@media (min-width: 48.01rem) {
+  .app.stats-auto, .app.stats-open { grid-template-columns: var(--sidebar) minmax(0, 1fr) var(--stats); grid-template-areas: 'top top top' 'side main stats'; }
+}
+@media (max-width: 48rem) {
+  /* Opened on a phone, the pane takes the place of the chat (as the conversation list does); Hide brings the chat back. */
+  .app.stats-open { grid-template-rows: auto minmax(0, 1fr); grid-template-areas: 'top' 'stats'; }
+  .app.stats-open .main { display: none; }
+  .app.stats-open .stats-pane { border-inline-start: none; }
+  .app.stats-auto .stats-pane { display: none; }
+  .app.sidebar-open.stats-open { grid-template-rows: auto minmax(0, 1fr); grid-template-areas: 'top' 'side'; }
+  .app.sidebar-open .stats-pane { display: none; }
+}
+
+/* The tools viewer: the tools sent with the last request, grouped by where they come from. */
+.tools-viewer { display: flex; flex-direction: column; gap: 0.6rem; }
+.tools-viewer-title { margin: 0; font-size: 0.9375rem; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.15rem 0.5rem; }
+.tools-viewer-total { font-size: 0.75rem; font-weight: 400; color: var(--muted); }
+.tool-group h4 { margin: 0 0 0.3rem; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 0.4rem; }
+.tool-group-count { padding-inline: 0.4rem; border-radius: 999px; background: var(--surface-2); font-variant-numeric: tabular-nums; }
+.tool-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.tool-chips li { padding: 0.1rem 0.55rem; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 0.75rem; overflow-wrap: anywhere; }
+.tool-chips code { font-family: var(--mono); }
 .conv-live { display: block; font-size: 0.75rem; color: var(--muted); font-style: italic; }
 .retry { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0.4rem 0 0; }
 .banner button { margin-inline-start: 0.5rem; }
