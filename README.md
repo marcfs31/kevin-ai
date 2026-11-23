@@ -933,6 +933,10 @@ A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the
 - **Chat.** Streaming replies with Stop and Redirect, a thinking block, per-chat model, effort and speed,
   a context bar with automatic compaction, retry, rewind, token statistics, Markdown with tables, code
   and LaTeX, English and Spanish. Conversations live in the browser only.
+- **Stats pane.** On the right of the chat: the context window as a strip with a legend (prompt, tools, last reply,
+  free), the chat's totals, and a tools viewer that groups the tools sent with the last request (built in, then one
+  group per server) as chips. Hide it for a wider chat and bring it back from the "Show chat stats" button beside
+  Compact chat; on a phone it opens in place of the chat. The choice is saved.
 - **Models.** Settings and the header start any of the five models (Qwen3.5-4B, Qwen3.5-4B Uncensored, Gemma 4
   E4B, WhiteRabbitNeo 2.5 7B, Gemma 4 E4B Uncensored; see [The five models](#the-five-models)) with a context
   size that fits the machine; each chat remembers which model it uses.
