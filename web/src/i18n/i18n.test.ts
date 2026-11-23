@@ -36,6 +36,15 @@ describe('i18n drift', () => {
   }
 });
 
+describe('i18n punctuation', () => {
+  it('uses no em dash in any string of any catalog: the page does not write like a template (a reply\'s own text is the model\'s)', () => {
+    for (const [locale, catalog] of Object.entries(CATALOGS)) {
+      const offenders = Object.entries(catalog).filter(([, value]) => String(value).includes('—')).map(([key]) => key);
+      expect(offenders, locale).toEqual([]);
+    }
+  });
+});
+
 describe('i18n helpers', () => {
   it('picks the browser language, falling back to English', () => {
     expect(detectLocale(['es-ES', 'en'])).toBe('es');

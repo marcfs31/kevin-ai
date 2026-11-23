@@ -121,7 +121,20 @@ function Pre({ children }: { children?: ReactNode }) {
   );
 }
 
+/** A reply sits under its message's own h2, so every heading in it is an h3: a model can write `#` or `#####`, and the page
+ * must not get a second h1 or skip a level. The look follows the level the model wrote (`md-h1` to `md-h6`). */
+const heading = (level: number): Components['h1'] => {
+  const Heading = ({ children }: { children?: ReactNode }) => <h3 className={`md-h${level}`}>{children}</h3>;
+  return Heading;
+};
+
 const components: Components = {
+  h1: heading(1),
+  h2: heading(2),
+  h3: heading(3),
+  h4: heading(4),
+  h5: heading(5),
+  h6: heading(6),
   pre: Pre,
   a: ({ href, children }) => (
     <a href={href} target="_blank" rel="noopener noreferrer">

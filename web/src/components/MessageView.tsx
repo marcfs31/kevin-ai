@@ -20,14 +20,14 @@ export function errorText(t: I18n['t'], e: Pick<ApiError, 'status' | 'code' | 's
   // lm-serve names this context_length_exceeded; the catalogs call it context_overflow.
   if (e.code === 'context_length_exceeded') return t('error.context_overflow');
   if (e.code === 'invalid_tools' || e.code === 'invalid_tool_call' || e.code === 'invalid_tool_message')
-    return t('error.toolRequest', { message: e.serverMessage || '—' });
+    return t('error.toolRequest', { message: e.serverMessage || t('error.noDetail') });
   if (e.code && KNOWN_CODES.has(e.code)) return t(`error.${e.code}` as Parameters<I18n['t']>[0]);
   if (e.status === 0) return t('error.network');
   if (e.status === 401 || e.status === 403) return t('error.unauthorized');
   if (e.status === 413) return t('error.tooLarge');
   // An error event inside a stream that had started with 200.
-  if (e.status >= 200 && e.status < 300) return t('error.stream', { message: e.serverMessage || '—' });
-  return t('error.http', { status: String(e.status), message: e.serverMessage || '—' });
+  if (e.status >= 200 && e.status < 300) return t('error.stream', { message: e.serverMessage || t('error.noDetail') });
+  return t('error.http', { status: String(e.status), message: e.serverMessage || t('error.noDetail') });
 }
 
 function LiveStatus({ live }: { live: LiveInfo }) {
@@ -102,7 +102,7 @@ function Assistant({ m, live, results, usingTools, onRetry, onDelete }: { m: Ass
   const { t } = useI18n();
   return (
     <article className="msg assistant" aria-label={t('message.assistant')}>
-      <p className="role">{t('message.assistant')}</p>
+      <h2 className="role">{t('message.assistant')}</h2>
       {m.reasoning && (
         <details className="think" open={(live !== null && !m.content) || usingTools}>
           <summary>{t('message.thinking')}</summary>
@@ -161,7 +161,7 @@ function User({ m, onDelete, onRegenerate, onEdit }: { m: UserMessage; onDelete?
   const files = sentFileText(m.content, m.typed);
   return (
     <article className="msg user" aria-label={t('message.you')}>
-      <p className="role">{t('message.you')}</p>
+      <h2 className="role">{t('message.you')}</h2>
       {images.length > 0 && (
         <ul className="msg-images" aria-label={t('message.images')}>
           {images.map((p, i) => (

@@ -209,7 +209,8 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'vision.unknown': 'Imágenes: desactivadas, porque este servidor no indica si puede leerlas.',
 
   'composer.label': 'Mensaje',
-  'composer.placeholder': 'Mensaje — Intro envía, Mayús+Intro añade una línea',
+  'composer.placeholder': 'Mensaje (Intro envía, Mayús+Intro añade una línea)',
+  'error.noDetail': 'sin detalles',
   'composer.placeholderTouch': 'Mensaje',
   'composer.send': 'Enviar',
   'composer.stop': 'Detener',
@@ -290,7 +291,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'chatStats.reply': 'Última respuesta',
   'chatStats.free': 'Libre',
   'chatStats.tools': 'Herramientas',
-  'chatStats.toolsSent': 'Enviadas con la última petición: {count} (≈{tokens} tokens, estimado) — {names}',
+  'chatStats.toolsSent': 'Enviadas con la última petición: {count} (≈{tokens} tokens, estimado): {names}',
   'chatStats.read': 'Leídos',
   'chatStats.written': 'Escritos',
   'chatStats.turns': 'Turnos',
