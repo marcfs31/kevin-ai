@@ -1,6 +1,7 @@
 import { useI18n } from '../i18n';
 import type { ServerInfo } from '../lib/api';
 import { chatFigures, contextBar } from '../lib/chatStats';
+import { ToolsViewer } from './ToolsViewer';
 import type { Message, ToolsSent } from '../lib/storage';
 import type { Count, Figure } from '../lib/tokens';
 
@@ -9,6 +10,16 @@ function Box({ kind, label, value }: { kind: 'prompt' | 'reply' | 'free' | 'plai
     <li className={`box box-${kind}`}>
       <span className="box-label">{label}</span>
       <span className="box-value">{value}</span>
+    </li>
+  );
+}
+
+function Legend({ kind, label, value }: { kind: 'prompt' | 'tools' | 'reply' | 'free'; label: string; value: string }) {
+  return (
+    <li className="legend-row">
+      <span className={`swatch seg-${kind}`} aria-hidden="true" />
+      <span className="legend-label">{label}</span>
+      <span className="legend-value">{value}</span>
     </li>
   );
 }
@@ -34,36 +45,26 @@ export function ChatStats({ messages, systemPrompt, autoCompact, compactAt, info
     <section className="chat-stats" aria-label={t('chatStats.label')}>
       <div className="ctx-wrap">
         <div className={`ctx-bar${near ? ' near' : ''}`} role="img" aria-label={toolsLine ? `${summary}. ${toolsLine}` : summary}>
-          <span className="seg seg-prompt" style={{ flexGrow: Math.max(bar.prompt, 1) }}>
-            <span className="box-label">{t('chatStats.prompt')}</span>
-            <span className="box-value">{approx}{num(bar.prompt)}</span>
-          </span>
-          {bar.tools && (
-            <span className="seg seg-tools" style={{ flexGrow: Math.max(bar.tools.tokens, 1) }}>
-              <span className="box-label">{t('chatStats.tools')}</span>
-              <span className="box-value">≈{num(bar.tools.tokens)}</span>
-            </span>
-          )}
-          <span className="seg seg-reply" style={{ flexGrow: Math.max(bar.reply, 1) }}>
-            <span className="box-label">{t('chatStats.reply')}</span>
-            <span className="box-value">{num(bar.reply)}</span>
-          </span>
-          {bar.free !== null && (
-            <span className="seg seg-free" style={{ flexGrow: Math.max(bar.free, 1) }}>
-              <span className="box-label">{t('chatStats.free')}</span>
-              <span className="box-value">{approx}{num(bar.free)}</span>
-            </span>
-          )}
+          <span className="seg seg-prompt" style={{ flexGrow: Math.max(bar.prompt, 1) }} />
+          {bar.tools && <span className="seg seg-tools" style={{ flexGrow: Math.max(bar.tools.tokens, 1) }} />}
+          <span className="seg seg-reply" style={{ flexGrow: Math.max(bar.reply, 1) }} />
+          {bar.free !== null && <span className="seg seg-free" style={{ flexGrow: Math.max(bar.free, 1) }} />}
         </div>
         {autoCompact && bar.limit !== null && <span className="ctx-mark" style={{ insetInlineStart: `${bar.autoAt * 100}%` }} aria-hidden="true" />}
       </div>
+      <ul className="ctx-legend" aria-label={t('chatStats.legend')}>
+        <Legend kind="prompt" label={t('chatStats.prompt')} value={`${approx}${num(bar.prompt)}`} />
+        {bar.tools && <Legend kind="tools" label={t('chatStats.tools')} value={`≈${num(bar.tools.tokens)}`} />}
+        <Legend kind="reply" label={t('chatStats.reply')} value={num(bar.reply)} />
+        {bar.free !== null && <Legend kind="free" label={t('chatStats.free')} value={`${approx}${num(bar.free)}`} />}
+      </ul>
       <p className="hint ctx-caption">
         {bar.limit === null
           ? t('chatStats.noLimit')
           : t(autoCompact ? 'chatStats.captionAuto' : 'chatStats.captionManual', { percent: percent ?? '0', limit: num(bar.limit), at: Math.round(bar.autoAt * 100) })}
         {bar.estimated && ` · ${t('tokens.estimated')}`}
       </p>
-      {toolsLine && <p className="hint ctx-caption">{toolsLine}</p>}
+      {bar.tools && <ToolsViewer tools={bar.tools} />}
       <ul className="chat-boxes" aria-label={t('chatStats.totals')}>
         <Box kind="prompt" label={t('chatStats.read')} value={f(figures.read)} />
         <Box kind="reply" label={t('chatStats.written')} value={f(figures.written)} />

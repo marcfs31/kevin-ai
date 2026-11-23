@@ -23,6 +23,8 @@ export interface Stats {
   tools?: ToolsSent | null;
 }
 
+export type StatsPane = 'auto' | 'open' | 'closed';
+
 export interface ToolsSent {
   names: string[];
   tokens: number;
@@ -144,6 +146,8 @@ export interface Settings {
   maxSteps: number;
   /** Summarise older turns by itself near the context limit. Off: only the Compact button does. */
   autoCompact: boolean;
+  /** The "This chat" pane on the right: auto = shown on wide screens only, open = shown everywhere, closed = hidden. */
+  statsPane: StatsPane;
   /** Which MCP servers and tools are on, how much of the request they may take, and when to ask first. */
   toolsConfig: ToolsConfig;
   /** The internet is off until the user turns it on; search needs the address of a SearXNG instance. */
@@ -189,6 +193,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tools: true,
   maxSteps: 20,
   autoCompact: true,
+  statsPane: 'auto',
   toolsConfig: { servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [], localHost: false },
   internet: { on: false, searchUrl: '' },
 };
@@ -349,6 +354,7 @@ function settings(v: unknown): Settings {
     tools: typeof o.tools === 'boolean' ? o.tools : DEFAULT_SETTINGS.tools,
     maxSteps: typeof o.maxSteps === 'number' && Number.isInteger(o.maxSteps) && o.maxSteps >= 1 && o.maxSteps <= MAX_STEPS_LIMIT ? o.maxSteps : DEFAULT_SETTINGS.maxSteps,
     autoCompact: typeof o.autoCompact === 'boolean' ? o.autoCompact : DEFAULT_SETTINGS.autoCompact,
+    statsPane: o.statsPane === 'open' || o.statsPane === 'closed' ? o.statsPane : 'auto',
     toolsConfig: toolsConfig(o.toolsConfig),
     internet: internetConfig(o.internet),
   };

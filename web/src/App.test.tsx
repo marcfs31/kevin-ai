@@ -106,10 +106,43 @@ describe('App', () => {
     expect(screen.queryByLabelText('This chat')).toBeNull();
     typeAndSend('hi');
     const bar = await screen.findByRole('img', { name: 'Context: prompt 12 tokens, last reply 3, free 85 of 100 (15% full)' });
-    expect(within(bar).getByText('Prompt').nextElementSibling?.textContent).toBe('12');
-    expect(within(bar).getByText('Last reply').nextElementSibling?.textContent).toBe('3');
-    expect(within(bar).getByText('Free').nextElementSibling?.textContent).toBe('85');
+    const legend = screen.getByRole('list', { name: 'Context figures' });
+    expect(boxValue(legend, 'Prompt')).toBe('12');
+    expect(boxValue(legend, 'Last reply')).toBe('3');
+    expect(boxValue(legend, 'Free')).toBe('85');
+    expect(bar.querySelectorAll('.seg')).toHaveLength(3);          // the strip itself: prompt, reply and free
     expect(screen.getByLabelText('This chat').textContent).toContain('15% of 100 tokens');
+  });
+
+  it('keeps the stats in a pane on the right that can be hidden for a wider chat, and brought back, and remembers the choice', async () => {
+    toolsOff();
+    mockFetch(() => sseResponse([delta('Hola'), FINISH, USAGE, DONE]), () => modelsResponse({ context_length: 100 }));
+    renderApp();
+    await screen.findByText('Context: 100 tokens');
+    const pane = screen.getByRole('complementary', { name: 'Chat stats' });
+    expect(pane.textContent).toContain('appear here once the chat has a message');
+    expect(screen.queryByRole('button', { name: 'Show chat stats' })).toBeNull();
+    typeAndSend('hi');
+    await within(pane).findByRole('img', { name: /Context: prompt/ });
+    expect(pane.contains(screen.getByLabelText('This chat'))).toBe(true);          // the stats are in the pane, not in the chat column
+    fireEvent.click(within(pane).getByRole('button', { name: 'Hide' }));
+    expect(screen.queryByRole('complementary', { name: 'Chat stats' })).toBeNull();
+    await act(async () => undefined);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.statsPane).toBe('closed');
+    fireEvent.click(screen.getByRole('button', { name: 'Show chat stats' }));
+    expect(screen.getByRole('complementary', { name: 'Chat stats' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show chat stats' })).toBeNull();
+    await act(async () => undefined);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').settings.statsPane).toBe('open');
+  });
+
+  it('starts with the pane hidden when it was hidden before', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, activeId: null, conversations: [], settings: { tools: false, statsPane: 'closed' } }));
+    mockFetch(() => sseResponse([DONE]), () => modelsResponse({ context_length: 100 }));
+    renderApp();
+    await screen.findByText('Context: 100 tokens');
+    expect(screen.queryByRole('complementary', { name: 'Chat stats' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show chat stats' })).toBeTruthy();
   });
 
   it('moves the context bar and the totals while the reply is still being written', async () => {
@@ -121,7 +154,8 @@ describe('App', () => {
     await screen.findByText('partial');
     // The reply is not finished and has no usage yet: the figures are the live estimates.
     const bar = screen.getByRole('img', { name: 'Context: prompt ≈10 tokens, last reply 1, free ≈989 of 1,000 (1% full)' });
-    expect(within(bar).getByText('Last reply').nextElementSibling?.textContent).toBe('1');
+    expect(bar).toBeTruthy();
+    expect(boxValue(screen.getByRole('list', { name: 'Context figures' }), 'Last reply')).toBe('1');
     const totals = screen.getByLabelText('Totals for this chat');
     expect(boxValue(totals, 'Read')).toBe('≈10');
     expect(boxValue(totals, 'Written')).toBe('≈1');

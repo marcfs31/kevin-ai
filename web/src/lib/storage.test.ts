@@ -40,6 +40,16 @@ describe('effort and speed per conversation', () => {
   });
 });
 
+describe('the stats pane setting', () => {
+  it('is auto unless the user chose to keep it open or hidden', () => {
+    expect(migrate({ version: 1, settings: {} })?.settings.statsPane).toBe('auto');
+    expect(migrate({ version: 1, settings: { statsPane: 'open' } })?.settings.statsPane).toBe('open');
+    expect(migrate({ version: 1, settings: { statsPane: 'closed' } })?.settings.statsPane).toBe('closed');
+    expect(migrate({ version: 1, settings: { statsPane: 'wide' } })?.settings.statsPane).toBe('auto');
+    expect(migrate({ version: 1, settings: { statsPane: true } })?.settings.statsPane).toBe('auto');
+  });
+});
+
 describe('project host per conversation', () => {
   it('is the model server unless the chat says it is on this Mac', () => {
     const state = migrate({
