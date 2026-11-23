@@ -31,6 +31,30 @@ function assistant(over: Partial<AssistantMessage> = {}): AssistantMessage {
 }
 
 describe('MessageView delete and regenerate', () => {
+  it('offers Edit on a user message only when the page gives it, and calls it', () => {
+    const onEdit = vi.fn();
+    const { rerender } = render(
+      <I18nProvider locale="en">
+        <MessageView m={user()} onDelete={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    rerender(
+      <I18nProvider locale="en">
+        <MessageView m={user()} onDelete={() => {}} onEdit={onEdit} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    // The assistant's reply has no Edit, even if one were passed.
+    rerender(
+      <I18nProvider locale="en">
+        <MessageView m={assistant()} onDelete={() => {}} onEdit={onEdit} />
+      </I18nProvider>,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+  });
+
   it('calls onDelete from a user or assistant message', () => {
     const onDelete = vi.fn();
     const { rerender } = render(

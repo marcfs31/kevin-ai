@@ -143,7 +143,7 @@ function imageParts(content: string | ContentPart[]): Extract<ContentPart, { typ
   );
 }
 
-function User({ m, onDelete, onRegenerate }: { m: UserMessage; onDelete?: () => void; onRegenerate?: () => void }) {
+function User({ m, onDelete, onRegenerate, onEdit }: { m: UserMessage; onDelete?: () => void; onRegenerate?: () => void; onEdit?: () => void }) {
   const { t } = useI18n();
   const images = imageParts(m.content);
   const files = sentFileText(m.content, m.typed);
@@ -171,7 +171,7 @@ function User({ m, onDelete, onRegenerate }: { m: UserMessage; onDelete?: () => 
           <PreviewText text={files} />
         </Preview>
       )}
-      {(onDelete || onRegenerate) && (
+      {(onDelete || onRegenerate || onEdit) && (
         <div className="msg-foot">
           {onRegenerate && (
             <p className="retry">
@@ -180,6 +180,16 @@ function User({ m, onDelete, onRegenerate }: { m: UserMessage; onDelete?: () => 
               </button>
               <span className="hint">{t('message.regenerateHint')}</span>
             </p>
+          )}
+          {onEdit && (
+            <button type="button" onClick={onEdit} aria-describedby={`${m.id}-edit-hint`}>
+              {t('message.edit')}
+            </button>
+          )}
+          {onEdit && (
+            <span id={`${m.id}-edit-hint`} className="sr-only">
+              {t('message.editHint')}
+            </span>
           )}
           {onDelete && (
             <button type="button" className="danger" onClick={onDelete} aria-label={t('message.delete')}>
@@ -243,18 +253,20 @@ function Summary({ m, onDelete }: { m: SummaryMessage; onDelete?: () => void }) 
   );
 }
 
-/** onRetry / onRegenerate only for the last message when nothing is running; onDelete rewinds from here. */
-export function MessageView({ m, live = null, results = [], onRetry, onDelete, onRegenerate }: {
+/** onRetry / onRegenerate only for the last message when nothing is running; onDelete rewinds from here; onEdit (your own
+ * messages without attachments) rewinds from here too and puts the text back in the message box. */
+export function MessageView({ m, live = null, results = [], onRetry, onDelete, onRegenerate, onEdit }: {
   m: Message;
   live?: LiveInfo | null;
   results?: ToolMessage[];
   onRetry?: () => void;
   onDelete?: () => void;
   onRegenerate?: () => void;
+  onEdit?: () => void;
 }) {
   if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} onRetry={onRetry} onDelete={onDelete} />;
   if (m.role === 'summary') return <Summary m={m} onDelete={onDelete} />;
   // A tool result is shown inside the reply that asked for it.
   if (m.role === 'tool') return null;
-  return <User m={m} onDelete={onDelete} onRegenerate={onRegenerate} />;
+  return <User m={m} onDelete={onDelete} onRegenerate={onRegenerate} onEdit={onEdit} />;
 }
