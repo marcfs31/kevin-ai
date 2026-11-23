@@ -1,7 +1,7 @@
 // Turns the tools the user turned on into what one agent run needs: the definitions to offer at a
 // step, whether a call needs the user's OK, and running it. Nothing here throws at the agent: a
 // failure is a result the model can read.
-import { ApiError, toolsCall, toolsSearch, type ProjectInfo, type WireTool } from './api';
+import { ApiError, toolsCall, toolsSearch, type ProjectInfo, type ToolsHost, type WireTool } from './api';
 import type { ToolCall, InternetConfig, ToolsConfig } from './storage';
 import { allowKey, builtinSpecs, findToolsSpec, toWire, webSearchSpec, workflowStepSpec, type ToolSpec } from './toolRegistry';
 import { STEP_STATUSES, setStep, stepResult, workflowGuidance, type StepResolution, type Workflow } from './workflows';
@@ -101,7 +101,7 @@ export interface HostInput {
   config: ToolsConfig;
   internet: InternetConfig;
   /** The project this chat works in, when one is chosen and the service still lists it. */
-  project?: ProjectInfo | null;
+  project?: (ProjectInfo & { host?: ToolsHost }) | null;
   /** The workflow this chat follows; the model ticks its steps with workflow_step. */
   workflow?: Workflow | null;
   /** Called with the checklist after each step the model marks, so the page can show and save it. */
@@ -163,7 +163,7 @@ export function createToolHost(i: HostInput): ToolHost {
       if (!spec || !needsApproval(spec, i.config)) return null;
       const server = spec.source.kind === 'mcp' ? spec.source.server : null;
       return {
-        callId: call.id, tool: spec.name, allowKey: allowKey(spec), title: spec.source.kind === 'mcp' ? `${spec.source.server} · ${spec.source.tool}` : spec.name,
+        callId: call.id, tool: spec.name, allowKey: allowKey(spec), title: spec.source.kind === 'mcp' ? `${spec.source.server} · ${spec.source.tool}${spec.source.server === PROJECT_SERVER && project?.host === 'local' ? ' · Mac' : ''}` : spec.name,
         server, network: spec.network, args: prettyArguments(call.arguments), readOnly: spec.readOnly, description: spec.description,
       };
     },
@@ -203,7 +203,9 @@ export function createToolHost(i: HostInput): ToolHost {
           case 'mcp': {
             // The chat's own project always wins over a name the model wrote, so a tool call cannot wander to another project.
             const args = spec.source.server === PROJECT_SERVER && project ? { ...parsed.args, project: project.id } : parsed.args;
-            return await toolsCall(spec.source.server, spec.source.tool, args, i.internet.on, signal);
+            // The project server is the one of the host the project lives on (this Mac's or the model server's).
+            const host: ToolsHost = spec.source.server === PROJECT_SERVER && project?.host === 'local' ? 'local' : 'server';
+            return await toolsCall(spec.source.server, spec.source.tool, args, i.internet.on, signal, host);
           }
         }
       } catch (e) {

@@ -264,6 +264,17 @@ describe('createToolHost with a project', () => {
     expect(JSON.parse(String((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body)).arguments).toEqual({ project: 'x' });
   });
 
+  it('sends the calls of a project on this Mac to the Mac\'s tool service, says so on the approval card, and keeps other servers on the model server', async () => {
+    const fetchMock = stubFetch(() => json({ ok: true, content: 'ok', isError: false }));
+    const mac = { ...demo, host: 'local' as const };
+    const h = createToolHost({ mcp: [...projectSpecs(), ...mcpSpecs('fs', [tool('read', true)], new Set())], config: config({ servers: { project: { on: true, disabledTools: [] }, fs: { on: true, disabledTools: [] } } }), internet: internet(), project: mac });
+    await h.run(call('project__git_status'), signal(), noUnlock);
+    await h.run(call('fs__read'), signal(), noUnlock);
+    expect(fetchMock.mock.calls.map((c) => (c as unknown as [string])[0])).toEqual(['/tools-local/servers/project/call', '/tools/servers/fs/call']);
+    expect(h.approval(call('project__git_commit', { message: 'm' }))?.title).toBe('project · git_commit · Mac');
+    expect(host(demo).approval(call('project__git_commit', { message: 'm' }))?.title).toBe('project · git_commit');
+  });
+
   it('puts the tool\'s description on the approval request, so a command shows what will run', () => {
     const request = host(demo).approval(call('project__git_commit', { message: 'm' }));
     expect(request?.description).toBe('Commit what is staged.');

@@ -13,9 +13,10 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ToolsPanel } from './components/ToolsPanel';
 import { Sidebar } from './components/Sidebar';
 import { I18nProvider, detectLocale, useI18n, type Locale } from './i18n';
-import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, toolsProjects, type ProjectInfo, type ServerInfo } from './lib/api';
+import { ApiError, fetchServerInfo, infoForModel, resetServer, streamChat, toolsProjects, type HostedProject, type ServerInfo, type ToolsHost } from './lib/api';
 import { ProjectBar } from './components/ProjectBar';
 import { WorkflowBar } from './components/WorkflowBar';
+import type { ToolSpec } from './lib/toolRegistry';
 import { setStep, startWorkflow, type Workflow } from './lib/workflows';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
@@ -111,16 +112,34 @@ function Chat({ state, setState, storage, notice }: {
   const mcpSpecs = toolsOn && mcp.key === mcpKey ? (mcp.load?.specs ?? []) : [];
   // The projects the owner registered on the model server (none when the service has no projects base or cannot be reached).
   const projectsOn = toolsOn && serverKey.split(',').includes(PROJECT_SERVER);
-  const [projects, setProjects] = useState<ProjectInfo[]>([]);
+  const [serverProjects, setServerProjects] = useState<HostedProject[]>([]);
   useEffect(() => {
     if (!projectsOn) return;
     const controller = new AbortController();
-    toolsProjects(controller.signal).then(setProjects, () => {
-      if (!controller.signal.aborted) setProjects([]);
-    });
+    toolsProjects(controller.signal).then(
+      (list) => setServerProjects(list.map((p) => ({ ...p, host: 'server' as const }))),
+      () => {
+        if (!controller.signal.aborted) setServerProjects([]);
+      },
+    );
     return () => controller.abort();
   }, [projectsOn, mcpReload]);
+  // The tool service on this Mac is asked only when the user turned that host on in Settings > Tools.
+  const localOn = projectsOn && state.settings.toolsConfig.localHost;
+  const [localProjects, setLocalProjects] = useState<HostedProject[]>([]);
+  useEffect(() => {
+    if (!localOn) return;
+    const controller = new AbortController();
+    toolsProjects(controller.signal, 'local').then(
+      (list) => setLocalProjects(list.map((p) => ({ ...p, host: 'local' as const }))),
+      () => {
+        if (!controller.signal.aborted) setLocalProjects([]);
+      },
+    );
+    return () => controller.abort();
+  }, [localOn, mcpReload]);
   const [draftProject, setDraftProject] = useState<string | null>(null);
+  const [draftProjectHost, setDraftProjectHost] = useState<ToolsHost>('server');
   const [draftWorkflow, setDraftWorkflow] = useState<Workflow | null>(null);
   // The user is asked before a tool that is not read-only runs; Stop answers no.
   const [approval, setApproval] = useState<{ request: ApprovalRequest; answer: (a: Answer) => void } | null>(null);
@@ -153,8 +172,24 @@ function Chat({ state, setState, storage, notice }: {
   const [draftSpeed, setDraftSpeed] = useState<Speed>(DEFAULT_SPEED);
   const effort = active ? active.effort : draftEffort;
   const projectId = active ? active.projectId : draftProject;
-  const shownProjects = projectsOn ? projects : [];
-  const project = shownProjects.find((p) => p.id === projectId) ?? null;
+  const projectHost = active ? active.projectHost : draftProjectHost;
+  const shownProjects = [...(projectsOn ? serverProjects : []), ...(localOn ? localProjects : [])];
+  const project = shownProjects.find((p) => p.id === projectId && p.host === projectHost) ?? null;
+  // A project on this Mac uses that service's project tools (its own allowlisted commands), not the model server's.
+  const onMac = project?.host === 'local';
+  const [localSpecs, setLocalSpecs] = useState<ToolSpec[]>([]);
+  useEffect(() => {
+    if (!onMac) return;
+    const controller = new AbortController();
+    loadMcpSpecs([PROJECT_SERVER], internetOn, controller.signal, 'local').then(
+      (load) => setLocalSpecs(load.specs),
+      () => {
+        if (!controller.signal.aborted) setLocalSpecs([]);
+      },
+    );
+    return () => controller.abort();
+  }, [onMac, internetOn, mcpReload]);
+  const toolSpecs = onMac ? [...mcpSpecs.filter((s) => !(s.source.kind === 'mcp' && s.source.server === PROJECT_SERVER)), ...localSpecs] : mcpSpecs;
   const workflow = active ? active.workflow : draftWorkflow;  const speed = active ? active.speed : draftSpeed;
   const modes = resolveModes(effort, speed, state.settings);
   // Context window and vision follow the model chosen, so everything below reads `info`.
@@ -290,7 +325,7 @@ function Chat({ state, setState, storage, notice }: {
         thinking: modes.thinking,
         compactAt: modes.compactAt,
         cacheKey: `${convId}|${requestModel ?? ''}`,
-        tools: toolsOn ? createToolHost({ mcp: mcpSpecs, config: state.settings.toolsConfig, internet: state.settings.internet, project, workflow, onWorkflowChange: (w) => setWorkflow(w, convId) }) : undefined,
+        tools: toolsOn ? createToolHost({ mcp: toolSpecs, config: state.settings.toolsConfig, internet: state.settings.internet, project, workflow, onWorkflowChange: (w) => setWorkflow(w, convId) }) : undefined,
         approve,
         info,
         signal: controller.signal,
@@ -369,7 +404,7 @@ function Chat({ state, setState, storage, notice }: {
     };
     let conv = target;
     if (!conv) {
-      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, effort, speed, projectId: draftProject, workflow: draftWorkflow, messages: [] };
+      conv = { id: newId(), title: titleFrom(typed, attachments), createdAt: now, updatedAt: now, model: requestModel ?? draftModel, effort, speed, projectId: draftProject, projectHost: draftProjectHost, workflow: draftWorkflow, messages: [] };
       const created = conv;
       setState((s) => ({ ...s, conversations: [...s.conversations, created], activeId: created.id }));
     }
@@ -571,9 +606,16 @@ function Chat({ state, setState, storage, notice }: {
           <ProjectBar
             projects={shownProjects}
             projectId={projectId}
+            projectHost={projectHost}
             disabled={busy}
             refreshKey={busy ? -1 : (active?.messages.length ?? 0)}
-            onChange={(id) => (active ? updateConv(active.id, (c) => ({ ...c, projectId: id })) : setDraftProject(id))}
+            onChange={(id, host) => {
+              if (active) updateConv(active.id, (c) => ({ ...c, projectId: id, projectHost: host }));
+              else {
+                setDraftProject(id);
+                setDraftProjectHost(host);
+              }
+            }}
           />
         )}
         <div

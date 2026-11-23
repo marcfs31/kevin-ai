@@ -1,6 +1,6 @@
 // Asks the tool service for the tools of the servers the user turned on. One server at a time, so
 // a few starting together do not take the memory the model needs.
-import { toolsList, toolsStatus } from './api';
+import { toolsList, toolsStatus, type ToolsHost } from './api';
 import { FIND_TOOLS, WEB_SEARCH, mcpSpecs, type ToolSpec } from './toolRegistry';
 
 export interface McpLoad {
@@ -11,8 +11,8 @@ export interface McpLoad {
   failed: { id: string; message: string }[];
 }
 
-export async function loadMcpSpecs(ids: string[], internet: boolean, signal?: AbortSignal): Promise<McpLoad> {
-  const status = await toolsStatus(signal);
+export async function loadMcpSpecs(ids: string[], internet: boolean, signal?: AbortSignal, host: ToolsHost = 'server'): Promise<McpLoad> {
+  const status = await toolsStatus(signal, host);
   // Names the built-ins already use, so no server can shadow one.
   const taken = new Set(['calculator', 'current_time', FIND_TOOLS, WEB_SEARCH]);
   const out: McpLoad = { specs: [], skipped: [], failed: [] };
@@ -22,7 +22,7 @@ export async function loadMcpSpecs(ids: string[], internet: boolean, signal?: Ab
     else if (server.network && !internet) out.skipped.push({ id, reason: 'internet_off' });
     else {
       try {
-        out.specs.push(...mcpSpecs(id, await toolsList(id, internet, signal), taken, server.network));
+        out.specs.push(...mcpSpecs(id, await toolsList(id, internet, signal, host), taken, server.network));
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') throw e;
         out.failed.push({ id, message: e instanceof Error ? e.message : 'failed' });

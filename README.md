@@ -1103,6 +1103,10 @@ scripts/doctor.sh [--read-speed] [MODEL_DIR]
   running: `scripts/start-remote-chat-tools.sh` starts it on the model server.
 - **No Project picker.** The Project server must be on in Settings > Tools, the service must be started with
   `--projects-base`, and the registry must list at least one project; a registry error shows in the Tools panel.
+- **No "(on this Mac)" projects.** The switch in Settings > Tools must be on, `scripts/start-local-chat-tools.sh`
+  must be running (`--projects-base` is `~/KevinProjects` unless `LM_LOCAL_PROJECTS_BASE` says otherwise), the
+  proxy must forward `/tools-local` (`LM_TOOLS_LOCAL_URL` for the dev server, `--tools-local-upstream` for
+  `tools/chat_server.py`), and `~/.config/kevin-ai/projects-local.json` must list a project.
 - **A git or pull request tool is refused.** The message says why: the default branch is protected (use
   `git_branch_create`), no `remote` is set for the project, the token variable is missing from the service's
   environment, the folder is not empty for a clone, or the repository's own config rewrites URLs.

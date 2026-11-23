@@ -1,13 +1,13 @@
 import { useEffect, useId, useState } from 'react';
 import { useI18n } from '../i18n';
-import { toolsCall, type ProjectInfo } from '../lib/api';
+import { toolsCall, type HostedProject } from '../lib/api';
 import { PROJECT_SERVER } from '../lib/toolHost';
 import { WORKFLOWS_PATH, isFinished, parseWorkflows, type ParsedWorkflows, type StepStatus, type Workflow, type WorkflowDef } from '../lib/workflows';
 
 /** Above the composer: choose a workflow of the project (from `.kevin/workflows.json`) and follow its checklist. The model
  * ticks the steps with workflow_step; the user can tick or untick them too, and stop the workflow. */
 export function WorkflowBar({ project, workflow, disabled, onStart, onSet, onClear }: {
-  project: ProjectInfo | null;
+  project: HostedProject | null;
   workflow: Workflow | null;
   disabled: boolean;
   onStart: (def: WorkflowDef) => void;
@@ -19,17 +19,20 @@ export function WorkflowBar({ project, workflow, disabled, onStart, onSet, onCle
   const [loaded, setLoaded] = useState<{ project: string; parsed: ParsedWorkflows } | null>(null);
   const [pick, setPick] = useState('');
   const projectId = project?.id ?? null;
+  const host = project?.host ?? 'server';
+  const projectKey = project ? `${host}:${project.id}` : null;
   useEffect(() => {
     if (projectId === null || workflow) return;
     const controller = new AbortController();
-    toolsCall(PROJECT_SERVER, 'fs_read', { project: projectId, path: WORKFLOWS_PATH }, false, controller.signal).then(
-      (r) => setLoaded({ project: projectId, parsed: r.isError ? { defs: [], problem: null } : parseWorkflows(r.content) }),
+    const key = `${host}:${projectId}`;
+    toolsCall(PROJECT_SERVER, 'fs_read', { project: projectId, path: WORKFLOWS_PATH }, false, controller.signal, host).then(
+      (r) => setLoaded({ project: key, parsed: r.isError ? { defs: [], problem: null } : parseWorkflows(r.content) }),
       () => {
-        if (!controller.signal.aborted) setLoaded({ project: projectId, parsed: { defs: [], problem: null } });
+        if (!controller.signal.aborted) setLoaded({ project: key, parsed: { defs: [], problem: null } });
       },
     );
     return () => controller.abort();
-  }, [projectId, workflow]);
+  }, [projectId, host, workflow]);
 
   if (workflow) {
     const done = workflow.steps.filter((s) => s.status !== 'todo').length;
@@ -58,7 +61,7 @@ export function WorkflowBar({ project, workflow, disabled, onStart, onSet, onCle
     );
   }
 
-  const mine = loaded && loaded.project === projectId ? loaded.parsed : null;
+  const mine = loaded && loaded.project === projectKey ? loaded.parsed : null;
   if (!mine || (mine.defs.length === 0 && !mine.problem)) return null;
   if (mine.problem) {
     return (

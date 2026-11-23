@@ -220,6 +220,46 @@ describe('App', () => {
       expect(calls(f)).toHaveLength(1);
     });
 
+    it('works in a project on this Mac when that host is on: its list, its tools and its calls come from /tools-local', async () => {
+      const inner = setup({ tool: 'project__read_file', args: '{"project":"other","path":"a.txt"}', servers: { project: { on: true, disabledTools: [] } } });
+      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
+      stored.settings.toolsConfig.localHost = true;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+      const wrapped = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/tools/projects') return json({ ok: true, projects: [], freeGb: 400 });
+        if (url === '/tools-local/projects') return json({ ok: true, projects: [{ id: 'notes', title: 'Notes', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: ['test'] }], freeGb: 50 });
+        if (url === '/tools-local/status') return json({ ok: true, servers: [{ id: 'project', title: 'Projects', kind: 'stdio', network: false, state: 'stopped' }], catalog: [] });
+        if (url.startsWith('/tools-local/servers/project/tools')) return json(TOOLS_LIST);
+        if (url === '/tools-local/servers/project/call') return json({ ok: true, content: String(init?.body).includes('"git_status"') ? '## main\nno changes' : 'file text', isError: false });
+        return inner(input, init);
+      });
+      vi.stubGlobal('fetch', wrapped);
+      renderApp();
+      fireEvent.change(await screen.findByLabelText('Project'), { target: { value: 'local:notes' } });
+      expect(await screen.findByText('main · 0 changed')).toBeTruthy();
+      typeAndSend('read a.txt');
+      expect(await screen.findByText('all done')).toBeTruthy();
+      const system = String((bodyOf(inner, 0).messages as { content: string }[])[0]?.content);
+      expect(system).toContain('You are working in the project "Notes"');
+      const sent = wrapped.mock.calls.filter(([u, i]) => String(u) === '/tools-local/servers/project/call' && String(i?.body).includes('"read_file"'));
+      expect(sent).toHaveLength(1);
+      expect(JSON.parse(String(sent[0]?.[1]?.body)).arguments).toEqual({ project: 'notes', path: 'a.txt' });
+      expect(wrapped.mock.calls.some(([u, i]) => String(u) === '/tools/servers/project/call' && String(i?.body).includes('"read_file"'))).toBe(false);
+      await act(async () => undefined);
+      const conv = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0];
+      expect([conv.projectId, conv.projectHost]).toEqual(['notes', 'local']);
+    });
+
+    it('never asks the Mac\'s tool service while the host is off', async () => {
+      const inner = setup({ servers: { project: { on: true, disabledTools: [] } } });
+      const wrapped = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (String(input) === '/tools/projects' ? json({ ok: true, projects: [], freeGb: 1 }) : inner(input, init)));
+      vi.stubGlobal('fetch', wrapped);
+      renderApp();
+      await waitFor(() => expect(urls(inner).some((u) => u.includes('/tools/servers/project/tools'))).toBe(true));
+      expect(wrapped.mock.calls.some(([u]) => String(u).startsWith('/tools-local'))).toBe(false);
+    });
+
     it('follows a workflow of the project: the model ticks a step, the checklist and the saved chat follow', async () => {
       const inner = setup({ tool: 'workflow_step', args: '{"step":1,"status":"done","note":"tests pass"}', servers: { project: { on: true, disabledTools: [] } } });
       const flows = { workflows: [{ id: 'ship', title: 'Ship it', steps: ['Run the tests', 'Commit'] }] };
@@ -233,7 +273,7 @@ describe('App', () => {
       vi.stubGlobal('fetch', wrapped);
       renderApp();
       await waitFor(() => expect(urls(inner).some((u) => u.includes('/tools/servers/project/tools'))).toBe(true));
-      fireEvent.change(await screen.findByLabelText('Project'), { target: { value: 'demo' } });
+      fireEvent.change(await screen.findByLabelText('Project'), { target: { value: 'server:demo' } });
       fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
       expect(await screen.findByText('0 of 2 steps resolved')).toBeTruthy();
       typeAndSend('ship it');
@@ -262,7 +302,7 @@ describe('App', () => {
       vi.stubGlobal('fetch', wrapped);
       renderApp();
       await waitFor(() => expect(urls(inner).some((u) => u.includes('/tools/servers/project/tools'))).toBe(true));
-      fireEvent.change(await screen.findByLabelText('Project'), { target: { value: 'demo' } });
+      fireEvent.change(await screen.findByLabelText('Project'), { target: { value: 'server:demo' } });
       expect(await screen.findByText('kevin/work · 1 changed')).toBeTruthy();
       typeAndSend('read a.txt');
       expect(await screen.findByText('all done')).toBeTruthy();

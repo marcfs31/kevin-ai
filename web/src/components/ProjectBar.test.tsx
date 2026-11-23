@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../i18n';
-import type { ProjectInfo } from '../lib/api';
+import type { HostedProject } from '../lib/api';
 import { ProjectBar } from './ProjectBar';
 
-const demo: ProjectInfo = { id: 'demo', title: 'Demo', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: [] };
+const demo: HostedProject = { id: 'demo', title: 'Demo', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: [], host: 'server' };
+const mac: HostedProject = { ...demo, id: 'notes', title: 'Notes', host: 'local' };
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -12,7 +13,7 @@ function show(props: Partial<Parameters<typeof ProjectBar>[0]> = {}) {
   const onChange = vi.fn();
   render(
     <I18nProvider locale="en">
-      <ProjectBar projects={[demo]} projectId={null} disabled={false} refreshKey={0} onChange={onChange} {...props} />
+      <ProjectBar projects={[demo]} projectId={null} projectHost="server" disabled={false} refreshKey={0} onChange={onChange} {...props} />
     </I18nProvider>,
   );
   return onChange;
@@ -22,7 +23,7 @@ describe('ProjectBar', () => {
   it('shows nothing when the service lists no projects', () => {
     const { container } = render(
       <I18nProvider locale="en">
-        <ProjectBar projects={[]} projectId={null} disabled={false} refreshKey={0} onChange={() => {}} />
+        <ProjectBar projects={[]} projectId={null} projectHost="server" disabled={false} refreshKey={0} onChange={() => {}} />
       </I18nProvider>,
     );
     expect(container.querySelector('.project-bar')).toBeNull();
@@ -32,8 +33,8 @@ describe('ProjectBar', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const onChange = show();
-    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'demo' } });
-    expect(onChange).toHaveBeenCalledWith('demo');
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'server:demo' } });
+    expect(onChange).toHaveBeenCalledWith('demo', 'server');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.queryByRole('status')).toBeNull();
   });
@@ -52,6 +53,26 @@ describe('ProjectBar', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ ok: true, content: 'error: not a git repository', isError: true })));
     show({ projectId: 'demo' });
     await waitFor(() => expect(screen.getByText('git state unknown')).toBeTruthy());
+  });
+
+  it('lists the projects of both hosts, names the Mac ones, and says which host was picked', () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const onChange = show({ projects: [demo, mac] });
+    expect(screen.getByRole('option', { name: 'Notes (on this Mac)' })).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Demo' })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'local:notes' } });
+    expect(onChange).toHaveBeenCalledWith('notes', 'local');
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: '' } });
+    expect(onChange).toHaveBeenLastCalledWith(null, 'server');
+  });
+
+  it('reads the git state of a Mac project from the Mac\'s tool service, and a same-named server project is not it', async () => {
+    const fetchMock = vi.fn(async () => json({ ok: true, content: '## kevin/mac\n M a.txt\n M b.txt', isError: false }));
+    vi.stubGlobal('fetch', fetchMock);
+    show({ projects: [demo, { ...mac, id: 'demo' }], projectId: 'demo', projectHost: 'local' });
+    expect(await screen.findByText('kevin/mac · 2 changed')).toBeTruthy();
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/tools-local/servers/project/call');
+    expect((screen.getByLabelText('Project') as HTMLSelectElement).value).toBe('local:demo');
   });
 
   it('treats a project that is gone as none', () => {
