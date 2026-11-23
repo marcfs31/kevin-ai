@@ -931,7 +931,8 @@ A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the
 [web/README.md](web/README.md); this is what it does in short, and how to run it locally.
 
 - **Chat.** Streaming replies with Stop and Redirect, a thinking block, per-chat model, effort and speed,
-  a context bar with automatic compaction, retry, rewind, token statistics, Markdown with tables, code
+  a context bar with automatic compaction, retry, rewind (Delete from here, or Edit to take one of your messages back
+  into the box, change it and send it again), token statistics, Markdown with tables, code
   and LaTeX, English and Spanish. Conversations live in the browser only.
 - **Stats pane.** On the right of the chat: the context window as a strip with a legend (prompt, tools, last reply,
   free), the chat's totals, and a tools viewer that groups the tools sent with the last request (built in, then one
