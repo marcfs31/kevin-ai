@@ -10,6 +10,19 @@ function mockPreHeight(height: number) {
   });
 }
 
+describe('Markdown headings', () => {
+  it('renders every heading of a reply as an h3, so the page never gets a second h1 or skips a level, keeping the level the model wrote as a class', () => {
+    const { container } = render(
+      <I18nProvider locale="en">
+        <Markdown text={'# one\n\n## two\n\n### three\n\n###### six'} />
+      </I18nProvider>,
+    );
+    expect(container.querySelectorAll('h1, h2, h4, h5, h6')).toHaveLength(0);
+    const headings = [...container.querySelectorAll('h3')];
+    expect(headings.map((h) => [h.textContent, h.className])).toEqual([['one', 'md-h1'], ['two', 'md-h2'], ['three', 'md-h3'], ['six', 'md-h6']]);
+  });
+});
+
 describe('needsDualCopy', () => {
   it('is false below the threshold', () => {
     expect(needsDualCopy(DUAL_COPY_MIN_HEIGHT_PX - 1)).toBe(false);

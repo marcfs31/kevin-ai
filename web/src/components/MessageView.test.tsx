@@ -86,6 +86,24 @@ describe('MessageView delete and regenerate', () => {
 });
 
 
+describe('MessageView headings', () => {
+  it('labels each message with an h2, so the h3 headings inside a reply follow a level and none is skipped', () => {
+    const { container, rerender } = render(
+      <I18nProvider locale="en">
+        <MessageView m={user()} />
+      </I18nProvider>,
+    );
+    expect(container.querySelector('h2.role')?.textContent).toBe('You');
+    rerender(
+      <I18nProvider locale="en">
+        <MessageView m={assistant({ content: '### Steps\n\nDo it.' })} />
+      </I18nProvider>,
+    );
+    const levels = [...container.querySelectorAll('h1, h2, h3, h4, h5, h6')].map((h) => h.tagName);
+    expect(levels).toEqual(['H2', 'H3']);
+  });
+});
+
 describe('MessageView while a tool call waits for the user\'s answer', () => {
   const withCall = assistant({ reasoning: 'I should write the file.', toolCalls: [{ id: 'c1', name: 'fs__write_file', arguments: '{"path":"/x"}' }] });
 

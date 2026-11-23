@@ -338,7 +338,7 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .rename { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .rename input { flex: 1 1 8rem; }
 
-.main { grid-area: main; display: flex; flex-direction: column; min-block-size: 0; overflow: hidden; background: var(--paper); }
+.main { grid-area: main; position: relative; display: flex; flex-direction: column; min-block-size: 0; overflow: hidden; background: var(--paper); }
 .modal-root {
   position: fixed;
   inset: 0;
@@ -513,11 +513,11 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .think summary { cursor: pointer; font-size: 0.8125rem; font-weight: 600; }
 .think-body { font-size: 0.9375rem; line-height: 1.5; margin-block-start: 0.35rem; }
 .md { font-size: 1rem; line-height: 1.6; }
-.md :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4) { margin-block: 0.7rem; }
-.md :where(h1, h2, h3, h4) { line-height: 1.3; letter-spacing: -0.015em; font-weight: 650; }
-.md h1 { font-size: 1.25rem; }
-.md h2 { font-size: 1.1rem; }
-.md h3, .md h4 { font-size: 1rem; }
+.md :where(p, ul, ol, pre, table, blockquote, h3) { margin-block: 0.7rem; }
+/* Every heading in a reply is an h3 (see Markdown.tsx); its look follows the level the model wrote. */
+.md h3 { line-height: 1.3; letter-spacing: -0.015em; font-weight: 650; font-size: 1rem; }
+.md h3.md-h1 { font-size: 1.25rem; }
+.md h3.md-h2 { font-size: 1.1rem; }
 .md > :first-child { margin-block-start: 0; }
 .md > :last-child { margin-block-end: 0; }
 .md pre {

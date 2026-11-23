@@ -205,7 +205,8 @@ export const en = {
   'vision.unknown': 'Images: off, because this server does not say whether it can read them.',
 
   'composer.label': 'Message',
-  'composer.placeholder': 'Message — Enter sends, Shift+Enter adds a line',
+  'composer.placeholder': 'Message (Enter sends, Shift+Enter adds a line)',
+  'error.noDetail': 'no details',
   'composer.placeholderTouch': 'Message',
   'composer.send': 'Send',
   'composer.stop': 'Stop',
@@ -284,7 +285,7 @@ export const en = {
   'chatStats.reply': 'Last reply',
   'chatStats.free': 'Free',
   'chatStats.tools': 'Tools',
-  'chatStats.toolsSent': 'Sent with the last request: {count} (≈{tokens} tokens, estimated) — {names}',
+  'chatStats.toolsSent': 'Sent with the last request: {count} (≈{tokens} tokens, estimated): {names}',
   'chatStats.read': 'Read',
   'chatStats.written': 'Written',
   'chatStats.turns': 'Turns',
