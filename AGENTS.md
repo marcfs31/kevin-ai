@@ -7,8 +7,13 @@ Created by Marc Fors i Soler. The standing rules in `~/.claude/CLAUDE.md` apply;
 Rule (owner, 2026-11-22). Why: 28 merged PRs sat untagged until v0.2.1 to v0.2.28 were added by hand, and
 v0.3.2 and v0.3.3 had to be tagged afterwards the same way.
 
-- **One PR, one version.** Before 1.0 a PR is a patch release (`0.3.4` to `0.3.5`); only a breaking or
+- **One PR, one version.** Before 1.0 a PR is a patch release (`0.3.4` to `0.3.5`); a breaking or
   phase change bumps the minor number, and a major ships alone in its own PR.
+- **A minor holds 31 releases, patches 0 to 30.** Rule (owner, 2026-11-23). Why: with one version per PR the
+  patch number had reached 23 within two days of `0.3.0`, and it only grows. When the next release would be the
+  31st patch of a minor (`0.3.31`), release the next minor instead (`0.4.0`) and count patches from 0 again.
+  Check the last tag first; the release that would be `.31` is the one that starts the new minor, carrying its own
+  changes, not an empty bump. If the new minor is also a breaking or phase change, say so in the changelog.
 - **In the PR**, as its own last commit `chore(release): X.Y.Z`: set `version` in `web/package.json` and in
   both places of `web/package-lock.json`, and move the PR's `CHANGELOG.md` entries from `[Unreleased]` to a
   new `## [X.Y.Z] - date` section. One version, identical in every manifest.
