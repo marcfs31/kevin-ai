@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.26] - 2026-11-23
+
+### Changed
+- The versions before 0.1.0 now have changelog sections and tags: 0.0.1 (foundations, 2026-11-13) to 0.0.8 (lm-serve benchmark, 2026-11-20), covering the engine's first 98 commits (Qwen3.5-4B, Gemma 4 E4B, speed work, lm-serve, MTP). 0.1.0's entry says what that tag also contains.
+
 ## [0.3.25] - 2026-11-23
 
 ### Changed
@@ -343,3 +348,84 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - Web chat app for lm-serve (Vite, React, TypeScript) with streaming, attachments, English and Spanish, and the `tools/chat_server.py` proxy.
+- Also in this tag, which was made after these landed: the image encoders for Qwen3.5 and Gemma 4 and `lm_prefill_image`, image decoding and the vision API in lm-serve, tool calls and results in both chat templates and OpenAI `tools` in lm-serve, a converter from a Qwen3.5 BF16 GGUF back to safetensors, and the web starters for Qwen3.5-4B Uncensored and WhiteRabbitNeo 2.5 7B (the web features 0.2.0 lists below were on `main` at the same time).
+
+The versions below were tagged afterwards, on 2026-11-23, on the commit that closes each stage; the dates are those of the commits.
+
+## [0.0.8] - 2026-11-20
+
+### Added
+- `tools/bench_serve.py`, a speed and memory benchmark for lm-serve.
+
+### Fixed
+- The firmware's clock limit is no longer called the rated clock.
+
+### Changed
+- Documented the 800 MHz against 2.5 GHz speed comparison.
+
+## [0.0.7] - 2026-11-16
+
+### Added
+- Speculative greedy decoding with Qwen3.5's MTP head, kept in the q8 file (`lm-run --mtp`).
+- The context window is sized from free memory when `--ctx` is not given, by one residency rule for `0` and an explicit value.
+- One prefix-cache snapshot per system prompt.
+- The models directory default, and doctor's RAM thresholds from the measured peaks.
+
+### Changed
+- A 2-token remainder is batched in the q8 multiply; the KV caches are no longer cleared on reset.
+- README, QUICKSTART and PLAN brought up to date, with the 11 GB machine and the models SSD.
+
+## [0.0.6] - 2026-11-15
+
+### Added
+- `lm-serve`, an OpenAI-compatible HTTP endpoint, hardened against slow, vanished and cancelled clients.
+- `lm_snapshot` and `lm_restore`, a shared prompt prefix restored from a snapshot, used by `lm-chat` and `lm-serve` (the snapshot is bounded at the system message).
+- `lm-chat` answers run to the end by default.
+
+### Fixed
+- `lm-chat` is built before `make test` runs it.
+
+## [0.0.5] - 2026-11-15
+
+### Added
+- An int8-activation q8 matvec behind `--fast`, with a benchmark of its speed and accuracy on a real model.
+- A batched q8 matmul that is bit-identical to one matvec per token, and `lm_prefill` (Qwen and Gemma 4), used by `lm-chat` and `lm-run`.
+- `lm-run --profile`, which splits prompt and generation time by stage.
+- Doctor warns when the CPU is capped far below its rated clock.
+
+### Changed
+- The AVX2 q8 group sum is written without a loop, and the batched multiply slices its inputs so a tile stays in L1.
+- Recorded the measured speeds after the kernel and prefill work, and the `--fast` verdict.
+
+## [0.0.4] - 2026-11-14
+
+### Added
+- `scripts/install.sh` for one-shot server setup.
+- CI (build, test, gate), weekly heavy checks, the pre-push hook and Dependabot; CONTRIBUTING and SECURITY policies.
+
+### Fixed
+- Tensors above rank 4 are accepted at open and fail only where used; the scale-count comparison in `lm_quantize_checkpoint`; executable bits on the scripts; the gcc warnings seen on Linux.
+
+### Changed
+- The q8 weight stream is prefetched ahead of the dot product.
+- README: Mermaid architecture diagrams, the module guide and a GitDiagram overview; the target machine's specs and Ubuntu Server 26.04.1 LTS; the measured Qwen3.5-4B speed in place of an estimate.
+
+## [0.0.3] - 2026-11-14
+
+### Added
+- Phase 2, the Gemma 4 E4B text model: its specification, SentencePiece-style BPE tokenizer, chat template and model profile for `lm-chat`, float64 oracle with a tiny fixture and op fixtures, ops (plain RMSNorm, GELU-tanh, per-pair RoPE, softcap, windowed attention) and the forward pass for bf16 and q8 weights.
+- The Gemma 4 golden gate in `make gate`; doctor knows its q8 and RAM checks.
+
+## [0.0.2] - 2026-11-14
+
+### Added
+- Phase 1, the Qwen3.5-4B engine: f32, bf16 and q8 matvec kernels with SIMD paths; the ops (norms, RoPE, causal convolution, gated delta rule, attention); a sharded safetensors reader and streaming writer; the available-memory probe; the q8 quantiser and `lm-quant`; a strict config reader; the forward pass for bf16 and q8 weights.
+- The text layer: the tokenizer with NFC normalisation, a deterministic temperature, top-k and top-p sampler, the chat template and output parser, and a generation loop with prefix-extending prefill.
+- `lm-chat` and `lm-run`; `scripts/download-model.sh`, `scripts/doctor.sh`, the README and the server quickstart.
+- Python references: the safetensors and q8 quantiser reference, the float64 Qwen3.5 text oracle, a tiny checkpoint with goldens and op fixtures, and the golden gate checker.
+
+## [0.0.1] - 2026-11-13
+
+### Added
+- The licence and the vendored JSON and tokenizer headers, the wildcard Makefile and the engine's public API contract.
+- The model choice, specification and build plan, retargeted to Qwen3.5-4B (phase 1) and Gemma 4 E4B (phase 2); the engine API generalised for both.
