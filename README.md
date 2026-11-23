@@ -400,8 +400,12 @@ You can tick or untick a step yourself, and stop the workflow. The checklist is 
 4. **Use it.** In Settings > Tools turn the Project server on, then pick the project under the header. Every
    change the agent makes is in `<state-dir>/audit.jsonl` on that host.
 
-The chat page uses the model server's projects. The Mac's copy is reachable at `/tools-local`, but the picker
-does not switch to it yet.
+By default the chat page uses the model server's projects only. To work on projects on this Mac, start its copy of
+the service (`scripts/start-local-chat-tools.sh`), make sure the proxy forwards `/tools-local` to it, and turn on
+**Also use the tool service on this Mac** in Settings > Tools. The picker then lists those projects as "(on this
+Mac)"; a chat remembers which host its project is on, the project's tools and commands come from that host's
+service, the git chip and the workflows are read there, and approval cards for a Mac project say "Mac". With the
+switch off the page never calls `/tools-local`.
 
 ## Ubuntu Server installation
 
