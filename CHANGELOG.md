@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.23] - 2026-11-23
+
+### Added
+- Edit on your own messages (those without a file or image): it rewinds the chat to that message, asking first when replies follow, and puts its text back in the message box to change and send again. Delete from here stays for when you want to drop the message.
+
 ## [0.3.22] - 2026-11-23
 
 ### Added
