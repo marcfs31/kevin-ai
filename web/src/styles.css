@@ -29,6 +29,7 @@
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --shadow: 0 1px 1px rgb(26 29 36 / 0.04);
+  --chevron: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -117,14 +118,13 @@ input, select, textarea {
   max-inline-size: 100%;
   min-block-size: 2.25rem;
 }
-/* The native arrow sits against the edge of the box. Draw our own, in the muted colour, with room around it. */
-select {
+/* The native arrow sits against the edge of the box. Draw our own, in the muted colour, with room around it.
+   The button that opens the model panel looks like the selects beside it: same box, same arrow. */
+select, .model-picker-trigger {
   appearance: none;
   padding-inline-end: 2.1rem;
   cursor: pointer;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
-    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-image: var(--chevron);
   background-position: calc(100% - 1.15rem) 52%, calc(100% - 0.8rem) 52%;
   background-size: 0.35rem 0.35rem, 0.35rem 0.35rem;
   background-repeat: no-repeat;
@@ -191,15 +191,39 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   .server span + span::before, .server .model-picker + span::before { display: none; }
   .server .internet-badge { margin-inline-start: 0; }
 }
-.model-picker { position: relative; display: inline-flex; align-items: center; }
+.model-picker { position: relative; display: inline-flex; align-items: center; min-inline-size: 0; max-inline-size: 100%; }
+/* The status dot belongs to the button that shows the model, not to the row: it stays with its text when the row wraps. */
+.server-ok:has(.model-picker)::before, .server-error:has(.model-picker)::before { content: none; }
+.model-picker-trigger::before {
+  content: '';
+  display: inline-block;
+  inline-size: 0.45rem;
+  block-size: 0.45rem;
+  margin-inline-end: 0.5rem;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--muted);
+}
+.server-ok .model-picker-trigger::before { background: var(--ok); }
+.server-error .model-picker-trigger::before { background: var(--danger); }
 .model-picker-trigger {
   font: inherit;
   font-size: inherit;
-  color: inherit;
+  color: var(--text);
   min-block-size: 2.25rem;
-  padding-inline: 0.5rem;
+  padding-block: 0.35rem;
+  padding-inline-start: 0.6rem;
+  background-color: var(--paper);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+/* The shared button hover sets the whole background and would drop the arrow. */
+.model-picker-trigger:hover:not(:disabled) { background-color: var(--surface-2); background-image: var(--chevron); }
+.model-picker-trigger[aria-expanded='true'] { border-color: var(--muted); }
 .model-picker-panel {
   position: absolute;
   inset-block-start: calc(100% + 0.35rem);
