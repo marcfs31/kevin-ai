@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.18] - 2026-11-23
+
+### Added
+- Projects on this Mac: Settings > Tools has a switch (`localHost`, off by default) to also use the tool service on this Mac. The Project picker then lists its projects as "(on this Mac)", a chat remembers the host of its project (`projectHost`, `server` for older chats), and that project's tools, git chip and workflows come from `/tools-local`; the approval card says "Mac". With the switch off the page never calls `/tools-local`.
+
 ## [0.3.17] - 2026-11-23
 
 ### Added
