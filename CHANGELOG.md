@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.22] - 2026-11-23
+
+### Added
+- The chat's stats are in a pane on the right of the chat, which can be hidden for a wider chat (Hide, and a "Show chat stats" button beside Compact chat) and is remembered (`statsPane`: `auto` shows it on wide screens only, `open`, `closed`). On a phone it opens in place of the chat.
+- A tools viewer in that pane: the tools sent with the last request grouped by where they come from (built in, then one group per server) as chips, with the total and the token estimate.
+
+### Changed
+- The context bar is a slim strip with a legend under it (prompt, tools, last reply, free), which fits the narrow column.
+
 ## [0.3.21] - 2026-11-23
 
 ### Fixed
