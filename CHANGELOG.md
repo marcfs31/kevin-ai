@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.20] - 2026-11-23
+
+### Changed
+- The model picker in the header looks like a button: the same bordered box and arrow as the Effort and Speed selects, with the status dot inside it, so the dot stays with its text when the row wraps on a phone. The panel it opens is unchanged.
+
 ## [0.3.19] - 2026-11-23
 
 ### Fixed
