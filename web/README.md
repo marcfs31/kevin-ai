@@ -68,7 +68,10 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
 ## What it does
 
 - **Streaming and Stop.** While lm-serve reads the prompt the reply shows "Reading the prompt…
-  N s · about M min S s left" (12 prompt tokens/s on the target machine), then tokens per second.
+  N s · about M min S s left" (12 prompt tokens/s on the target machine), then tokens per second. Under it the page says
+  what is being read: the model has not started thinking yet, it reads the whole prompt first (≈ tokens, the tool
+  definitions counted apart, and what the server already holds from earlier turns). While tools are in use, the reply's
+  Thinking and Tool calls are open, so what is asked, run and returned is in view; when the run ends they fold again.
   Stop (or Esc) aborts the
   request; the server stops when the client disconnects. A reply that ends without a finish
   reason is shown as cut short, never as complete.
