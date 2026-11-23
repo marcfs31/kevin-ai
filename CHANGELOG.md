@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.27] - 2026-11-23
+
+### Fixed
+- Heading levels: each message is labelled with an `h2` (You, Assistant) and every heading inside a reply is an `h3` (styled by the level the model wrote), so the page no longer skips from `h1` to `h3` or gets a second `h1` from a reply.
+- The message area is the positioning parent of its screen-reader labels, so they are no longer reported as positioned children clipped by it.
+
+### Changed
+- No em dash in the page's own strings: the composer placeholder, the tools-sent caption and the error placeholder (`no details`). A test fails if one comes back. A reply's own text is the model's and is shown as written.
+
 ## [0.3.26] - 2026-11-23
 
 ### Changed
