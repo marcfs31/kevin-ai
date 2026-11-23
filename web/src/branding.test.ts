@@ -34,7 +34,11 @@ describe('Kevin AI branding', () => {
 
   it('draws its own select arrow with room around it, and separates the header items with a rule, not a dot', () => {
     const css = read('src/styles.css');
-    expect(css).toMatch(/\nselect \{[^}]*appearance: none;[^}]*padding-inline-end: 2\.1rem;[^}]*linear-gradient/);
+    expect(css).toMatch(/\nselect, \.model-picker-trigger \{[^}]*appearance: none;[^}]*padding-inline-end: 2\.1rem;[^}]*var\(--chevron\)/);
+    expect(css).toMatch(/--chevron: linear-gradient\([^;]*linear-gradient\(/);
+    // The model picker is a real button: a box like the selects, and the shared button hover must not drop its arrow.
+    expect(css).toMatch(/\.model-picker-trigger \{[^}]*border: 1px solid var\(--border\);[^}]*border-radius: var\(--radius\);/);
+    expect(css).toMatch(/\.model-picker-trigger:hover:not\(:disabled\) \{[^}]*background-image: var\(--chevron\);/);
     expect(css).not.toContain("content: '·'");
     expect(css).toMatch(/\.server span \+ span::before,[^}]*inline-size: 1px;/);
     expect(css).toMatch(/\.server \.internet-badge::before \{ content: none; \}/);   // no separator inside the pill
