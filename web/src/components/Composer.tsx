@@ -23,6 +23,8 @@ interface Props {
   onRedirect: (text: string, attachments: Attachment[]) => void;
   onStop: () => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** What the box starts with; the page remounts the composer (new key) to put an edited message back in it. */
+  initialText?: string;
 }
 
 async function readAttachment(file: File, info: ServerInfo | null, preset: number): Promise<Attachment> {
@@ -50,9 +52,9 @@ async function readAttachment(file: File, info: ServerInfo | null, preset: numbe
   return { id: newId(), kind: 'text', name: file.name, text: checkText(file.name, text) };
 }
 
-export function Composer({ busy, info, imagePreset, assessDraft, onSend, canRedirect, onRedirect, onStop, inputRef }: Props) {
+export function Composer({ busy, info, imagePreset, assessDraft, onSend, canRedirect, onRedirect, onStop, inputRef, initialText = '' }: Props) {
   const { t, duration, megabytes } = useI18n();
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [reading, setReading] = useState<Array<{ id: string; name: string }>>([]);
@@ -107,6 +109,14 @@ export function Composer({ busy, info, imagePreset, assessDraft, onSend, canRedi
     setDragging(false);
     void addFiles(Array.from(e.dataTransfer.files));
   };
+
+  // An edited message put back in the box: the cursor goes to its end, ready to change it.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (initialText === '' || !el) return;
+    el.focus();
+    el.setSelectionRange(initialText.length, initialText.length);
+  }, [initialText, inputRef]);
 
   const wasBusy = useRef(false);
   useEffect(() => {

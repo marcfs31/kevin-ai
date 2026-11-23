@@ -1414,6 +1414,79 @@ describe('App', () => {
     expect(await screen.findByText('answer two')).toBeTruthy();
   });
 
+  it('edits a message: rewinds to it after asking, puts its text back in the box, and sends the changed text', async () => {
+    toolsOff();
+    let n = 0;
+    const fetchMock = mockFetch(() => {
+      n += 1;
+      return sseResponse([delta(n === 1 ? 'answer one' : n === 2 ? 'answer two' : 'answer edited'), FINISH, DONE]);
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderApp();
+    typeAndSend('first');
+    await screen.findByText('answer one');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    typeAndSend('second');
+    await screen.findByText('answer two');
+    await waitFor(() => expect(screen.getAllByRole('article', { name: 'You' })).toHaveLength(2));
+    const first = screen.getAllByRole('article', { name: 'You' })[0];
+    if (!first) throw new Error('missing first user message');
+    // Declining the question changes nothing.
+    fireEvent.click(within(first).getByRole('button', { name: 'Edit' }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('article', { name: 'You' })).toHaveLength(2);
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+    // Agreeing drops it and what came after, clears the server's state, and fills the box.
+    confirm.mockReturnValue(true);
+    fireEvent.click(within(first).getByRole('button', { name: 'Edit' }));
+    expect(screen.queryByRole('article', { name: 'You' })).toBeNull();
+    expect(screen.queryByText('answer one')).toBeNull();
+    expect(screen.queryByText('answer two')).toBeNull();
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+    expect(box.value).toBe('first');
+    expect(document.activeElement).toBe(box);
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/v1/chat/reset') && (init as RequestInit | undefined)?.method === 'POST')).toBe(true);
+    fireEvent.change(box, { target: { value: 'first, changed' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(await screen.findByText('answer edited')).toBeTruthy();
+    const sent = bodyOf(fetchMock, 2).messages as { role: string; content: string }[];
+    expect(sent.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['first, changed']);
+  });
+
+  it('does not ask before editing the last message', async () => {
+    toolsOff();
+    mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+    typeAndSend('only message');
+    await screen.findByText('ok');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    fireEvent.click(within(screen.getByRole('article', { name: 'Assistant' })).getByRole('button', { name: 'Delete from here' }));
+    expect(confirm).toHaveBeenCalledTimes(1);                                  // Delete asked; the user message is now the last one
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(confirm).toHaveBeenCalledTimes(1);                                  // Edit on the last message asked nothing
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('only message');
+    expect(screen.queryByRole('article', { name: 'You' })).toBeNull();
+  });
+
+  it('offers no Edit on a message that was sent with a file', () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1, activeId: 'c', settings: { tools: false },
+        conversations: [{ id: 'c', title: 'x', messages: [
+          { id: 'u1', role: 'user', content: 'see a.txt', typed: 'see', attachmentNames: ['a.txt'], createdAt: 1 },
+          { id: 'u2', role: 'user', content: 'plain', typed: 'plain', attachmentNames: [], createdAt: 2 },
+        ] }],
+      }),
+    );
+    mockFetch(() => sseResponse([DONE]));
+    renderApp();
+    const [withFile, plain] = screen.getAllByRole('article', { name: 'You' });
+    expect(within(withFile as HTMLElement).queryByRole('button', { name: 'Edit' })).toBeNull();
+    expect(within(plain as HTMLElement).getByRole('button', { name: 'Edit' })).toBeTruthy();
+  });
+
   it('renames, deletes and deletes all conversations', async () => {
     const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
     vi.spyOn(window, 'confirm').mockReturnValue(true);

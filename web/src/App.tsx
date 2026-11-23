@@ -391,6 +391,19 @@ function Chat({ state, setState, storage, notice }: {
     forgetServer();
   };
 
+  // Edit: rewind to one of your own messages (without attachments, whose files and images were sent with the text) and put
+  // its text back in the message box. The box is remounted with a new key so it starts with that text.
+  const [edit, setEdit] = useState({ key: 0, text: '' });
+  const editFrom = (index: number) => {
+    if (busy || !active) return;
+    const target = active.messages[index];
+    if (!target || target.role !== 'user' || target.attachmentNames.length > 0) return;
+    if (index < active.messages.length - 1 && !window.confirm(t('message.confirmEdit'))) return;
+    updateConv(active.id, (c) => ({ ...c, updatedAt: Date.now(), messages: truncateFrom(c.messages, index) }));
+    forgetServer();
+    setEdit((e) => ({ key: e.key + 1, text: target.typed }));
+  };
+
   const send = async (typed: string, attachments: Attachment[], target: Conversation | null = active) => {
     if (controllerRef.current) return;
     stickRef.current = true;
@@ -644,6 +657,7 @@ function Chat({ state, setState, storage, notice }: {
                   onRetry={canRetry && i === messages.length - 1 ? retry : undefined}
                   onRegenerate={canRegenerate && i === messages.length - 1 ? regenerate : undefined}
                   onDelete={!busy && m.role !== 'tool' ? () => deleteFrom(i) : undefined}
+                  onEdit={!busy && m.role === 'user' && m.attachmentNames.length === 0 ? () => editFrom(i) : undefined}
                 />
               </div>
             ))}
@@ -704,7 +718,7 @@ function Chat({ state, setState, storage, notice }: {
             {t('app.busyElsewhere')}
           </p>
         )}
-        <Composer busy={busy} info={info} imagePreset={modes.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} canRedirect={busy && runConv !== null && runConv === active?.id && !compacting && !redirecting} onRedirect={(tx, a) => void redirectNow(tx, a)} onStop={stop} inputRef={inputRef} />
+        <Composer key={edit.key} initialText={edit.text} busy={busy} info={info} imagePreset={modes.imagePreset} assessDraft={assessDraft} onSend={(tx, a) => void send(tx, a)} canRedirect={busy && runConv !== null && runConv === active?.id && !compacting && !redirecting} onRedirect={(tx, a) => void redirectNow(tx, a)} onStop={stop} inputRef={inputRef} />
       </main>
       {statsPane !== 'closed' && (
         <aside className="stats-pane" aria-label={t('statsPane.label')}>
