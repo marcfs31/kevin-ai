@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.24] - 2026-11-23
+
+### Added
+- While the server reads the prompt, the reply says the model has not started thinking: it reads the whole prompt first, with its size, the tool definitions counted apart and what the server already holds from earlier turns. The line goes away when the first token arrives.
+
+### Changed
+- While tools are in use, the reply's Thinking and Tool calls stay open (also while a call waits for permission, which used to leave them folded) and fold again when the run ends, to keep the chat short.
+
 ## [0.3.23] - 2026-11-23
 
 ### Added
