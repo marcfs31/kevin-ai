@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [0.3.25] - 2026-11-23
 
 ### Changed
-- `AGENTS.md`: a minor holds 31 releases (patches 0 to 30); the release that would be the 31st patch (`0.3.31`) starts the next minor (`0.4.0`) instead.
+- `AGENTS.md`: Kevin's SemVer. A minor holds 31 releases (patches 0 to 30): the release that would be the 31st patch (`0.3.31`) starts the next minor (`0.4.0`) instead. A major holds 13 minors (0 to 12): the release that would be the 13th minor (`0.13.0`) is the first major, `1.0.0`, which ships alone.
 
 ## [0.3.23] - 2026-11-23
 
