@@ -123,6 +123,8 @@ export interface Conversation {
   speed: Speed;
   /** The project (a registry id on the model server) the agent works in for this chat; null = none. */
   projectId: string | null;
+  /** Which tool service the project is on: the model server's or this Mac's. */
+  projectHost: 'server' | 'local';
   /** The workflow this chat is following (its steps and where each stands); null = none. */
   workflow: Workflow | null;
   messages: Message[];
@@ -159,6 +161,8 @@ export interface ToolsConfig {
   approval: ApprovalMode;
   /** Tools (as server/tool, see allowKey) the user chose to stop being asked about. */
   alwaysAllow: string[];
+  /** Also ask the tool service on this Mac (/tools-local) for projects. Off: the page never calls it. */
+  localHost: boolean;
 }
 
 export interface InternetConfig {
@@ -185,7 +189,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tools: true,
   maxSteps: 20,
   autoCompact: true,
-  toolsConfig: { servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [] },
+  toolsConfig: { servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [], localHost: false },
   internet: { on: false, searchUrl: '' },
 };
 
@@ -297,6 +301,7 @@ function conversation(v: unknown): Conversation | null {
     id: o.id, title: str(o.title), createdAt: time(o.createdAt), updatedAt: time(o.updatedAt), model,
     effort: isEffort(o.effort) ? o.effort : DEFAULT_EFFORT, speed: isSpeed(o.speed) ? o.speed : DEFAULT_SPEED,
     projectId: typeof o.projectId === 'string' && /^[a-z0-9][a-z0-9_-]{0,31}$/.test(o.projectId) ? o.projectId : null,
+    projectHost: o.projectHost === 'local' ? 'local' : 'server',
     workflow: normalizeWorkflow(o.workflow), messages,
   };
 }
@@ -317,6 +322,7 @@ function toolsConfig(v: unknown): ToolsConfig {
     budgetTokens: typeof budget === 'number' && Number.isInteger(budget) && budget >= MIN_TOOL_BUDGET && budget <= MAX_TOOL_BUDGET ? budget : DEFAULT_SETTINGS.toolsConfig.budgetTokens,
     approval: (APPROVAL_MODES as readonly unknown[]).includes(o.approval) ? (o.approval as ApprovalMode) : DEFAULT_SETTINGS.toolsConfig.approval,
     alwaysAllow: strings(o.alwaysAllow, 500, 200),
+    localHost: o.localHost === true,
   };
 }
 

@@ -252,6 +252,13 @@ export function ToolsPanel({ settings, onChange, load, reload }: Props) {
         </select>
       </div>
 
+      <div className="field field-wide">
+        <label>
+          <input type="checkbox" checked={cfg.localHost} onChange={(e) => setTools({ localHost: e.target.checked })} /> {t('tools.localHost')}
+        </label>
+        <p className="hint">{t('tools.localHostHint')}</p>
+      </div>
+
       {cfg.alwaysAllow.length > 0 && (
         <div className="field field-wide">
           <h3>{t('tools.alwaysAllow')}</h3>

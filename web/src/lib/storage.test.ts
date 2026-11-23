@@ -5,7 +5,7 @@ describe('tools and internet settings', () => {
   const load = (settings: unknown) => migrate({ version: 1, settings })?.settings;
 
   it('default to nothing on and the internet off, so a chat saved before them loads as it was', () => {
-    expect(load({})?.toolsConfig).toEqual({ servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [] });
+    expect(load({})?.toolsConfig).toEqual({ servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [], localHost: false });
     expect(load({})?.internet).toEqual({ on: false, searchUrl: '' });
   });
 
@@ -16,8 +16,10 @@ describe('tools and internet settings', () => {
 
   it('refuse what is not valid, one field at a time', () => {
     expect(load({ toolsConfig: { servers: { 'Bad Name': { on: true }, ok: { on: 'yes', disabledTools: [1, 'x', 'x'] }, list: [] }, budgetTokens: 5, approval: 'maybe', alwaysAllow: [3, '', 'a'] } })?.toolsConfig).toEqual({
-      servers: { ok: { on: false, disabledTools: ['x'] } }, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: ['a'],
+      servers: { ok: { on: false, disabledTools: ['x'] } }, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: ['a'], localHost: false,
     });
+    expect(load({ toolsConfig: { localHost: true } })?.toolsConfig.localHost).toBe(true);
+    expect(load({ toolsConfig: { localHost: 'yes' } })?.toolsConfig.localHost).toBe(false);
     expect(load({ toolsConfig: { budgetTokens: 99999 } })?.toolsConfig.budgetTokens).toBe(1500);
     expect(load({ internet: { on: 'true', searchUrl: 'x'.repeat(400) } })?.internet).toEqual({ on: false, searchUrl: '' });
     expect(load({ toolsConfig: 'x', internet: 7 })).toMatchObject({ toolsConfig: { servers: {} }, internet: { on: false } });
@@ -35,6 +37,16 @@ describe('effort and speed per conversation', () => {
       ],
     });
     expect(state?.conversations.map((c) => [c.effort, c.speed])).toEqual([['high', 'thorough'], ['low', 'fast'], ['high', 'thorough']]);
+  });
+});
+
+describe('project host per conversation', () => {
+  it('is the model server unless the chat says it is on this Mac', () => {
+    const state = migrate({
+      version: 1,
+      conversations: [{ id: 'a', messages: [] }, { id: 'b', projectId: 'notes', projectHost: 'local', messages: [] }, { id: 'c', projectHost: 'elsewhere', messages: [] }],
+    });
+    expect(state?.conversations.map((c) => c.projectHost)).toEqual(['server', 'local', 'server']);
   });
 });
 

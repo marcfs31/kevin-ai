@@ -222,6 +222,11 @@ export interface ProjectInfo {
   commands: string[];
 }
 
+/** A project and where it lives: the model server's tool service, or the copy on this Mac. */
+export interface HostedProject extends ProjectInfo {
+  host: ToolsHost;
+}
+
 export async function toolsProjects(signal?: AbortSignal, host: ToolsHost = 'server'): Promise<ProjectInfo[]> {
   const j = await toolsJson(`${toolsBase(host)}/projects`, { signal });
   return (Array.isArray(j.projects) ? j.projects : []).flatMap((v): ProjectInfo[] => {

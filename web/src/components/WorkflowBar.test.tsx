@@ -1,11 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../i18n';
-import type { ProjectInfo } from '../lib/api';
+import type { HostedProject } from '../lib/api';
 import { startWorkflow, type Workflow } from '../lib/workflows';
 import { WorkflowBar } from './WorkflowBar';
 
-const demo: ProjectInfo = { id: 'demo', title: 'Demo', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: [] };
+const demo: HostedProject = { id: 'demo', title: 'Demo', defaultBranch: 'main', allowMain: false, hasRemote: false, commands: [], host: 'server' };
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 const file = (workflows: unknown) => json({ ok: true, content: `.kevin/workflows.json lines 1-1 of 1\n${JSON.stringify({ workflows })}`, isError: false });
 afterEach(() => vi.unstubAllGlobals());
@@ -32,6 +32,14 @@ describe('WorkflowBar', () => {
     fireEvent.change(select, { target: { value: 'ship' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     expect(onStart).toHaveBeenCalledWith({ id: 'ship', title: 'Ship it', steps: ['Test', 'Commit'] });
+  });
+
+  it('reads the workflows of a Mac project from the Mac\'s tool service', async () => {
+    const fetchMock = vi.fn(async () => file([{ id: 'fix', title: 'Fix a bug', steps: ['Reproduce'] }]));
+    vi.stubGlobal('fetch', fetchMock);
+    show({ project: { ...demo, host: 'local' } });
+    await screen.findByLabelText('Workflow');
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/tools-local/servers/project/call');
   });
 
   it('shows nothing when the project has no workflows file, or no project is chosen', async () => {
