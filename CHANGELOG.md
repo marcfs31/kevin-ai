@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.21] - 2026-11-23
+
+### Fixed
+- The model picker button showed a light fill and a large triangle when the pointer was over it: the shared button hover sets the whole `background` shorthand, which reset the arrow's size and position, so its two gradients stretched over the button. The hover rule now states the image, position, size and repeat (shared as `--chevron-*` variables), and a test guards it. Found by the owner on the real page; the 0.3.20 check had looked only at the resting state.
+
 ## [0.3.20] - 2026-11-23
 
 ### Changed
