@@ -196,6 +196,16 @@ class Committing(Base):
         self.ok("git_add", paths=["c.txt"])
         self.fails("git_commit", "not on a branch", message="detached")
 
+    def test_the_first_commit_of_a_new_repository_works_on_a_branch_and_is_refused_on_the_default_branch(self):
+        self.ok("git_init")
+        self.put("a.txt")
+        self.ok("git_add", paths=["a.txt"])
+        self.fails("git_commit", "default branch", message="first")          # not "HEAD is not on a branch"
+        self.ok("git_branch_create", name="first")
+        self.ok("git_commit", message="first")
+        self.assertEqual(git(self.root, "log", "--format=%s").strip(), "first")
+        self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "HEAD").strip(), "kevin/first")
+
     def test_allow_main_and_a_different_default_branch_follow_the_registry(self):
         self.settings = {"root": "demo", "allowMain": True}
         self.save()

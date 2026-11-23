@@ -118,8 +118,9 @@ def _rev(value, what="rev"):
 
 
 def _current(root):
-    rc, out, _ = run_git(root, ["rev-parse", "--abbrev-ref", "HEAD"])
-    return out.strip() if rc == 0 else None
+    """The branch HEAD is on, also before the first commit (rev-parse cannot say); None when HEAD is detached."""
+    rc, out, _ = run_git(root, ["symbolic-ref", "--short", "-q", "HEAD"])
+    return out.strip() if rc == 0 and out.strip() else None
 
 
 # ---- tools -------------------------------------------------------------------------------------
