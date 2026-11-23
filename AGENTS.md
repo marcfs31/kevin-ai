@@ -9,14 +9,12 @@ v0.3.2 and v0.3.3 had to be tagged afterwards the same way.
 
 - **One PR, one version.** Before 1.0 a PR is a patch release (`0.3.4` to `0.3.5`); a breaking or
   phase change bumps the minor number, and a major ships alone in its own PR.
-- **A minor's last patch is 31.** Rule (owner, 2026-11-23). Why: with one version per PR the patch number had
-  reached 23 within two days of `0.3.0`, and it only grows. Patches run 0 to 31; the release after `0.3.31` is the
-  next minor, `0.4.0`, and patches count from 0 again. Check the last tag first; that release carries its own
-  changes, not an empty bump. If the new minor is also a breaking or phase change, say so in the changelog.
-- **A major's last minor is 13. Together this is Kevin's SemVer** (owner, 2026-11-23): patches 0 to 31, then the
-  next minor; minors 0 to 13, then the next major. The release after the last patch of minor 13 (`0.13.31`) is the
-  first major, `1.0.0`; from then on `1.13.31` is followed by `2.0.0`, and so on. It is still `MAJOR.MINOR.PATCH`, so
-  every tool that reads SemVer reads it. A major ships alone in its own PR (its version, changelog and migration
+- **Kevin's SemVer** (owner, 2026-11-23). Why: with one version per PR the patch number had reached 23 within two
+  days of `0.3.0`, and it only grows. Patches run 0 to 31 in a minor; the release after `x.y.31` is the next minor,
+  `x.(y+1).0`, which carries its own changes, not an empty bump. The first major comes early: the release after
+  `0.3.31` is `1.0.0` (no `0.4` to `0.13`). From `1.0.0` on, a minor holds patches 0 to 31 and a major holds minors
+  0 to 13, so `1.13.31` is followed by `2.0.0`, and so on. It is still `MAJOR.MINOR.PATCH`, so every tool that reads
+  SemVer reads it. Check the last tag first. A major ships alone in its own PR (its version, changelog and migration
   notes); the change that was waiting goes in the next patch, `1.0.1`.
 - **In the PR**, as its own last commit `chore(release): X.Y.Z`: set `version` in `web/package.json` and in
   both places of `web/package-lock.json`, and move the PR's `CHANGELOG.md` entries from `[Unreleased]` to a
