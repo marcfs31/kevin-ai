@@ -220,6 +220,20 @@ describe('App', () => {
       expect(screen.queryByRole('alertdialog')).toBeNull();
     });
 
+    it('shows the tool calls open while tools are in use, and folds them again when the run ends', async () => {
+      const f = setup({ tool: 'fs__write_file' });
+      renderApp();
+      await ready(f);
+      typeAndSend('please write a file');
+      const card = await screen.findByRole('alertdialog');
+      const trace = document.querySelector('details.trace') as HTMLDetailsElement;
+      expect(trace.open).toBe(true);                                    // waiting for the answer: what is being allowed is in view
+      expect(trace.textContent).toContain('"path":"/x"');
+      fireEvent.click(within(card).getByRole('button', { name: 'Allow once' }));
+      expect(await screen.findByText('all done')).toBeTruthy();
+      await waitFor(() => expect((document.querySelector('details.trace') as HTMLDetailsElement).open).toBe(false));   // the run is over: folded, to keep the chat short
+    });
+
     it('does not run a call that is denied, and tells the model so', async () => {
       const f = setup({ tool: 'fs__write_file' });
       renderApp();
