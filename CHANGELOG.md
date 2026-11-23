@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.19] - 2026-11-23
+
+### Fixed
+- Project git tools: the first commit of a new repository. `git_commit` and `git_push` asked git for the branch with a command that fails before the first commit, so a project made with `git_init` could never get one ("HEAD is not on a branch"). Found in the first live run on the model server. The branch is now read with `symbolic-ref`, so the default-branch rule applies as it should and a `kevin/` branch can make the first commit.
+
 ## [0.3.18] - 2026-11-23
 
 ### Added
