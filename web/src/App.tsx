@@ -489,6 +489,8 @@ function Chat({ state, setState, storage, notice }: {
   const canDiscard = hold === 'locked' || hold === 'unreadable' || copies.length > 0;
   const messages = active?.messages ?? [];
   const lastSummary = lastSummaryIndex(messages);
+  // The replies after your last message are the run that is going now (or just ended): their tools are shown open meanwhile.
+  const lastUserIndex = messages.reduce((last, m, i) => (m.role === 'user' ? i : last), -1);
   const canCompact = active !== null && planCompaction(active.messages) !== null;
 
   return (
@@ -654,6 +656,7 @@ function Chat({ state, setState, storage, notice }: {
                 <MessageView
                   m={m}
                   results={m.role === 'assistant' ? toolResults(messages, i) : undefined}
+                  usingTools={busy && runConv === active?.id && m.role === 'assistant' && i > lastUserIndex && (m.toolCalls?.length ?? 0) > 0}
                   onRetry={canRetry && i === messages.length - 1 ? retry : undefined}
                   onRegenerate={canRegenerate && i === messages.length - 1 ? regenerate : undefined}
                   onDelete={!busy && m.role !== 'tool' ? () => deleteFrom(i) : undefined}

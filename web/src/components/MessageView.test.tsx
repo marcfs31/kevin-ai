@@ -86,6 +86,31 @@ describe('MessageView delete and regenerate', () => {
 });
 
 
+describe('MessageView while a tool call waits for the user\'s answer', () => {
+  const withCall = assistant({ reasoning: 'I should write the file.', toolCalls: [{ id: 'c1', name: 'fs__write_file', arguments: '{"path":"/x"}' }] });
+
+  it('shows its thinking and its tool calls open, so the user sees what is being asked', () => {
+    const { container } = render(
+      <I18nProvider locale="en">
+        <MessageView m={withCall} usingTools />
+      </I18nProvider>,
+    );
+    expect((container.querySelector('details.think') as HTMLDetailsElement).open).toBe(true);
+    expect((container.querySelector('details.trace') as HTMLDetailsElement).open).toBe(true);
+    expect(screen.getByText('{"path":"/x"}')).toBeTruthy();
+  });
+
+  it('leaves them folded otherwise', () => {
+    const { container } = render(
+      <I18nProvider locale="en">
+        <MessageView m={withCall} />
+      </I18nProvider>,
+    );
+    expect((container.querySelector('details.think') as HTMLDetailsElement).open).toBe(false);
+    expect((container.querySelector('details.trace') as HTMLDetailsElement).open).toBe(false);
+  });
+});
+
 describe('MessageView reading ETA', () => {
   it('shows minutes and seconds left while reading the prompt', () => {
     render(
@@ -97,6 +122,45 @@ describe('MessageView reading ETA', () => {
       </I18nProvider>,
     );
     expect(screen.getByText(/Reading the prompt… .+ · about 2 min 0 s left/)).toBeTruthy();
+  });
+
+  it('says the model has not started thinking, and what the prompt is made of, with the tools counted apart', () => {
+    render(
+      <I18nProvider locale="en">
+        <MessageView
+          m={assistant({ content: '' })}
+          live={{ startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate: 1738, readEstimate: 1738, tools: { names: ['calculator'], tokens: 258 }, usage: null }}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByText(/has not started thinking: it reads the whole prompt first, ≈1,738 tokens \(≈258 of tool definitions and ≈1,480 of instructions and conversation\)/)).toBeTruthy();
+    expect(screen.queryByText(/already holds/)).toBeNull();
+  });
+
+  it('leaves the tools out when there are none, and says what the server already holds when it keeps part of the prompt', () => {
+    render(
+      <I18nProvider locale="en">
+        <MessageView
+          m={assistant({ content: '' })}
+          live={{ startedAt: performance.now(), firstAt: null, chunks: 0, promptEstimate: 1000, readEstimate: 300, tools: null, usage: null }}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByText(/reads the whole prompt first, ≈1,000 tokens of instructions and conversation/)).toBeTruthy();
+    expect(screen.queryByText(/of tool definitions/)).toBeNull();
+    expect(screen.getByText(/The server already holds ≈700 of them from earlier, so it reads ≈300\./)).toBeTruthy();
+  });
+
+  it('shows nothing about reading once the first token has arrived', () => {
+    render(
+      <I18nProvider locale="en">
+        <MessageView
+          m={assistant({ content: 'Hi' })}
+          live={{ startedAt: performance.now() - 5000, firstAt: performance.now() - 1000, chunks: 3, promptEstimate: 1000, readEstimate: 1000, tools: null, usage: null }}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.queryByText(/has not started thinking/)).toBeNull();
   });
 
   it('drops the ETA once the estimate has run out', () => {

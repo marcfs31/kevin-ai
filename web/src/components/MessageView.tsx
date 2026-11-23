@@ -47,9 +47,21 @@ function LiveStatus({ live }: { live: LiveInfo }) {
       left >= 1
         ? t('message.readingPromptEta', { elapsed: num(elapsed), m: num(eta.m), s: num(eta.s) })
         : t('message.readingPrompt', { s: num(elapsed) });
+    // What the server is busy with, so a long wait is not a mystery: the model has not started thinking, it reads first.
+    const tools = live.tools?.tokens ?? 0;
+    const cached = Math.max(0, live.promptEstimate - live.readEstimate);
+    const what = [
+      live.tools
+        ? t('message.readingWhat', { prompt: num(live.promptEstimate), tools: num(tools), rest: num(Math.max(0, live.promptEstimate - tools)) })
+        : t('message.readingWhatNoTools', { prompt: num(live.promptEstimate) }),
+      cached > 0 ? t('message.readingCached', { cached: num(cached), read: num(live.readEstimate) }) : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
     return (
       <>
         <p className="live" aria-live="off">{line}</p>
+        <p className="hint live-what">{what}</p>
         {counter}
       </>
     );
@@ -86,13 +98,13 @@ function StatsLine({ stats }: { stats: Stats }) {
   );
 }
 
-function Assistant({ m, live, results, onRetry, onDelete }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[]; onRetry?: () => void; onDelete?: () => void }) {
+function Assistant({ m, live, results, usingTools, onRetry, onDelete }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[]; usingTools: boolean; onRetry?: () => void; onDelete?: () => void }) {
   const { t } = useI18n();
   return (
     <article className="msg assistant" aria-label={t('message.assistant')}>
       <p className="role">{t('message.assistant')}</p>
       {m.reasoning && (
-        <details className="think" open={live !== null && !m.content}>
+        <details className="think" open={(live !== null && !m.content) || usingTools}>
           <summary>{t('message.thinking')}</summary>
           <div className="think-body md">
             <Markdown text={m.reasoning} emphasisAsBold />
@@ -104,7 +116,7 @@ function Assistant({ m, live, results, onRetry, onDelete }: { m: AssistantMessag
           <Markdown text={m.content} />
         </div>
       )}
-      {m.toolCalls && m.toolCalls.length > 0 && <ToolTrace m={m} results={results} />}
+      {m.toolCalls && m.toolCalls.length > 0 && <ToolTrace m={m} results={results} open={usingTools} />}
       {live && <LiveStatus live={live} />}
       {m.status === 'stopped' && <p className="note">{t('message.stopped')}</p>}
       {m.error && (
@@ -203,12 +215,12 @@ function User({ m, onDelete, onRegenerate, onEdit }: { m: UserMessage; onDelete?
 }
 
 /** What the model asked for and what came back, folded away until the user wants to see it. */
-function ToolTrace({ m, results }: { m: AssistantMessage; results: ToolMessage[] }) {
+function ToolTrace({ m, results, open }: { m: AssistantMessage; results: ToolMessage[]; open: boolean }) {
   const { t } = useI18n();
   const calls = m.toolCalls ?? [];
   return (
     <>
-      <details className="trace">
+      <details className="trace" open={open}>
         <summary>{t('tools.trace', { names: calls.map((c) => c.name || '?').join(', ') })}</summary>
         <ol className="trace-calls">
           {calls.map((c) => {
@@ -255,16 +267,19 @@ function Summary({ m, onDelete }: { m: SummaryMessage; onDelete?: () => void }) 
 
 /** onRetry / onRegenerate only for the last message when nothing is running; onDelete rewinds from here; onEdit (your own
  * messages without attachments) rewinds from here too and puts the text back in the message box. */
-export function MessageView({ m, live = null, results = [], onRetry, onDelete, onRegenerate, onEdit }: {
+export function MessageView({ m, live = null, results = [], usingTools = false, onRetry, onDelete, onRegenerate, onEdit }: {
   m: Message;
   live?: LiveInfo | null;
   results?: ToolMessage[];
+  /** This reply's tools are in use, in the run that is going now: its thinking and tool calls are shown while it lasts
+   * (so the user sees what is asked, run and returned) and fold again when the run ends, to keep the chat short. */
+  usingTools?: boolean;
   onRetry?: () => void;
   onDelete?: () => void;
   onRegenerate?: () => void;
   onEdit?: () => void;
 }) {
-  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} onRetry={onRetry} onDelete={onDelete} />;
+  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} usingTools={usingTools} onRetry={onRetry} onDelete={onDelete} />;
   if (m.role === 'summary') return <Summary m={m} onDelete={onDelete} />;
   // A tool result is shown inside the reply that asked for it.
   if (m.role === 'tool') return null;
