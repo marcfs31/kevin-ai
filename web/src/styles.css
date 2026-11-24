@@ -284,9 +284,19 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   flex: none;
 }
 .server-ok::before { background: var(--ok); }
-.server-error { color: var(--danger); }
+/* Danger colour only on the status line, not Effort/Speed labels or Retry. */
+.server-error .server-msg { color: var(--danger); }
 .server-error::before { background: var(--danger); }
 .header-action { font-size: 0.875rem; font-weight: 600; }
+/* Retry (and any other direct .server control button): same chrome as Start a model. */
+.server > button {
+  background-color: var(--paper);
+  border: 1px solid var(--border);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.chat-model label { color: var(--muted); }
 .sidebar-toggle { display: none; }
 
 .side {

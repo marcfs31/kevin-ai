@@ -524,7 +524,7 @@ function Chat({ state, setState, storage, notice }: {
               onStarted={onServeStarted}
             />
           ) : (
-            serverLine && <span>{serverLine}</span>
+            serverLine && <span className="server-msg">{serverLine}</span>
           )}
           {server.kind === 'error' && <ModelCtxPicker modelName={null} contextLength={null} busy={busy} onStarted={onServeStarted} />}
           {serverInfo && serverInfo.models.length > 1 && (
@@ -555,7 +555,7 @@ function Chat({ state, setState, storage, notice }: {
             </span>
           )}
           {server.kind === 'error' && (
-            <button type="button" onClick={retryServer}>
+            <button type="button" className="header-action" onClick={retryServer}>
               {t('server.retry')}
             </button>
           )}

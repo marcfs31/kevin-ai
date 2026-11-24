@@ -1,8 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { I18nProvider } from '../i18n';
+import { I18nProvider, makeI18n } from '../i18n';
 import type { AssistantMessage, UserMessage } from '../lib/storage';
-import { MessageView } from './MessageView';
+import { MessageView, errorText } from './MessageView';
 
 function user(over: Partial<UserMessage> = {}): UserMessage {
   return {
@@ -270,5 +270,21 @@ describe('thinking text', () => {
     );
     expect(container.querySelector('.think-body b')).toBeNull();
     expect(container.querySelector('.think-body')?.textContent).toContain('<b>raw</b>');
+  });
+});
+
+describe('errorText', () => {
+  const t = makeI18n('en').t;
+
+  it('names a bare 502 as unreachable upstream, not no details', () => {
+    expect(errorText(t, { status: 502, code: null, serverMessage: '' })).toBe(
+      'The proxy cannot reach lm-serve. Is it running?',
+    );
+  });
+
+  it('still shows a 502 body when the server sent one', () => {
+    expect(errorText(t, { status: 502, code: null, serverMessage: 'bad gateway body' })).toBe(
+      'The server answered 502: bad gateway body',
+    );
   });
 });
