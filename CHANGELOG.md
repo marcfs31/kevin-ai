@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.29] - 2026-11-24
 
 ### Added
 - Edit on an assistant reply: same rewind as Edit on the prompt that led to it (prompt back in the box; that turn and what follows are removed).
