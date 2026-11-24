@@ -113,6 +113,19 @@ export function truncateFrom(messages: Message[], index: number): Message[] {
   return messages.slice(0, index);
 }
 
+/** From a user or assistant message, the user turn Edit rewinds to (no attachments). Walks
+ * back past tool results; a file-backed user or a summary stops the search. */
+export function editableUserIndex(messages: Message[], from: number): number | null {
+  for (let i = from; i >= 0; i--) {
+    const m = messages[i];
+    if (!m) continue;
+    if (m.role === 'user') return m.attachmentNames.length === 0 ? i : null;
+    if (m.role === 'assistant' || m.role === 'tool') continue;
+    return null;
+  }
+  return null;
+}
+
 export interface Conversation {
   id: string;
   title: string;

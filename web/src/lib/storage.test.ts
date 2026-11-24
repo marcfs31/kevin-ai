@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, emptyState, loadState, migrate, saveState, truncateFrom, type Message } from './storage';
+import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, editableUserIndex, emptyState, loadState, migrate, saveState, truncateFrom, type Message } from './storage';
 
 describe('tools and internet settings', () => {
   const load = (settings: unknown) => migrate({ version: 1, settings })?.settings;
@@ -214,5 +214,27 @@ describe('truncateFrom', () => {
   it('leaves the list alone when the index is out of range', () => {
     expect(truncateFrom(msgs, -1)).toBe(msgs);
     expect(truncateFrom(msgs, 99)).toBe(msgs);
+  });
+});
+
+describe('editableUserIndex', () => {
+  const msgs = [
+    { id: 'u1', role: 'user', content: 'a', typed: 'a', attachmentNames: [], createdAt: 0 },
+    { id: 'a1', role: 'assistant', content: 'b', reasoning: '', status: 'done', error: null, stats: null, createdAt: 1 },
+    { id: 't1', role: 'tool', toolCallId: 'c', name: 'f', content: 'r', isError: false, createdAt: 2 },
+    { id: 'a2', role: 'assistant', content: 'c', reasoning: '', status: 'done', error: null, stats: null, createdAt: 3 },
+    { id: 'uf', role: 'user', content: 'file', typed: 'file', attachmentNames: ['x.txt'], createdAt: 4 },
+    { id: 'af', role: 'assistant', content: 'd', reasoning: '', status: 'done', error: null, stats: null, createdAt: 5 },
+  ] as Message[];
+
+  it('returns the user turn from a user or its assistant reply, walking past tools', () => {
+    expect(editableUserIndex(msgs, 0)).toBe(0);
+    expect(editableUserIndex(msgs, 1)).toBe(0);
+    expect(editableUserIndex(msgs, 3)).toBe(0);
+  });
+
+  it('refuses a user with attachments and the reply after it', () => {
+    expect(editableUserIndex(msgs, 4)).toBeNull();
+    expect(editableUserIndex(msgs, 5)).toBeNull();
   });
 });

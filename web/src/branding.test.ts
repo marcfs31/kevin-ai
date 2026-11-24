@@ -32,6 +32,11 @@ describe('Kevin AI branding', () => {
     expect(read('src/styles.css')).toMatch(/@media \(max-width: 28rem\) \{\s*\.server \{ min-block-size: 7\.125rem; \}/);
   });
 
+  it('gives message-foot actions (Copy, Edit, Regenerate) a visible border like Delete', () => {
+    const css = read('src/styles.css');
+    expect(css).toMatch(/\.msg-foot > button:not\(\.danger\),\s*\.msg-foot \.retry > button \{\s*border-color: var\(--border\);/);
+  });
+
   it('draws its own select arrow with room around it, and separates the header items with a rule, not a dot', () => {
     const css = read('src/styles.css');
     expect(css).toMatch(/\nselect, \.model-picker-trigger \{[^}]*appearance: none;[^}]*padding-inline-end: 2\.1rem;[^}]*var\(--chevron\)/);

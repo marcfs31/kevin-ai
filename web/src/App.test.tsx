@@ -1501,6 +1501,21 @@ describe('App', () => {
     expect(within(plain as HTMLElement).getByRole('button', { name: 'Edit' })).toBeTruthy();
   });
 
+  it('edits from an assistant reply: same rewind as Edit on the prompt that led to it', async () => {
+    toolsOff();
+    mockFetch(() => sseResponse([delta('answer one'), FINISH, DONE]));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+    typeAndSend('first');
+    await screen.findByText('answer one');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    fireEvent.click(within(screen.getByRole('article', { name: 'Assistant' })).getByRole('button', { name: 'Edit' }));
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('article', { name: 'You' })).toBeNull();
+    expect(screen.queryByText('answer one')).toBeNull();
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('first');
+  });
+
   it('renames, deletes and deletes all conversations', async () => {
     const fetchMock = mockFetch(() => sseResponse([delta('ok'), FINISH, DONE]));
     vi.spyOn(window, 'confirm').mockReturnValue(true);

@@ -109,6 +109,9 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   everything after it are removed, and `POST /v1/chat/reset` clears the server’s reused state so
   the next reply matches the shorter chat. After deleting a reply, Regenerate asks again from the
   user message that remains. Not offered while a reply is running.
+- **Edit.** A user message without attachments, and its assistant reply, offer Edit: the prompt
+  goes back into the message box and that turn and everything after it are removed (same rewind
+  as Delete). Copy answer on a reply is a bordered button like Delete and Edit.
 - **Compacting.** Auto compact (a checkbox above the composer, on by default, saved with the
   settings) summarises by itself when the next request would fill 80 % of the context (the
   server's own count of the last reply, else an estimate). With it off, only the Compact chat

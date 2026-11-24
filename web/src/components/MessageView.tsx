@@ -100,7 +100,7 @@ function StatsLine({ stats }: { stats: Stats }) {
   );
 }
 
-function Assistant({ m, live, results, usingTools, onRetry, onDelete }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[]; usingTools: boolean; onRetry?: () => void; onDelete?: () => void }) {
+function Assistant({ m, live, results, usingTools, onRetry, onDelete, onEdit }: { m: AssistantMessage; live: LiveInfo | null; results: ToolMessage[]; usingTools: boolean; onRetry?: () => void; onDelete?: () => void; onEdit?: () => void }) {
   const { t } = useI18n();
   return (
     <article className="msg assistant" aria-label={t('message.assistant')}>
@@ -138,6 +138,16 @@ function Assistant({ m, live, results, usingTools, onRetry, onDelete }: { m: Ass
         <div className="msg-foot">
           {m.stats && <StatsLine stats={m.stats} />}
           {m.content && <CopyButton text={m.content} label={t('message.copy')} />}
+          {onEdit && (
+            <button type="button" onClick={onEdit} aria-describedby={`${m.id}-edit-hint`}>
+              {t('message.edit')}
+            </button>
+          )}
+          {onEdit && (
+            <span id={`${m.id}-edit-hint`} className="sr-only">
+              {t('message.editHint')}
+            </span>
+          )}
           {onDelete && (
             <button type="button" className="danger" onClick={onDelete} aria-label={t('message.delete')}>
               {t('message.delete')}
@@ -267,8 +277,8 @@ function Summary({ m, onDelete }: { m: SummaryMessage; onDelete?: () => void }) 
   );
 }
 
-/** onRetry / onRegenerate only for the last message when nothing is running; onDelete rewinds from here; onEdit (your own
- * messages without attachments) rewinds from here too and puts the text back in the message box. */
+/** onRetry / onRegenerate only for the last message when nothing is running; onDelete rewinds from here; onEdit (a user
+ * message without attachments, or its assistant reply) rewinds to that prompt and puts the text back in the message box. */
 export function MessageView({ m, live = null, results = [], usingTools = false, onRetry, onDelete, onRegenerate, onEdit }: {
   m: Message;
   live?: LiveInfo | null;
@@ -281,7 +291,7 @@ export function MessageView({ m, live = null, results = [], usingTools = false, 
   onRegenerate?: () => void;
   onEdit?: () => void;
 }) {
-  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} usingTools={usingTools} onRetry={onRetry} onDelete={onDelete} />;
+  if (m.role === 'assistant') return <Assistant m={m} live={live} results={results} usingTools={usingTools} onRetry={onRetry} onDelete={onDelete} onEdit={onEdit} />;
   if (m.role === 'summary') return <Summary m={m} onDelete={onDelete} />;
   // A tool result is shown inside the reply that asked for it.
   if (m.role === 'tool') return null;

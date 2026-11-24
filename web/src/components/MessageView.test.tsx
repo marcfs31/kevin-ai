@@ -31,7 +31,7 @@ function assistant(over: Partial<AssistantMessage> = {}): AssistantMessage {
 }
 
 describe('MessageView delete and regenerate', () => {
-  it('offers Edit on a user message only when the page gives it, and calls it', () => {
+  it('offers Edit on a user or assistant message only when the page gives it, and calls it', () => {
     const onEdit = vi.fn();
     const { rerender } = render(
       <I18nProvider locale="en">
@@ -46,13 +46,32 @@ describe('MessageView delete and regenerate', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect(onEdit).toHaveBeenCalledTimes(1);
-    // The assistant's reply has no Edit, even if one were passed.
+    rerender(
+      <I18nProvider locale="en">
+        <MessageView m={assistant()} onDelete={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
     rerender(
       <I18nProvider locale="en">
         <MessageView m={assistant()} onDelete={() => {}} onEdit={onEdit} />
       </I18nProvider>,
     );
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(onEdit).toHaveBeenCalledTimes(2);
+  });
+
+  it('draws Copy answer as a bordered button next to Delete from here', () => {
+    const { container } = render(
+      <I18nProvider locale="en">
+        <MessageView m={assistant()} onDelete={() => {}} onEdit={() => {}} />
+      </I18nProvider>,
+    );
+    const foot = container.querySelector('.msg-foot');
+    expect(foot?.querySelector('button.copy')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy answer' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Delete from here' })).toBeTruthy();
   });
 
   it('calls onDelete from a user or assistant message', () => {

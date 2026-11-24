@@ -551,6 +551,11 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .code-block .copy { position: static; font-size: 0.75rem; min-block-size: 1.75rem; background: var(--paper); border: 1px solid var(--line); }
 .live, .note { color: var(--muted); font-size: 0.8125rem; margin: 0.4rem 0 0; }
 .msg-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-block-start: 0.45rem; }
+/* Copy, Edit, Regenerate: same bordered chrome as Delete (padding and radius come from button). */
+.msg-foot > button:not(.danger),
+.msg-foot .retry > button {
+  border-color: var(--border);
+}
 .stats { color: var(--muted); font-size: 0.75rem; margin: 0; }
 .error { color: var(--danger); }
 .warn { color: var(--warn); }
