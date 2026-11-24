@@ -25,6 +25,8 @@ export function errorText(t: I18n['t'], e: Pick<ApiError, 'status' | 'code' | 's
   if (e.status === 0) return t('error.network');
   if (e.status === 401 || e.status === 403) return t('error.unauthorized');
   if (e.status === 413) return t('error.tooLarge');
+  // Bare 502 from a proxy HTML page has no body: say the upstream is down, not "no details".
+  if (e.status === 502 && !e.serverMessage) return t('error.upstream_unreachable');
   // An error event inside a stream that had started with 200.
   if (e.status >= 200 && e.status < 300) return t('error.stream', { message: e.serverMessage || t('error.noDetail') });
   return t('error.http', { status: String(e.status), message: e.serverMessage || t('error.noDetail') });

@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Server-error header: Effort and Speed labels keep the muted label colour (only the status line is danger-red); Retry matches Start a model / Settings chrome (border, paper background, padding).
+- A bare HTTP 502 (proxy HTML page, no body) says the upstream is unreachable instead of "The server answered 502: no details".
+
 ## [0.3.27] - 2026-11-23
 
 ### Fixed
