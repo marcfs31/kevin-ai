@@ -29,7 +29,7 @@ import { assess } from './lib/request';
 import { estimateWireTokens, liveCount } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
 import {
-  backupKeys, createSaver, deleteBackups, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, truncateFrom, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State, type StatsPane,
+  backupKeys, createSaver, deleteBackups, editableUserIndex, editPromptText, lastSummaryIndex, loadState, STORAGE_KEY, toolResults, truncateFrom, type AssistantMessage, type Conversation, type LoadResult, type Settings, type State, type StatsPane,
   type Message, type UserMessage,
 } from './lib/storage';
 
@@ -391,50 +391,21 @@ function Chat({ state, setState, storage, notice }: {
     forgetServer();
   };
 
-  // Edit: rewind to one of your own messages (without attachments, whose files and images were sent with the text) and put
-  // its text back in the message box. The box is remounted with a new key so it starts with that text. Edit on an
-  // assistant reply walks back to that prompt and does the same, so the answer can be asked again after a change.
+  // Edit: rewind to the prompt for this turn (a user message without attachments, or the assistant
+  // reply that followed it) and put that text in the message box. The box is remounted with a new
+  // key so it starts with that text. The last turn skips the confirm; earlier turns ask first.
   const [edit, setEdit] = useState({ key: 0, text: '' });
   const editFrom = (index: number) => {
     if (busy || !active) return;
-    const target = active.messages[index];
-    if (!target || target.role !== 'user' || target.attachmentNames.length > 0) return;
-    if (index < active.messages.length - 1 && !window.confirm(t('message.confirmEdit'))) return;
-    updateConv(active.id, (c) => ({ ...c, updatedAt: Date.now(), messages: truncateFrom(c.messages, index) }));
+    const userIndex = editableUserIndex(active.messages, index);
+    if (userIndex === null) return;
+    const target = active.messages[userIndex];
+    if (!target || target.role !== 'user') return;
+    const laterUser = active.messages.slice(userIndex + 1).some((m) => m.role === 'user');
+    if (laterUser && !window.confirm(t('message.confirmEdit'))) return;
+    updateConv(active.id, (c) => ({ ...c, updatedAt: Date.now(), messages: truncateFrom(c.messages, userIndex) }));
     forgetServer();
-    setEdit((e) => ({ key: e.key + 1, text: target.typed }));
-  };
-
-  const editFromMessage = (index: number) => {
-    if (busy || !active) return;
-    const target = active.messages[index];
-    if (!target) return;
-    if (target.role === 'user') {
-      editFrom(index);
-      return;
-    }
-    if (target.role !== 'assistant') return;
-    for (let j = index - 1; j >= 0; j--) {
-      const prev = active.messages[j];
-      if (prev?.role === 'user' && prev.attachmentNames.length === 0) {
-        editFrom(j);
-        return;
-      }
-      if (prev?.role === 'user') return; // prompt had files/images: same as no Edit on that turn
-    }
-  };
-
-  const canEditAt = (index: number): boolean => {
-    if (busy || !active) return false;
-    const target = active.messages[index];
-    if (!target) return false;
-    if (target.role === 'user') return target.attachmentNames.length === 0;
-    if (target.role !== 'assistant') return false;
-    for (let j = index - 1; j >= 0; j--) {
-      const prev = active.messages[j];
-      if (prev?.role === 'user') return prev.attachmentNames.length === 0;
-    }
-    return false;
+    setEdit((e) => ({ key: e.key + 1, text: editPromptText(target) }));
   };
 
   const send = async (typed: string, attachments: Attachment[], target: Conversation | null = active) => {
@@ -693,7 +664,7 @@ function Chat({ state, setState, storage, notice }: {
                   onRetry={canRetry && i === messages.length - 1 ? retry : undefined}
                   onRegenerate={canRegenerate && i === messages.length - 1 ? regenerate : undefined}
                   onDelete={!busy && m.role !== 'tool' ? () => deleteFrom(i) : undefined}
-                  onEdit={canEditAt(i) ? () => editFromMessage(i) : undefined}
+                  onEdit={!busy && editableUserIndex(messages, i) !== null ? () => editFrom(i) : undefined}
                 />
               </div>
             ))}

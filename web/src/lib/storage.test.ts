@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, emptyState, loadState, migrate, saveState, truncateFrom, type Message } from './storage';
+import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, editableUserIndex, editPromptText, emptyState, loadState, migrate, saveState, truncateFrom, type Message, type UserMessage } from './storage';
 
 describe('tools and internet settings', () => {
   const load = (settings: unknown) => migrate({ version: 1, settings })?.settings;
@@ -214,5 +214,57 @@ describe('truncateFrom', () => {
   it('leaves the list alone when the index is out of range', () => {
     expect(truncateFrom(msgs, -1)).toBe(msgs);
     expect(truncateFrom(msgs, 99)).toBe(msgs);
+  });
+});
+
+describe('editableUserIndex', () => {
+  const msgs = [
+    { id: 'u1', role: 'user', content: 'a', typed: 'a', attachmentNames: [], createdAt: 0 },
+    { id: 'a1', role: 'assistant', content: 'b', reasoning: '', status: 'done', error: null, stats: null, createdAt: 1 },
+    { id: 't1', role: 'tool', toolCallId: 'c', name: 'f', content: 'r', isError: false, createdAt: 2 },
+    { id: 'a2', role: 'assistant', content: 'c', reasoning: '', status: 'done', error: null, stats: null, createdAt: 3 },
+    { id: 's1', role: 'summary', content: 'earlier', covered: 2, auto: true, createdAt: 4 },
+    { id: 'u2', role: 'user', content: 'kept', typed: 'kept', attachmentNames: [], createdAt: 5 },
+    { id: 'a3', role: 'assistant', content: 'd', reasoning: '', status: 'done', error: null, stats: null, createdAt: 6 },
+    { id: 'uf', role: 'user', content: 'file', typed: 'file', attachmentNames: ['x.txt'], createdAt: 7 },
+    { id: 'af', role: 'assistant', content: 'e', reasoning: '', status: 'done', error: null, stats: null, createdAt: 8 },
+  ] as Message[];
+
+  it('returns the user turn from a user or its assistant reply, walking past tools', () => {
+    expect(editableUserIndex(msgs, 0)).toBe(0);
+    expect(editableUserIndex(msgs, 1)).toBe(0);
+    expect(editableUserIndex(msgs, 3)).toBe(0);
+  });
+
+  it('finds the kept prompt after a summary for the last assistant reply', () => {
+    expect(editableUserIndex(msgs, 5)).toBe(5);
+    expect(editableUserIndex(msgs, 6)).toBe(5);
+  });
+
+  it('stops at a summary so an orphaned reply above it has no editable prompt', () => {
+    const orphan = [
+      { id: 's', role: 'summary', content: 's', covered: 1, auto: true, createdAt: 0 },
+      { id: 'a', role: 'assistant', content: 'x', reasoning: '', status: 'done', error: null, stats: null, createdAt: 1 },
+    ] as Message[];
+    expect(editableUserIndex(orphan, 1)).toBeNull();
+  });
+
+  it('refuses a user with attachments and the reply after it', () => {
+    expect(editableUserIndex(msgs, 7)).toBeNull();
+    expect(editableUserIndex(msgs, 8)).toBeNull();
+  });
+});
+
+describe('editPromptText', () => {
+  it('prefers typed, then falls back to the wire content text', () => {
+    const typed: UserMessage = { id: 'u', role: 'user', content: 'wire', typed: 'typed', attachmentNames: [], createdAt: 0 };
+    expect(editPromptText(typed)).toBe('typed');
+    const emptyTyped: UserMessage = { id: 'u', role: 'user', content: 'from content', typed: '', attachmentNames: [], createdAt: 0 };
+    expect(editPromptText(emptyTyped)).toBe('from content');
+    const parts: UserMessage = {
+      id: 'u', role: 'user', typed: '', attachmentNames: [], createdAt: 0,
+      content: [{ type: 'text', text: 'part text' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,xx' } }],
+    };
+    expect(editPromptText(parts)).toBe('part text');
   });
 });
