@@ -392,7 +392,8 @@ function Chat({ state, setState, storage, notice }: {
   };
 
   // Edit: rewind to one of your own messages (without attachments, whose files and images were sent with the text) and put
-  // its text back in the message box. The box is remounted with a new key so it starts with that text.
+  // its text back in the message box. The box is remounted with a new key so it starts with that text. Edit on an
+  // assistant reply walks back to that prompt and does the same, so the answer can be asked again after a change.
   const [edit, setEdit] = useState({ key: 0, text: '' });
   const editFrom = (index: number) => {
     if (busy || !active) return;
@@ -402,6 +403,38 @@ function Chat({ state, setState, storage, notice }: {
     updateConv(active.id, (c) => ({ ...c, updatedAt: Date.now(), messages: truncateFrom(c.messages, index) }));
     forgetServer();
     setEdit((e) => ({ key: e.key + 1, text: target.typed }));
+  };
+
+  const editFromMessage = (index: number) => {
+    if (busy || !active) return;
+    const target = active.messages[index];
+    if (!target) return;
+    if (target.role === 'user') {
+      editFrom(index);
+      return;
+    }
+    if (target.role !== 'assistant') return;
+    for (let j = index - 1; j >= 0; j--) {
+      const prev = active.messages[j];
+      if (prev?.role === 'user' && prev.attachmentNames.length === 0) {
+        editFrom(j);
+        return;
+      }
+      if (prev?.role === 'user') return; // prompt had files/images: same as no Edit on that turn
+    }
+  };
+
+  const canEditAt = (index: number): boolean => {
+    if (busy || !active) return false;
+    const target = active.messages[index];
+    if (!target) return false;
+    if (target.role === 'user') return target.attachmentNames.length === 0;
+    if (target.role !== 'assistant') return false;
+    for (let j = index - 1; j >= 0; j--) {
+      const prev = active.messages[j];
+      if (prev?.role === 'user') return prev.attachmentNames.length === 0;
+    }
+    return false;
   };
 
   const send = async (typed: string, attachments: Attachment[], target: Conversation | null = active) => {
@@ -660,7 +693,7 @@ function Chat({ state, setState, storage, notice }: {
                   onRetry={canRetry && i === messages.length - 1 ? retry : undefined}
                   onRegenerate={canRegenerate && i === messages.length - 1 ? regenerate : undefined}
                   onDelete={!busy && m.role !== 'tool' ? () => deleteFrom(i) : undefined}
-                  onEdit={!busy && m.role === 'user' && m.attachmentNames.length === 0 ? () => editFrom(i) : undefined}
+                  onEdit={canEditAt(i) ? () => editFromMessage(i) : undefined}
                 />
               </div>
             ))}

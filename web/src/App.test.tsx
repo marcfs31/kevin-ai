@@ -1483,6 +1483,21 @@ describe('App', () => {
     expect(screen.queryByRole('article', { name: 'You' })).toBeNull();
   });
 
+  it('edits from an assistant reply: rewinds to the prompt that produced it', async () => {
+    toolsOff();
+    mockFetch(() => sseResponse([delta('answer'), FINISH, DONE]));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderApp();
+    typeAndSend('prompt text');
+    await screen.findByText('answer');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    fireEvent.click(within(screen.getByRole('article', { name: 'Assistant' })).getByRole('button', { name: 'Edit' }));
+    expect(confirm).toHaveBeenCalled();
+    expect(screen.queryByRole('article', { name: 'Assistant' })).toBeNull();
+    expect(screen.queryByRole('article', { name: 'You' })).toBeNull();
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('prompt text');
+  });
+
   it('offers no Edit on a message that was sent with a file', () => {
     localStorage.setItem(
       STORAGE_KEY,
