@@ -33,7 +33,8 @@ export interface ToolHost {
   external: boolean;
   /** Said to the model once, in the system message: when to reach for the tools. Empty for none. */
   guidance: string;
-  definitions(query: string, unlocked: ReadonlySet<string>): WireTool[];
+  /** `sent` is what the chat's previous request offered, in order (see selectTools' keep). */
+  definitions(query: string, unlocked: ReadonlySet<string>, sent?: readonly string[]): WireTool[];
   /** A request when the user must say yes first; null when the call may run. */
   approval(call: ToolCall): ApprovalRequest | null;
   run(call: ToolCall, signal: AbortSignal, unlock: (names: string[]) => void): Promise<ToolResult>;
@@ -156,8 +157,8 @@ export function createToolHost(i: HostInput): ToolHost {
   return {
     external: enabled.length > 0 || searchOn,
     guidance: [toolGuidance({ search: searchOn, mcp: enabled.length > 0 }), project ? projectGuidance(project) : '', workflow ? workflowGuidance(workflow) : ''].filter(Boolean).join(' '),
-    definitions: (query, unlocked) =>
-      selectTools({ pinned, candidates: enabled, query, budgetTokens: i.config.budgetTokens, maxTools: MAX_TOOLS_PER_STEP, unlocked }).map(toWire),
+    definitions: (query, unlocked, sent) =>
+      selectTools({ pinned, candidates: enabled, query, budgetTokens: i.config.budgetTokens, maxTools: MAX_TOOLS_PER_STEP, unlocked, keep: sent }).map(toWire),
     approval(call) {
       const spec = byName.get(call.name);
       if (!spec || !needsApproval(spec, i.config)) return null;

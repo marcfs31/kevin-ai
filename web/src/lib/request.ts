@@ -27,6 +27,11 @@ function withoutImages(content: string | ContentPart[]): string | ContentPart[] 
   return content.map((p): ContentPart => (p.type === 'image_url' ? { type: 'text', text: NO_IMAGE_NOTE } : p));
 }
 
+function withNote(content: string | ContentPart[], note: string | undefined): string | ContentPart[] {
+  if (!note) return content;
+  return typeof content === 'string' ? `${content}\n\n${note}` : [...content, { type: 'text', text: note }];
+}
+
 const NO_IMAGE_NOTE = '[an image was attached here; the model now chosen cannot read images]';
 
 /** `keepImages` false (a model without vision) swaps every image for a text note, so a chat that
@@ -40,7 +45,7 @@ export function toWire(systemPrompt: string, history: Message[], keepImages = tr
   if (system) out.push({ role: 'system', content: system });
   const kept = history.slice(s + 1);
   for (const [i, m] of kept.entries()) {
-    if (m.role === 'user') out.push({ role: 'user', content: keepImages ? m.content : withoutImages(m.content) });
+    if (m.role === 'user') out.push({ role: 'user', content: withNote(keepImages ? m.content : withoutImages(m.content), m.note) });
     else if (m.role === 'assistant') {
       // Calls go back only with every result: the server refuses a call that nothing answered.
       const results = m.status === 'done' && m.toolCalls?.length ? toolResults(kept, i) : [];

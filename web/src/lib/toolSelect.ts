@@ -1,6 +1,8 @@
 // Which tool definitions to send this step. A small model reads its prompt slowly, so every
 // definition costs seconds: send the built-ins and a budget of the tools that best match what was
 // asked, plus the ones the model unlocked with find_tools. Plain keyword scoring, no model call.
+// The definitions open the prompt, so a list that changes makes the server read the whole chat
+// again: what an earlier step of the chat sent is sent again, in the same order, and only added to.
 import type { ToolSpec } from './toolRegistry';
 
 const STOP = new Set(['the', 'an', 'of', 'to', 'in', 'on', 'and', 'or', 'for', 'with', 'is', 'are', 'this', 'that', 'it', 'me', 'my', 'please', 'can', 'you', 'what', 'how', 'do', 'does', 'be', 'at', 'by', 'from', 'as', 'we']);
@@ -49,26 +51,40 @@ export interface SelectInput {
   maxTools: number;
   /** Names the model asked for with find_tools: offered whatever the budget, up to maxTools. */
   unlocked: ReadonlySet<string>;
+  /** Names the chat's previous request sent, in order: offered first, whatever the budget and query, while they are still on offer. */
+  keep?: readonly string[];
 }
 
 export function selectTools(i: SelectInput): ToolSpec[] {
-  const out = [...i.pinned];
-  const have = new Set(out.map((s) => s.name));
+  const pinned = new Map(i.pinned.map((s) => [s.name, s]));
+  const candidates = new Map(i.candidates.map((s) => [s.name, s]));
+  const out: ToolSpec[] = [];
+  const have = new Set<string>();
   // The budget is for the tools beyond the always-sent ones, so the slider starts at none and only ever adds.
   let used = 0;
-  for (const s of i.candidates) {
-    if (out.length >= i.maxTools) break;
-    if (i.unlocked.has(s.name) && !have.has(s.name)) {
-      out.push(s);
-      have.add(s.name);
+  let extra = 0;
+  const room = () => extra < i.maxTools - i.pinned.length;
+  const add = (s: ToolSpec) => {
+    out.push(s);
+    have.add(s.name);
+    if (!pinned.has(s.name)) {
       used += s.tokens;
+      extra += 1;
     }
+  };
+  for (const name of i.keep ?? []) {
+    const s = pinned.get(name) ?? candidates.get(name);
+    if (s && !have.has(name) && (pinned.has(name) || room())) add(s);
+  }
+  for (const s of i.pinned) if (!have.has(s.name)) add(s);
+  for (const s of i.candidates) {
+    if (!room()) break;
+    if (i.unlocked.has(s.name) && !have.has(s.name)) add(s);
   }
   for (const s of searchSpecs(i.candidates.filter((c) => !have.has(c.name)), i.query, i.candidates.length)) {
-    if (out.length >= i.maxTools) break;
+    if (!room()) break;
     if (used + s.tokens > i.budgetTokens) continue;
-    out.push(s);
-    used += s.tokens;
+    add(s);
   }
   return out;
 }

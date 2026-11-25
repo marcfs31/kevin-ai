@@ -434,7 +434,9 @@ are prompts, not permissions: what the agent may do is still decided by your reg
 With a project chosen, the **Workflow** bar above the composer lists them (at most 20, 12 steps of 200 characters
 each). Start one and the chat shows its checklist; the model is told the steps and ticks each with `workflow_step`
 (done, skipped or blocked, with a short note), which never asks for approval because it only changes the checklist.
-You can tick or untick a step yourself, and stop the workflow. The checklist is saved with the chat.
+You can tick or untick a step yourself, and stop the workflow. The checklist is saved with the chat. The system
+message holds only the steps, not where they stand, so ticking a step does not change the start of the prompt (which
+would make the server read the whole chat again); your next message carries the statuses when they changed.
 
 #### Setting up projects (owner steps)
 
@@ -1015,7 +1017,9 @@ A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the
   after sending.
 - **Tools.** A calculator, the time, web search through SearXNG, MCP servers from a catalog or your own
   config, and the project tools above. The page offers only the tools that fit a token budget, tells a small
-  model when to use them, and asks before anything that changes something; see Settings > Tools.
+  model when to use them, and asks before anything that changes something; see Settings > Tools. A chat keeps
+  the tools it already sent, in the same order, and only adds to them: the definitions open the prompt, so a
+  changed list would make the server read the whole chat again.
 - **Projects.** A project per chat, a git chip with the branch and the changed files, approval cards that
   show the exact command, and workflows: step checklists from `.kevin/workflows.json` that the model ticks off.
 - **Privacy and quality.** No telemetry, no remote resources, a test that fails if the code names a remote

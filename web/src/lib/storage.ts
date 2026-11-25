@@ -47,6 +47,8 @@ export interface UserMessage {
   /** What the user typed, for display. */
   typed: string;
   attachmentNames: string[];
+  /** Sent after the content and not shown: what the page told the model with this message (where the workflow stood). */
+  note?: string;
   createdAt: number;
 }
 
@@ -288,6 +290,7 @@ function message(v: unknown): Message | null {
       content: c,
       typed: str(o.typed, typeof c === 'string' ? c : ''),
       attachmentNames: Array.isArray(o.attachmentNames) ? o.attachmentNames.filter((n): n is string => typeof n === 'string') : [],
+      ...(typeof o.note === 'string' && o.note ? { note: o.note } : {}),
       createdAt: time(o.createdAt),
     };
   }

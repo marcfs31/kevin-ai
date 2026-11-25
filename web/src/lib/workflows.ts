@@ -102,12 +102,26 @@ export const isFinished = (w: Workflow): boolean => w.steps.every((s) => s.statu
 
 const line = (s: WorkflowStep, i: number): string => `${i + 1}. [${s.status}] ${s.text}${s.note ? ` (${s.note})` : ''}`;
 
-/** The checklist and how to use it, for the system message: short, because every word is prompt the server reads. */
+/** The steps and how to use them, for the system message: short, because every word is prompt the server reads.
+ * No statuses: the system message opens the prompt, so a status there would make every tick re-feed the whole chat. */
 export function workflowGuidance(w: Workflow): string {
   return [
-    `You are following the workflow "${w.title}". Steps: ${w.steps.map(line).join(' ')}`,
+    `You are following the workflow "${w.title}". Steps: ${w.steps.map((s, i) => `${i + 1}. ${s.text}`).join(' ')}`,
     'Do the steps in order. After each one call workflow_step with its number, the status (done, skipped or blocked) and a short note. Do not mark a step done before it is. When a step is blocked, say why and stop.',
   ].join(' ');
+}
+
+/** Where the steps stand, sent with a user message when it changed since the model was last told (see workflowNote). */
+export function workflowStatus(w: Workflow): string {
+  return `Workflow "${w.title}" now stands: ${w.steps.map(line).join(' ')}`;
+}
+
+/** The status line to send with a new user message: null when the chat already says it, or when nothing was resolved yet. */
+export function workflowNote(w: Workflow | null, earlier: readonly (string | undefined)[]): string | null {
+  if (!w) return null;
+  const now = workflowStatus(w);
+  const told = [...earlier].reverse().find((n) => n?.startsWith('Workflow "')) ?? workflowStatus(startWorkflow({ id: w.id, title: w.title, steps: w.steps.map((s) => s.text) }));
+  return now === told ? null : now;
 }
 
 /** What workflow_step answers: the next step to do, or that all are resolved. */

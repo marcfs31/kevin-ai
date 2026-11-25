@@ -18,14 +18,14 @@ import { ProjectBar } from './components/ProjectBar';
 import { WorkflowBar } from './components/WorkflowBar';
 import { useWide } from './lib/viewport';
 import type { ToolSpec } from './lib/toolRegistry';
-import { setStep, startWorkflow, type Workflow } from './lib/workflows';
+import { setStep, startWorkflow, workflowNote, type Workflow } from './lib/workflows';
 import { buildUserContent, newId, type Attachment } from './lib/attachments';
 import { applyCompaction, planCompaction, projectCompaction, shouldCompact, summaryRequest, type Plan } from './lib/compact';
 import { runAgent, type LiveInfo } from './lib/agent';
 import { loadMcpSpecs, type McpLoad } from './lib/mcpLoad';
 import { PROJECT_SERVER, createToolHost, type ApprovalRequest } from './lib/toolHost';
 import { DEFAULT_EFFORT, DEFAULT_SPEED, SPEED_EFFORT, resolveModes, type Effort, type Speed } from './lib/modes';
-import { assess } from './lib/request';
+import { assess, toWire } from './lib/request';
 import { estimateWireTokens, liveCount } from './lib/tokens';
 import { isNearBottom } from './lib/scroll';
 import {
@@ -412,12 +412,14 @@ function Chat({ state, setState, storage, notice }: {
     if (controllerRef.current) return;
     stickRef.current = true;
     const now = Date.now();
+    const note = workflowNote(target ? target.workflow : draftWorkflow, (target?.messages ?? []).map((m) => (m.role === 'user' ? m.note : undefined)));
     const user: UserMessage = {
       id: newId(),
       role: 'user',
       content: buildUserContent(typed, attachments, info?.vision === 'ok'),
       typed,
       attachmentNames: attachments.map((a) => a.name),
+      ...(note ? { note } : {}),
       createdAt: now,
     };
     let conv = target;
@@ -429,7 +431,7 @@ function Chat({ state, setState, storage, notice }: {
     const convId = conv.id;
     updateConv(convId, (c) => ({ ...c, title: c.title || titleFrom(typed, attachments), updatedAt: now, messages: [...c.messages, user] }));
 
-    await startRun(convId, conv.messages, [...conv.messages, user], estimateWireTokens([{ role: 'user', content: user.content }], info));
+    await startRun(convId, conv.messages, [...conv.messages, user], estimateWireTokens(toWire('', [user]), info));
   };
 
   // Steering a reply: the message typed while it streams stops it, keeps what was already written
