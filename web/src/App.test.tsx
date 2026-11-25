@@ -1491,11 +1491,55 @@ describe('App', () => {
     typeAndSend('prompt text');
     await screen.findByText('answer');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy());
+    // A draft already in the box must be replaced by the prior prompt.
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Give me the full fixed code' } });
     fireEvent.click(within(screen.getByRole('article', { name: 'Assistant' })).getByRole('button', { name: 'Edit' }));
-    expect(confirm).toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled(); // last turn: no confirm
     expect(screen.queryByRole('article', { name: 'Assistant' })).toBeNull();
     expect(screen.queryByRole('article', { name: 'You' })).toBeNull();
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('prompt text');
+  });
+
+  it('edits the last assistant after a summary: loads the kept user prompt', () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1, activeId: 'c', settings: { tools: false },
+        conversations: [{ id: 'c', title: 'x', messages: [
+          { id: 'u0', role: 'user', content: 'old', typed: 'old', attachmentNames: [], createdAt: 1 },
+          { id: 'a0', role: 'assistant', content: 'old answer', reasoning: '', status: 'done', error: null, stats: null, createdAt: 2 },
+          { id: 's1', role: 'summary', content: 'earlier turns', covered: 2, auto: true, createdAt: 3 },
+          { id: 'u1', role: 'user', content: 'kept prompt', typed: 'kept prompt', attachmentNames: [], createdAt: 4 },
+          { id: 'a1', role: 'assistant', content: 'latest answer', reasoning: '', status: 'done', error: null, stats: null, createdAt: 5 },
+        ] }],
+      }),
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mockFetch(() => sseResponse([DONE]));
+    renderApp();
+    const assistants = screen.getAllByRole('article', { name: 'Assistant' });
+    fireEvent.click(within(assistants[assistants.length - 1] as HTMLElement).getByRole('button', { name: 'Edit' }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByText('latest answer')).toBeNull();
+    expect(screen.getByText('old')).toBeTruthy(); // compacted history before the summary stays
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('kept prompt');
+  });
+
+  it('edits when typed is empty: falls back to the wire content', () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1, activeId: 'c', settings: { tools: false },
+        conversations: [{ id: 'c', title: 'x', messages: [
+          { id: 'u1', role: 'user', content: 'wire only prompt', typed: '', attachmentNames: [], createdAt: 1 },
+          { id: 'a1', role: 'assistant', content: 'reply', reasoning: '', status: 'done', error: null, stats: null, createdAt: 2 },
+        ] }],
+      }),
+    );
+    mockFetch(() => sseResponse([DONE]));
+    renderApp();
+    fireEvent.click(within(screen.getByRole('article', { name: 'Assistant' })).getByRole('button', { name: 'Edit' }));
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('wire only prompt');
   });
 
   it('offers no Edit on a message that was sent with a file', () => {

@@ -1,7 +1,7 @@
 // Conversations and settings, kept only in this browser's localStorage.
 // Versioned schema: a saved document missing a newer field loads with its default.
 import type { ContentPart } from './api';
-import { IMAGE_PRESETS, type ImagePreset } from './attachments';
+import { contentText, IMAGE_PRESETS, type ImagePreset } from './attachments';
 import { DEFAULT_EFFORT, DEFAULT_SPEED, isEffort, isSpeed, type Effort, type Speed } from './modes';
 import { obj } from './sse';
 import { normalizeWorkflow, type Workflow } from './workflows';
@@ -111,6 +111,25 @@ export function lastSummaryIndex(messages: Message[]): number {
 export function truncateFrom(messages: Message[], index: number): Message[] {
   if (index < 0 || index >= messages.length) return messages;
   return messages.slice(0, index);
+}
+
+/** Index of the user prompt for Edit at `from` (that user message, or the reply that
+ * followed it). Walks back past assistant and tool steps; stops at a summary. Null when
+ * there is no editable prompt (attachments, or nothing before a summary). */
+export function editableUserIndex(messages: Message[], from: number): number | null {
+  for (let i = from; i >= 0; i--) {
+    const m = messages[i];
+    if (!m) continue;
+    if (m.role === 'user') return m.attachmentNames.length === 0 ? i : null;
+    if (m.role === 'assistant' || m.role === 'tool') continue;
+    return null;
+  }
+  return null;
+}
+
+/** Text put back in the composer for Edit: what was typed, or the wire text if typed was empty. */
+export function editPromptText(m: UserMessage): string {
+  return m.typed || contentText(m.content);
 }
 
 export interface Conversation {
