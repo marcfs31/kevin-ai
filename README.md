@@ -935,8 +935,9 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 
 An OpenAI-compatible HTTP endpoint, so other programs (editors, chat front ends, scripts) can
 use the model. One reply at a time: chat requests wait their turn, in order. Each connection is
-read on its own thread (16 at most), so `/health`, `/v1/models` and refusals answer at once even
-while a reply is being generated, and a slow client never holds the model.
+read on its own thread, so `/health`, `/v1/models` and refusals answer at once even while a reply
+is being generated, and a slow client never holds the model. The head of a request has ten seconds
+to arrive; SIGINT/SIGTERM stop without waiting out slow clients.
 
 ```
 bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
