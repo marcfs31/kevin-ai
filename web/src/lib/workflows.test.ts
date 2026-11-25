@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_STEPS, fileText, isFinished, normalizeWorkflow, parseWorkflows, setStep, startWorkflow, stepResult, workflowGuidance } from './workflows';
+import { MAX_STEPS, fileText, isFinished, normalizeWorkflow, parseWorkflows, setStep, startWorkflow, stepResult, workflowGuidance, workflowNote, workflowStatus } from './workflows';
 
 const read = (body: string) => `.kevin/workflows.json lines 1-9 of 9\n${body}`;
 const doc = (workflows: unknown) => read(JSON.stringify({ workflows }));
@@ -58,17 +58,33 @@ describe('a started workflow', () => {
   });
 
   it('tells the model the checklist and what to do, and answers with the next step', () => {
-    const g = workflowGuidance(setStep(w, 1, 'done', 'found it') as typeof w);
+    const ticked = setStep(w, 1, 'done', 'found it') as typeof w;
+    const g = workflowGuidance(ticked);
     expect(g).toContain('"X"');
-    expect(g).toContain('1. [done] one (found it)');
-    expect(g).toContain('2. [todo] two');
+    expect(g).toContain('1. one 2. two');
     expect(g).toContain('workflow_step');
+    expect(g).toBe(workflowGuidance(w));              // a tick leaves the system message, and so the prompt's start, as it was
+    expect(workflowStatus(ticked)).toContain('1. [done] one (found it) 2. [todo] two');
     const after = setStep(w, 1, 'done') as typeof w;
     expect(stepResult(after, 1)).toBe('step 1 is now done. Next: 2. [todo] two');
     let all = after;
     all = setStep(all, 2, 'done') ?? all;
     all = setStep(all, 3, 'done') ?? all;
     expect(stepResult(all, 3)).toContain('All steps are resolved');
+  });
+});
+
+describe('workflowNote', () => {
+  const w = startWorkflow({ id: 'x', title: 'X', steps: ['one', 'two'] });
+  it('says nothing until a step is resolved, then once per change', () => {
+    expect(workflowNote(null, [])).toBeNull();
+    expect(workflowNote(w, [])).toBeNull();
+    const ticked = setStep(w, 1, 'done') as typeof w;
+    const note = workflowNote(ticked, [undefined]);
+    expect(note).toBe(workflowStatus(ticked));
+    expect(workflowNote(ticked, [note ?? '', undefined])).toBeNull();
+    const back = setStep(ticked, 1, 'todo') as typeof w;
+    expect(workflowNote(back, [note ?? ''])).toBe(workflowStatus(back));
   });
 });
 

@@ -73,9 +73,35 @@ describe('selectTools', () => {
     expect(selectTools({ ...base, query: 'tell me a joke' }).map((s) => s.name)).toEqual(['calculator']);
   });
 
+  it('sends again what the chat sent before, in the same order, whatever the query and budget, and only adds', () => {
+    const before = selectTools(base).map((s) => s.name);
+    const later = selectTools({ ...base, query: 'what is the git status', budgetTokens: 1000, keep: before }).map((s) => s.name);
+    expect(later.slice(0, before.length)).toEqual(before);
+    expect(later).toContain('git__git_status');
+    expect(selectTools({ ...base, query: 'tell me a joke', budgetTokens: 0, keep: before }).map((s) => s.name)).toEqual(before);
+  });
+
+  it('keeps an unlocked tool on the next message, puts a new pinned tool after the kept ones, and drops what is no longer on offer', () => {
+    const first = selectTools({ ...base, query: 'hello', unlocked: new Set(['git__git_status']) }).map((s) => s.name);
+    expect(selectTools({ ...base, query: 'hello', keep: first }).map((s) => s.name)).toEqual(first);
+    const pinned = [...base.pinned, spec('workflow_step', 'tick', 30)];
+    expect(selectTools({ ...base, pinned, query: 'hello', keep: first }).map((s) => s.name)).toEqual([...first, 'workflow_step']);
+    const fewer = FILES.filter((s) => s.name !== 'git__git_status');
+    expect(selectTools({ ...base, candidates: fewer, query: 'hello', keep: first }).map((s) => s.name)).toEqual(['calculator']);
+  });
+
+  it('never keeps more than maxTools, and always keeps the pinned tools', () => {
+    const many = selectTools({ ...base, query: 'file time git directory', budgetTokens: 5000 }).map((s) => s.name);
+    const out = selectTools({ ...base, maxTools: 3, keep: many }).map((s) => s.name);
+    expect(out).toHaveLength(3);
+    expect(out[0]).toBe('calculator');
+    expect(out.slice(1)).toEqual(many.slice(1, 3));
+  });
+
   it('does not offer a tool twice', () => {
-    const out = selectTools({ ...base, unlocked: new Set(['fs__read_file']) }).map((s) => s.name);
+    const out = selectTools({ ...base, unlocked: new Set(['fs__read_file']), keep: ['calculator', 'fs__read_file', 'fs__read_file'] }).map((s) => s.name);
     expect(out.filter((n) => n === 'fs__read_file')).toHaveLength(1);
+    expect(out.filter((n) => n === 'calculator')).toHaveLength(1);
   });
 });
 

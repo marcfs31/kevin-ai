@@ -290,7 +290,7 @@ describe('createToolHost with a workflow', () => {
     const { h } = host(wf);
     expect(h.definitions('x', new Set()).map((d) => d.function.name)).toContain('workflow_step');
     expect(h.guidance).toContain('"Ship it"');
-    expect(h.guidance).toContain('1. [todo] Run the tests');
+    expect(h.guidance).toContain('1. Run the tests 2. Commit 3. Push');
     expect(h.approval(call('workflow_step', { step: 1, status: 'done' }))).toBeNull();
     const none = host(null).h;
     expect(none.definitions('x', new Set()).map((d) => d.function.name)).not.toContain('workflow_step');

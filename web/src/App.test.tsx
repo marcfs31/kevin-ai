@@ -330,13 +330,21 @@ describe('App', () => {
       expect(screen.queryByRole('alertdialog')).toBeNull();                 // ticking a step never asks
       const system = String((bodyOf(inner, 0).messages as { content: string }[])[0]?.content);
       expect(system).toContain('You are following the workflow "Ship it"');
-      expect(system).toContain('1. [todo] Run the tests');
+      expect(system).toContain('1. Run the tests');
+      expect(system).not.toContain('[todo]');
       const second = bodyOf(inner, 1).messages as { role: string; content: string }[];
       expect(second.find((m) => m.role === 'tool')?.content).toBe('step 1 is now done. Next: 2. [todo] Commit');
       await act(async () => undefined);
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}').conversations[0].workflow;
       expect(saved.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'todo']);
       expect(saved.steps[0].note).toBe('tests pass');
+      // The next message: the system message is unchanged and the new status rides with the user's message.
+      typeAndSend('and now?');
+      await waitFor(() => expect(bodyOf(inner, 2)).toBeTruthy());
+      const third = bodyOf(inner, 2).messages as { role: string; content: string }[];
+      expect(third[0]?.content).toBe(system);
+      expect(third.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['ship it', 'and now?\n\nWorkflow "Ship it" now stands: 1. [done] Run the tests (tests pass) 2. [todo] Commit']);
+      expect(bodyOf(inner, 2).tools).toEqual(bodyOf(inner, 1).tools);
     });
 
     it('works in the chosen project: shows its git state, tells the model, and always sends its id', async () => {

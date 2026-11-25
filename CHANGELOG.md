@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- The web chat keeps its prompt prefix stable, so the server can reuse its state instead of re-reading the whole chat. A chat sends the tool definitions its previous reply went out with again, in the same order, and only adds to them (`selectTools`' `keep`); a tool unlocked with `find_tools` stays on the next message, and the budget limits only what is added. The workflow guidance in the system message lists the steps without their statuses; a user message sent after a status changed carries the new checklist in `UserMessage.note`, appended on the wire and saved with the chat.
+
 ## [1.0.2] - 2026-11-25
 
 ### Added

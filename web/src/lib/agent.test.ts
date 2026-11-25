@@ -349,6 +349,31 @@ describe('runAgent with a tool host', () => {
     expect(seen[1]).toEqual({ query: 'what is 6*7?', unlocked: ['unlocked_tool'] });
   });
 
+  it('gives the host the tool names the chat last went out with: the earlier reply first, then the step before', async () => {
+    const sent: (readonly string[] | undefined)[] = [];
+    const names = [['write'], ['write', 'unlocked_tool']];
+    const { h } = host({
+      approval: () => null,
+      definitions: (_q, _u, s) => {
+        sent.push(s);
+        return (names[sent.length - 1] ?? ['write']).map((name) => ({ type: 'function' as const, function: { name, description: 'w', parameters: {} } }));
+      },
+    });
+    const earlier: AssistantMessage = {
+      id: 'a0', role: 'assistant', content: 'hi', reasoning: '', status: 'done', error: null, createdAt: 0,
+      stats: { ttftMs: 1, tokensPerSecond: 1, promptTokens: 1, cachedTokens: null, completionTokens: 1, promptEstimate: 1, completionEstimate: 1, tools: { names: ['old_tool', 'write'], tokens: 9 } },
+    };
+    const up = upstream([call('c1', 'find', '{"query":"x"}'), say('done')]);
+    await runAgent({
+      history: [user, earlier, { ...user, id: 'u2' }], settings, model: null, info: null, signal: new AbortController().signal,
+      stream: up.stream, onLive: () => undefined, onCommit: () => undefined, tools: h,
+    });
+    expect(sent).toEqual([['old_tool', 'write'], ['write']]);
+    const fresh: (readonly string[] | undefined)[] = [];
+    await go({ ...h, definitions: (_q, _u, s) => (fresh.push(s), []) }, [say('done')]);
+    expect(fresh).toEqual([[]]);
+  });
+
   it('tells the model to treat tool results as data, after the user\'s own system prompt, only when outside tools are in play', async () => {
     const withUser = await go(host().h, [say('x')], { settings: { ...settings, systemPrompt: 'Be brief.' } });
     expect(withUser.requests[0]?.messages[0]).toMatchObject({ role: 'system', content: `Be brief.\n\n${TOOL_NOTE}` });

@@ -87,6 +87,15 @@ function warmTokens(history: Message[], key: string, sig: string): number {
   return 0;
 }
 
+/** The tool names the chat's latest reply went out with: the next request offers them again, so its prompt starts the same. */
+function lastSent(history: Message[]): string[] {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m?.role === 'assistant' && m.stats) return m.stats.tools?.names ?? [];
+  }
+  return [];
+}
+
 /** Streams one reply into `message`, adding the tool calls the model asked for. Never throws. */
 async function streamReply(o: AgentOptions, wire: ReturnType<typeof toWire>, message: AssistantMessage, defs: WireTool[] | undefined, last: boolean, history: Message[]): Promise<void> {
   const promptEstimate = estimateWireTokens(wire, o.info);
@@ -189,7 +198,7 @@ export async function runAgent(o: AgentOptions): Promise<void> {
     }
     const last = useTools && step >= cap;
     const lastUser = [...history].reverse().find((m) => m.role === 'user');
-    const defs = useTools ? host.definitions(lastUser?.role === 'user' ? contentText(lastUser.content) : '', unlocked) : undefined;
+    const defs = useTools ? host.definitions(lastUser?.role === 'user' ? contentText(lastUser.content) : '', unlocked, lastSent(history)) : undefined;
     await streamReply(o, toWire(system, history, o.info?.vision === 'ok'), message, defs, last, history);
     const calls = useTools && message.status === 'done' ? (message.toolCalls ?? []) : [];
     if (!calls.length) {

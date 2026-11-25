@@ -50,6 +50,16 @@ describe('the stats pane setting', () => {
   });
 });
 
+describe('the note a user message was sent with', () => {
+  it('is read back when it is a non-empty string, and left out otherwise', () => {
+    const u = (id: string, note: unknown) => ({ id, role: 'user', content: 'hi', typed: 'hi', attachmentNames: [], note, createdAt: 1 });
+    const state = migrate({ version: 1, conversations: [{ id: 'a', messages: [u('1', 'Workflow "X" now stands: 1. [done] a'), u('2', ''), u('3', 7), u('4', undefined)] }] });
+    const notes = state?.conversations[0]?.messages.map((m) => (m.role === 'user' ? m.note : 'x'));
+    expect(notes).toEqual(['Workflow "X" now stands: 1. [done] a', undefined, undefined, undefined]);
+    expect(state?.conversations[0]?.messages.filter((m) => 'note' in m)).toHaveLength(1);
+  });
+});
+
 describe('project host per conversation', () => {
   it('is the model server unless the chat says it is on this Mac', () => {
     const state = migrate({
