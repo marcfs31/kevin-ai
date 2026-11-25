@@ -24,6 +24,20 @@ describe('ServerPanel', () => {
     expect(screen.getByText(/token dump/)).toBeTruthy();
   });
 
+  it('groups serve buttons under stock and uncensored headings', () => {
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.getByText('Stock models')).toBeTruthy();
+    expect(screen.getByText('Uncensored')).toBeTruthy();
+    const groups = document.querySelectorAll('.serve-model-groups .model-picker-group');
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.querySelectorAll('.serve-actions button')).toHaveLength(8);
+    expect(groups[1]?.querySelectorAll('.serve-actions button')).toHaveLength(7);
+  });
+
   it('offers the uncensored Qwen and marks only the matching button as running', () => {
     render(
       <I18nProvider locale="en">

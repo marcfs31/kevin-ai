@@ -78,6 +78,8 @@ export const en = {
   'picker.startNone': 'Start a model',
   'picker.title': 'Model and context',
   'picker.model': 'Model',
+  'picker.modelGroupStock': 'Stock models',
+  'picker.modelGroupUncensored': 'Uncensored',
   'picker.ctx': 'Context window',
   'picker.ctxAuto': 'Auto (server default)',
   'picker.ctxSize': '{label}',
