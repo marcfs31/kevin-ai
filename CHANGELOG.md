@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-11-25
+
+### Added
+- VitePress architecture docs under `docs-site/` (overview, Vite vs chat_server, APIs, models, Mac runbook) with Mermaid; GitDiagram link and exported map page for marcfs31/kevin-ai. Pointers from `README.md` / `README.es.md`.
+
 ## [1.0.0] - 2026-11-25
 
 The release after 0.3.31. Existing installs keep the five models they already start. Nothing in the page or the engine flags changes for those. The new ids need their GGUF files (`scripts/download-model.sh --model <directory>`) and, for Spark and LFM3, llama.cpp builds at `~/opt/llama.cpp-b10828` and `~/opt/llama.cpp-b11938`.
