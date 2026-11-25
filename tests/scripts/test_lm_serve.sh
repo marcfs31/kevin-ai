@@ -390,6 +390,25 @@ PYEOF
 fi
 stop
 
+# a reset whose client left the queue still purges: the next identical chat re-feeds
+start
+long='{"messages":[{"role":"user","content":"hi"}],"max_tokens":4000,"temperature":1,"stream":true}'
+curl -s -N -o /dev/null -d "$long" "$url/v1/chat/completions" &
+long_pid=$!
+sleep 0.4
+curl -s -o /dev/null -X POST -d '{}' "$url/v1/chat/reset" &
+reset_pid=$!
+sleep 0.3
+kill "$reset_pid" 2> /dev/null; wait "$reset_pid" 2> /dev/null
+wait "$long_pid"
+for _ in $(seq 50); do grep -q "chat/reset" "$tmp/serve.err" && break; sleep 0.1; done
+check 'grep -q "POST /v1/chat/reset 200" "$tmp/serve.err" && ! grep -q "chat/reset 499" "$tmp/serve.err"' \
+      "a reset from a gone client did not run: $(cat "$tmp/serve.err")"
+chat '{"messages":[{"role":"user","content":"hi"}],"max_tokens":2,"temperature":0}' > /dev/null
+check 'tail -1 "$tmp/serve.err" | grep -q "fed 1[0-9] at"' \
+      "the chat after the dropped-client reset reused state, so the purge did not happen: $(tail -1 "$tmp/serve.err")"
+stop
+
 # SIGTERM does not wait out the request deadlines of stalled or idle clients
 start
 python3 -I - "${url#http://}" > "$tmp/stall" 2>&1 <<'PYEOF' &

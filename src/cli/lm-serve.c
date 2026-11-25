@@ -1173,18 +1173,20 @@ static int answer_quick(Server *s, Job *j, int timeout_s)
 static void answer_model(Server *s, Job *j)
 {
     Conn *c = &j->c;
-    /* the client left while the request waited in the queue: nothing to answer, and the
-     * prompt (and any image encoding) is not work the live requests should wait for */
-    if (client_gone(c)) {
-        c->broken = 1;
-        j->log.status = 499;
-        return;
-    }
     if (!strcmp(c->path, "/v1/chat/reset")) {
+        /* the purge is the point, so it happens even for a client that already left:
+         * deleting a chat and closing the page must still clear the cached conversation */
         lm_chat_purge(s->chat);
         static const char body[] = "{\"status\":\"ok\"}";
         respond(c, j->log.status = 200, NULL, body, sizeof body - 1);
     } else {
+        /* a client that left while its chat request waited in the queue gets no answer, and
+         * the prompt (and any image encoding) is not work the live requests should wait for */
+        if (client_gone(c)) {
+            c->broken = 1;
+            j->log.status = 499;
+            return;
+        }
         s->requests++;
         chat_completions(s, c, &j->log);
     }
