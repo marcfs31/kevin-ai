@@ -6,7 +6,7 @@ Creado por **Marc Fors i Soler**.
 
 Un asistente de IA privado y local para una máquina pequeña, en tres partes que trabajan juntas:
 
-- **El motor**: un motor de inferencia en C99 para CPU, para modelos de lenguaje pequeños, escrito desde cero (GGUF de Qwen3.5-4B, Gemma 4 E4B y Qwen2.5-Coder). Sin GPU, sin Python en tiempo de ejecución. `bin/lm-run`, `bin/lm-chat`, `bin/lm-serve` (un endpoint HTTP compatible con OpenAI) y `bin/lm-quant`. El chat arranca cinco modelos en total, dos de ellos con llama.cpp: ver [Los cinco modelos](#los-cinco-modelos).
+- **El motor**: un motor de inferencia en C99 para CPU, para modelos de lenguaje pequeños, escrito desde cero (GGUF de Qwen3.5-4B, Gemma 4 E4B y Qwen2.5-Coder). Sin GPU, sin Python en tiempo de ejecución. `bin/lm-run`, `bin/lm-chat`, `bin/lm-serve` (un endpoint HTTP compatible con OpenAI) y `bin/lm-quant`. El chat arranca quince modelos: los cinco originales y diez GGUF con llama.cpp. Ver [Los cinco modelos](#los-cinco-modelos) y [Diez GGUF más](#diez-gguf-más).
 - **El chat web** (`web/`, la app se llama Kevin AI): una página React que habla con `lm-serve`, guarda las conversaciones solo en el navegador, lee archivos e imágenes, y deja que el modelo use herramientas.
 - **El servicio de herramientas** (`tools/chat_tools.py`): ejecuta servidores MCP, busca en la web a través de un SearXNG autoalojado, y da al modelo un **proyecto** en el que trabajar: archivos, git, comandos en lista blanca y pull requests de GitHub, cada uno detrás de reglas que fija el propietario y el agente no puede cambiar.
 
@@ -109,6 +109,25 @@ a la vez; al arrancar uno se para el otro. El camino seguro más rápido es ese 
 | `gemma` | `lm-serve` | 3,7 s |
 | `gemma-uncensored` | `llama-server` | 7,0 s |
 | `whiterabbitneo` | `llama-server` | 8,2 s |
+
+## Diez GGUF más
+
+Se arrancan igual (`--id` o el selector del chat). El loader GGUF nativo sigue siendo solo qwen2. Gemma 4 E2B y Nemotron 3.5 Bolt son gemma4, el mismo `llama-server` que Gemma 4 E4B Uncensored (`~/opt/llama.cpp-v1.0.0`). Granite 4.2 usa la arquitectura granite en ese build. Spark es spark2_5 y necesita llama.cpp b10828 o posterior (`~/opt/llama.cpp-b10828`). LFM3 es lfm3 y necesita llama.cpp b11938 o posterior (`~/opt/llama.cpp-b11938`). El Qwen es el GGUF 2B abliterado, no el Qwen3.5-4B instalado. El proyector se pasa solo cuando la fila tiene uno, y entonces el modelo ve imágenes. `scripts/download-model.sh --model <directorio>` baja los archivos fijados. El mapa está en `src/chat/lm_catalog.c`.
+
+| nombre en el chat | `--id` | directorio y GGUF | build | imágenes |
+|---|---|---|---|---|
+| Gemma 4 E2B | `gemma-e2b` | `gemma-4-e2b/gemma-4-E2B-it-Q6_K.gguf` + `mmproj-F16.gguf` | v1.0.0 | sí |
+| Nemotron 3.5 Bolt E4B | `nemotron` | `nemotron-3.5-bolt-e4b/NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf` | v1.0.0 | no hay proyector en ese repo |
+| Granite 4.2 3B | `granite` | `granite-4.2-3b/granite-4.2-3b-Q8_0.gguf` | v1.0.0 | no |
+| Spark X2.6 4B | `spark` | `spark-x2.6-4b/Spark-X2.6-4B-Q4_K_M.gguf` | b10828 | no |
+| LFM3-VL 2B | `lfm3` | `lfm3-vl-2b/LFM3-VL-2B-Q8_0.gguf` + `mmproj-LFM3-VL-2B-F16.gguf` | b11938 | sí |
+| Gemma 4 E2B Heretic | `gemma-e2b-heretic` | `gemma-4-e2b-heretic/gemma-4-E2B-it-ultra-uncensored-heretic-Q6_K.gguf` + `gemma-4-E2B-it-mmproj-BF16.gguf` | v1.0.0 | sí |
+| Spark X2.6 4B Heretic | `spark-heretic` | `spark-x2.6-4b-heretic/Spark-X2.6-4B-heretic.Q6_K.gguf` | b10828 | no |
+| Granite 4.2 3B Heretic | `granite-heretic` | `granite-4.2-3b-heretic/granite-4.2-3b-Heretic.Q8_0.gguf` | v1.0.0 | no |
+| Qwen3.5-2B Abliterated | `qwen2b` | `qwen3.5-2b-abliterated/Huihui-Qwen3.5-2B-abliterated.Q8_0.gguf` + `Huihui-Qwen3.5-2B-abliterated.mmproj-f16.gguf` | v1.0.0 | sí |
+| LFM3-VL 2B Abliterated | `lfm3-abliterated` | `lfm3-vl-2b-abliterated/LFM3-VL-2B-Surgical-Abliterated.Q8_0.gguf` + `LFM3-VL-2B-Surgical-Abliterated.mmproj-f16.gguf` | b11938 | sí |
+
+En el selector el contexto es 32.768, salvo Granite (16.384, un Q8 denso). llama-server arranca en 8.192 si no se elige un preset. Los cinco con menos filtros de seguridad van marcados.
 
 Las tasas sostenidas al generar están en [Estado](#estado) y en las secciones GGUF de abajo (Gemma Uncensored
 unos **4,3–4,9 tok/s** es el camino de respuesta más rápido). Comparación de tiempo de Effort / Speed del chat:
@@ -685,7 +704,7 @@ Una UI de chat Vite + React para `lm-serve`. El comportamiento completo, el serv
   [web/README.md](web/README.md)),
   una barra de contexto con compactación automática, retry, rewind (Delete from here, o Edit para devolver uno de tus mensajes a la caja, cambiarlo y enviarlo otra vez), estadísticas de tokens, Markdown con tablas, código y LaTeX, inglés y español. Las conversaciones viven solo en el navegador.
 - **Panel de stats.** A la derecha del chat: la ventana de contexto como una franja con leyenda (prompt, tools, última respuesta, libre), los totales del chat, y un visor de tools que agrupa las tools enviadas con la última petición (integradas, luego un grupo por servidor) como chips. Ocúltalo para un chat más ancho y tráelo de vuelta con el botón "Show chat stats" junto a Compact chat; en un teléfono se abre en lugar del chat. La elección se guarda.
-- **Modelos.** Settings y el encabezado arrancan cualquiera de los cinco modelos (Qwen3.5-4B, Qwen3.5-4B Uncensored, Gemma 4 E4B, WhiteRabbitNeo 2.5 7B, Gemma 4 E4B Uncensored; ver [Los cinco modelos](#los-cinco-modelos)) con un tamaño de contexto que cabe en la máquina; cada chat recuerda qué modelo usa.
+- **Modelos.** Settings y el encabezado arrancan cualquiera de los quince modelos (los cinco originales, ver [Los cinco modelos](#los-cinco-modelos), y [diez GGUF más](#diez-gguf-más)) con un tamaño de contexto que cabe en la máquina; cada chat recuerda qué modelo usa.
 - **Archivos.** Se pueden adjuntar texto, código, PDFs e imágenes (cuando el modelo puede ver), con vista previa antes y después de enviar.
 - **Herramientas.** Una calculadora, la hora, búsqueda web a través de SearXNG, servidores MCP desde un catálogo o tu propia config, y las herramientas de proyecto de arriba. La página solo ofrece las tools que caben en un presupuesto de tokens, le dice a un modelo pequeño cuándo usarlas, y pregunta antes de cualquier cosa que cambie algo; ver Settings > Tools.
 - **Proyectos.** Un proyecto por chat, un chip de git con la rama y los archivos cambiados, tarjetas de aprobación que muestran el comando exacto, y workflows: checklists de pasos desde `.kevin/workflows.json` que el modelo va marcando.

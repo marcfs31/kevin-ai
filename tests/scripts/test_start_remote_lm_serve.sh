@@ -25,13 +25,13 @@ check '[ "$got" = "$want" ]' "quoted arguments did not round-trip: [$got]"
 check '! grep -q "remote_cmd=\${remote_cmd" "$script"' "the script still splices with a pattern substitution"
 
 out=$(bash "$script" 2>&1 || true)
-check '[[ "$out" == *"must be qwen, qwen-uncensored, gemma, whiterabbitneo or gemma-uncensored"* ]]' "no arguments should refuse before ssh, got: $out"
+check '[[ "$out" == *"unknown --id"* ]]' "no arguments should refuse before ssh, got: $out"
 
 out=$(bash "$script" --id qwen --host 0.0.0.0 2>&1 || true)
 check '[[ "$out" == *refusing*--host* ]]' "the script accepted --host: $out"
 
 out=$(bash "$script" --id llama 2>&1 || true)
-check '[[ "$out" == *"must be qwen, qwen-uncensored, gemma, whiterabbitneo or gemma-uncensored"* ]]' "an unknown id should be refused, got: $out"
+check '[[ "$out" == *"unknown --id"* ]]' "an unknown id should be refused, got: $out"
 
 # Resolve each id to its remote directory with a fake ssh that prints the arguments
 # it would send (the directory name is the third positional word of the remote command).
@@ -41,7 +41,13 @@ cat >"$fakebin/ssh" <<'EOF'
 printf '%s\n' "$*"
 EOF
 chmod +x "$fakebin/ssh"
-for pair in qwen:qwen3.5-4b qwen-uncensored:qwen3.5-4b-uncensored gemma:gemma-4-e4b whiterabbitneo:whiterabbitneo-2.5-7b gemma-uncensored:gemma-4-e4b-uncensored; do
+for pair in \
+  qwen:qwen3.5-4b qwen-uncensored:qwen3.5-4b-uncensored gemma:gemma-4-e4b \
+  whiterabbitneo:whiterabbitneo-2.5-7b gemma-uncensored:gemma-4-e4b-uncensored \
+  gemma-e2b:gemma-4-e2b nemotron:nemotron-3.5-bolt-e4b granite:granite-4.2-3b \
+  spark:spark-x2.6-4b lfm3:lfm3-vl-2b gemma-e2b-heretic:gemma-4-e2b-heretic \
+  spark-heretic:spark-x2.6-4b-heretic granite-heretic:granite-4.2-3b-heretic \
+  qwen2b:qwen3.5-2b-abliterated lfm3-abliterated:lfm3-vl-2b-abliterated; do
   id=${pair%%:*}
   want_dir=${pair#*:}
   out=$(PATH="$fakebin:$PATH" bash "$script" --id "$id" 2>&1 || true)
@@ -79,6 +85,30 @@ out=$(PATH="$fakebin:$PATH" bash "$script" --id gemma-uncensored --think 2>&1 ||
 check '[[ "$out" == *" --reasoning on -c 8192 "* ]]' "--think was not translated, got: $out"
 out=$(PATH="$fakebin:$PATH" bash "$script" --id whiterabbitneo 2>&1 || true)
 check '[[ "$out" != *mmproj* ]]' "whiterabbitneo must not get a projector, got: $out"
+# The ten GGUFs: architecture build, weights, and a projector only when one matches.
+out=$(PATH="$fakebin:$PATH" bash "$script" --id gemma-e2b 2>&1 || true)
+check '[[ "$out" == *"llama.cpp-v1.0.0"* && "$out" == *"gemma-4-E2B-it-Q6_K.gguf"* && "$out" == *"mmproj-F16.gguf"* ]]' "gemma-e2b should be gemma4 on v1.0.0 with its f16 projector, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id nemotron 2>&1 || true)
+check '[[ "$out" == *"llama.cpp-v1.0.0"* && "$out" == *"NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf"* && "$out" != *mmproj* ]]' "nemotron has no matching projector, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id granite 2>&1 || true)
+check '[[ "$out" == *"granite-4.2-3b-Q8_0.gguf"* && "$out" != *mmproj* ]]' "granite is text only, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id spark 2>&1 || true)
+check '[[ "$out" == *"llama.cpp-b10828"* && "$out" == *"Spark-X2.6-4B-Q4_K_M.gguf"* && "$out" != *mmproj* ]]' "spark needs b10828 and has no projector, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id lfm3 2>&1 || true)
+check '[[ "$out" == *"llama.cpp-b11938"* && "$out" == *"LFM3-VL-2B-Q8_0.gguf"* && "$out" == *"mmproj-LFM3-VL-2B-F16.gguf"* ]]' "lfm3 needs b11938 and its f16 projector, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id gemma-e2b-heretic 2>&1 || true)
+check '[[ "$out" == *"gemma-4-E2B-it-ultra-uncensored-heretic-Q6_K.gguf"* && "$out" == *"gemma-4-E2B-it-mmproj-BF16.gguf"* ]]' "gemma heretic should keep its own projector, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id spark-heretic 2>&1 || true)
+check '[[ "$out" == *"llama.cpp-b10828"* && "$out" == *"Spark-X2.6-4B-heretic.Q6_K.gguf"* && "$out" != *mmproj* ]]' "spark heretic needs b10828, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id granite-heretic 2>&1 || true)
+check '[[ "$out" == *"granite-4.2-3b-Heretic.Q8_0.gguf"* && "$out" != *mmproj* ]]' "granite heretic is text only, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id qwen2b 2>&1 || true)
+check '[[ "$out" == *"qwen3.5-2b-abliterated"* && "$out" == *"Huihui-Qwen3.5-2B-abliterated.Q8_0.gguf"* && "$out" == *"Huihui-Qwen3.5-2B-abliterated.mmproj-f16.gguf"* ]]' "qwen2b is the 2B GGUF with its projector, got: $out"
+check '[[ "$out" != *"qwen3.5-4b "* && "$out" != *"qwen3.5-4b-uncensored"* ]]' "qwen2b must not start the installed 4B, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id lfm3-abliterated 2>&1 || true)
+check '[[ "$out" == *"llama.cpp-b11938"* && "$out" == *"LFM3-VL-2B-Surgical-Abliterated.Q8_0.gguf"* && "$out" == *"LFM3-VL-2B-Surgical-Abliterated.mmproj-f16.gguf"* ]]' "lfm3 abliterated needs b11938 and its projector, got: $out"
+out=$(PATH="$fakebin:$PATH" bash "$script" --id spark --fast 2>&1 || true)
+check '[[ "$out" == *"not supported for the llama-server model"* ]]' "--id spark --fast should be refused, got: $out"
 rm -rf "$fakebin"
 
 if [[ "$fails" -ne 0 ]]; then

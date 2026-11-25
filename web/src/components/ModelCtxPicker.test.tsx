@@ -33,7 +33,7 @@ describe('ModelCtxPicker', () => {
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
     const warns = screen.getAllByTitle('Uncensored: fewer safety filters than the stock model');
-    expect(warns).toHaveLength(2);
+    expect(warns).toHaveLength(7);
     expect(screen.getByRole('button', { name: /Qwen3.5-4B Uncensored/ }).querySelector('.model-warn')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Gemma 4 E4B Uncensored/ }).querySelector('.model-warn')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Gemma 4 E4B' }).querySelector('.model-warn')).toBeNull();

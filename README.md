@@ -8,8 +8,9 @@ A private, local AI assistant for one small machine, in three parts that work to
 
 - **The engine**: a C99 CPU inference engine for small language models, written from scratch (Qwen3.5-4B,
   Gemma 4 E4B and Qwen2.5-Coder GGUFs). No GPU, no Python at run time. `bin/lm-run`, `bin/lm-chat`,
-  `bin/lm-serve` (an OpenAI-compatible HTTP endpoint) and `bin/lm-quant`. The chat starts five models in all,
-  two of them on llama.cpp: see [The five models](#the-five-models).
+  `bin/lm-serve` (an OpenAI-compatible HTTP endpoint) and `bin/lm-quant`. The chat starts fifteen models:
+  the original five, plus ten GGUFs on llama.cpp. See [The five models](#the-five-models) and
+  [Ten more GGUF models](#ten-more-gguf-models).
 - **The web chat** (`web/`, the app is called Kevin AI): a React page that talks to `lm-serve`, keeps
   conversations in the browser only, reads files and images, and lets the model use tools.
 - **The tool service** (`tools/chat_tools.py`): runs MCP servers, searches the web through a self-hosted
@@ -159,6 +160,33 @@ at a time; starting one stops the other. Fastest safe path is that script (same 
 | `gemma` | `lm-serve` | 3.7 s |
 | `gemma-uncensored` | `llama-server` | 7.0 s |
 | `whiterabbitneo` | `llama-server` | 8.2 s |
+
+## Ten more GGUF models
+
+These ten are started the same way (`--id` below, or the chat picker). The native GGUF loader is still
+qwen2 only. Gemma 4 E2B and Nemotron 3.5 Bolt are gemma4, so they use the same llama-server build as
+Gemma 4 E4B Uncensored (`~/opt/llama.cpp-v1.0.0`). Granite 4.2 uses the granite architecture on that
+build. Spark is spark2_5 and needs llama.cpp b10828 or later (`~/opt/llama.cpp-b10828`). LFM3 is lfm3
+and needs llama.cpp b11938 or later (`~/opt/llama.cpp-b11938`). The Qwen target is the 2B abliterated
+GGUF, not the installed Qwen3.5-4B. A projector is passed only when the row has one, which is also
+when the model can see images. `scripts/download-model.sh --model <directory>` fetches the pinned files.
+The map is `src/chat/lm_catalog.c`.
+
+| name in the chat | `--id` | directory and GGUF | build | images |
+|---|---|---|---|---|
+| Gemma 4 E2B | `gemma-e2b` | `gemma-4-e2b/gemma-4-E2B-it-Q6_K.gguf` + `mmproj-F16.gguf` | v1.0.0 | yes |
+| Nemotron 3.5 Bolt E4B | `nemotron` | `nemotron-3.5-bolt-e4b/NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf` | v1.0.0 | no projector in that repo |
+| Granite 4.2 3B | `granite` | `granite-4.2-3b/granite-4.2-3b-Q8_0.gguf` | v1.0.0 | no |
+| Spark X2.6 4B | `spark` | `spark-x2.6-4b/Spark-X2.6-4B-Q4_K_M.gguf` | b10828 | no |
+| LFM3-VL 2B | `lfm3` | `lfm3-vl-2b/LFM3-VL-2B-Q8_0.gguf` + `mmproj-LFM3-VL-2B-F16.gguf` | b11938 | yes |
+| Gemma 4 E2B Heretic | `gemma-e2b-heretic` | `gemma-4-e2b-heretic/gemma-4-E2B-it-ultra-uncensored-heretic-Q6_K.gguf` + `gemma-4-E2B-it-mmproj-BF16.gguf` | v1.0.0 | yes |
+| Spark X2.6 4B Heretic | `spark-heretic` | `spark-x2.6-4b-heretic/Spark-X2.6-4B-heretic.Q6_K.gguf` | b10828 | no |
+| Granite 4.2 3B Heretic | `granite-heretic` | `granite-4.2-3b-heretic/granite-4.2-3b-Heretic.Q8_0.gguf` | v1.0.0 | no |
+| Qwen3.5-2B Abliterated | `qwen2b` | `qwen3.5-2b-abliterated/Huihui-Qwen3.5-2B-abliterated.Q8_0.gguf` + `Huihui-Qwen3.5-2B-abliterated.mmproj-f16.gguf` | v1.0.0 | yes |
+| LFM3-VL 2B Abliterated | `lfm3-abliterated` | `lfm3-vl-2b-abliterated/LFM3-VL-2B-Surgical-Abliterated.Q8_0.gguf` + `LFM3-VL-2B-Surgical-Abliterated.mmproj-f16.gguf` | b11938 | yes |
+
+Context in the picker is 32,768 for these except Granite, which is 16,384 (a dense Q8). llama-server still
+starts at 8,192 unless a preset is chosen. The five with fewer safety filters are marked in the picker.
 
 Sustained generate rates are in [Status](#status) and the GGUF sections below (Gemma Uncensored
 about **4.3–4.9 tok/s** is the fastest reply path). Chat Effort / Speed wall-clock comparison:
@@ -959,8 +987,8 @@ A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the
   free), the chat's totals, and a tools viewer that groups the tools sent with the last request (built in, then one
   group per server) as chips. Hide it for a wider chat and bring it back from the "Show chat stats" button beside
   Compact chat; on a phone it opens in place of the chat. The choice is saved.
-- **Models.** Settings and the header start any of the five models (Qwen3.5-4B, Qwen3.5-4B Uncensored, Gemma 4
-  E4B, WhiteRabbitNeo 2.5 7B, Gemma 4 E4B Uncensored; see [The five models](#the-five-models)) with a context
+- **Models.** Settings and the header start any of the fifteen models (the original five, see
+  [The five models](#the-five-models), and [ten more GGUFs](#ten-more-gguf-models)) with a context
   size that fits the machine; each chat remembers which model it uses.
 - **Files.** Text, code, PDFs and images (when the model can see) can be attached, previewed before and
   after sending.

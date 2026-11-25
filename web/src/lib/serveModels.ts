@@ -1,51 +1,70 @@
 import type { ServeModelId } from './serveControl';
 
+export interface ServeModelOption {
+  id: ServeModelId;
+  /** English name, also the confirm dialog when the page is in English. */
+  label: string;
+  /** Spanish name. The Start / Arrancar prefix lives in i18n. */
+  labelEs: string;
+  /** Directory under ~/models and the id /v1/models reports. */
+  alias: string;
+  /** Picker cap. llama-server allocates the whole window up front. */
+  maxCtx: number;
+  uncensored: boolean;
+}
+
 /** Fixed start targets Settings / the header picker can launch. */
-export const SERVE_MODEL_OPTIONS: { id: ServeModelId; label: string }[] = [
-  { id: 'qwen', label: 'Qwen3.5-4B' },
-  { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored' },
-  { id: 'gemma', label: 'Gemma 4 E4B' },
-  { id: 'whiterabbitneo', label: 'WhiteRabbitNeo 2.5 7B' },
-  { id: 'gemma-uncensored', label: 'Gemma 4 E4B Uncensored' },
+export const SERVE_MODEL_OPTIONS: ServeModelOption[] = [
+  { id: 'qwen', label: 'Qwen3.5-4B', labelEs: 'Qwen3.5-4B', alias: 'qwen3.5-4b', maxCtx: 131072, uncensored: false },
+  { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored', labelEs: 'Qwen3.5-4B sin censura', alias: 'qwen3.5-4b-uncensored', maxCtx: 131072, uncensored: true },
+  { id: 'gemma', label: 'Gemma 4 E4B', labelEs: 'Gemma 4 E4B', alias: 'gemma-4-e4b', maxCtx: 131072, uncensored: false },
+  { id: 'whiterabbitneo', label: 'WhiteRabbitNeo 2.5 7B', labelEs: 'WhiteRabbitNeo 2.5 7B', alias: 'whiterabbitneo-2.5-7b', maxCtx: 16384, uncensored: false },
+  { id: 'gemma-uncensored', label: 'Gemma 4 E4B Uncensored', labelEs: 'Gemma 4 E4B Uncensored', alias: 'gemma-4-e4b-uncensored', maxCtx: 32768, uncensored: true },
+  // Gemma 4 E2B and Nemotron follow the gemma4 path (llama-server v1.0.0). Nemotron has no mmproj.
+  { id: 'gemma-e2b', label: 'Gemma 4 E2B', labelEs: 'Gemma 4 E2B', alias: 'gemma-4-e2b', maxCtx: 32768, uncensored: false },
+  { id: 'nemotron', label: 'Nemotron 3.5 Bolt E4B', labelEs: 'Nemotron 3.5 Bolt E4B', alias: 'nemotron-3.5-bolt-e4b', maxCtx: 32768, uncensored: false },
+  { id: 'granite', label: 'Granite 4.2 3B', labelEs: 'Granite 4.2 3B', alias: 'granite-4.2-3b', maxCtx: 16384, uncensored: false },
+  { id: 'spark', label: 'Spark X2.6 4B', labelEs: 'Spark X2.6 4B', alias: 'spark-x2.6-4b', maxCtx: 32768, uncensored: false },
+  { id: 'lfm3', label: 'LFM3-VL 2B', labelEs: 'LFM3-VL 2B', alias: 'lfm3-vl-2b', maxCtx: 32768, uncensored: false },
+  { id: 'gemma-e2b-heretic', label: 'Gemma 4 E2B Heretic', labelEs: 'Gemma 4 E2B heretic', alias: 'gemma-4-e2b-heretic', maxCtx: 32768, uncensored: true },
+  { id: 'spark-heretic', label: 'Spark X2.6 4B Heretic', labelEs: 'Spark X2.6 4B heretic', alias: 'spark-x2.6-4b-heretic', maxCtx: 32768, uncensored: true },
+  { id: 'granite-heretic', label: 'Granite 4.2 3B Heretic', labelEs: 'Granite 4.2 3B heretic', alias: 'granite-4.2-3b-heretic', maxCtx: 16384, uncensored: true },
+  // The 2B abliterated GGUF, not the installed Qwen3.5-4B.
+  { id: 'qwen2b', label: 'Qwen3.5-2B Abliterated', labelEs: 'Qwen3.5-2B abliterado', alias: 'qwen3.5-2b-abliterated', maxCtx: 32768, uncensored: true },
+  { id: 'lfm3-abliterated', label: 'LFM3-VL 2B Abliterated', labelEs: 'LFM3-VL 2B abliterado', alias: 'lfm3-vl-2b-abliterated', maxCtx: 32768, uncensored: true },
 ];
 
-export const SERVE_MODEL_LABEL: Record<ServeModelId, string> = {
-  qwen: 'Qwen3.5-4B',
-  'qwen-uncensored': 'Qwen3.5-4B Uncensored',
-  gemma: 'Gemma 4 E4B',
-  whiterabbitneo: 'WhiteRabbitNeo 2.5 7B',
-  'gemma-uncensored': 'Gemma 4 E4B Uncensored',
-};
+export const SERVE_MODEL_LABEL: Record<ServeModelId, string> = Object.fromEntries(
+  SERVE_MODEL_OPTIONS.map((o) => [o.id, o.label]),
+) as Record<ServeModelId, string>;
+
+/** Upper bound used when /v1/models has not reported context_length for this target. */
+export const SERVE_MODEL_MAX_CTX: Record<ServeModelId, number> = Object.fromEntries(
+  SERVE_MODEL_OPTIONS.map((o) => [o.id, o.maxCtx]),
+) as Record<ServeModelId, number>;
+
+function option(id: ServeModelId): ServeModelOption {
+  const row = SERVE_MODEL_OPTIONS.find((o) => o.id === id);
+  if (!row) throw new Error(id);
+  return row;
+}
+
+/** Name in the page language. English is the default for a locale this page does not speak. */
+export function serveModelLabel(id: ServeModelId, locale: string): string {
+  const row = option(id);
+  return locale === 'es' ? row.labelEs : row.label;
+}
 
 /** Uncensored start targets (fewer safety filters than the stock checkpoints). */
 export function isUncensoredServeModel(id: ServeModelId): boolean {
-  return id === 'qwen-uncensored' || id === 'gemma-uncensored';
+  return option(id).uncensored;
 }
-
-/** Upper bound used when /v1/models has not reported context_length for this target. */
-export const SERVE_MODEL_MAX_CTX: Record<ServeModelId, number> = {
-  qwen: 131072,
-  'qwen-uncensored': 131072,
-  gemma: 131072,
-  // llama-server allocates the whole window up front; 8 GB of Q8_0 weights leave room for 16k.
-  whiterabbitneo: 16384,
-  // llama-server too. Q6_K_P and the projector are 7.5 GiB resident at 32k (measured), and the
-  // KV cache is small (sliding-window layers); the prompt reads at about 16 tokens/s, so more is of little use.
-  'gemma-uncensored': 32768,
-};
 
 const CTX_LADDER = [4096, 8192, 16384, 32768, 65536, 131072] as const;
 
 export function isServeModelRunning(runningModel: string | null | undefined, id: ServeModelId): boolean {
   if (!runningModel) return false;
-  const name = runningModel.toLowerCase();
-  // The uncensored model's name also contains "qwen"; keep the two targets apart.
-  if (id === 'qwen') return name.includes('qwen') && !name.includes('uncensored');
-  if (id === 'qwen-uncensored') return name.includes('qwen') && name.includes('uncensored');
-  // Same for Gemma: the uncensored llama-server alias is gemma-4-e4b-uncensored, lm-serve's is gemma-4-e4b.
-  if (id === 'gemma') return name.includes('gemma') && !name.includes('uncensored');
-  if (id === 'gemma-uncensored') return name.includes('gemma') && name.includes('uncensored');
-  return name.includes(id);
+  return runningModel.toLowerCase() === option(id).alias.toLowerCase();
 }
 
 /** Map a /v1/models id (e.g. qwen3.5-4b) to a serve start target when possible. */

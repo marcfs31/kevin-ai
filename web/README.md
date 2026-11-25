@@ -26,14 +26,17 @@ map to lm-serve flags (`--max-tokens`, `--seed`, `--ctx`, `--threads`, `--timeou
 `--name`, `--think`, `--fast`); leave them empty for lm-serve’s own defaults. Host and port are
 not exposed — they stay `127.0.0.1:8080` for the tunnel.
 
-WhiteRabbitNeo 2.5 7B (a Qwen2.5-Coder-7B fine-tune) and Gemma 4 E4B Uncensored are GGUFs that the
-C engine cannot run, so the script starts them on llama.cpp's `llama-server` (built on the server at
-`~/opt/llama.cpp-v1.0.0`; weights `~/models/whiterabbitneo-2.5-7b/*-Q8_0.gguf` and
-`~/models/gemma-4-e4b-uncensored/*-Q6_K_P.gguf` plus its `mmproj-*-f16.gguf` vision projector,
-passed as `--mmproj`) on the same port. Only one model runs at a time: starting any model stops the
-other server first. For them, `--ctx` (default 8192; at most 16k for WhiteRabbitNeo and 32k for Gemma
-in the picker), `--threads`, `--seed`, `--max-tokens`, `--timeout`, `--name` and `--think` /
-`--no-think` (`--reasoning on` / `off`) are translated; `--cache-mb` and `--fast` are refused.
+WhiteRabbitNeo 2.5 7B (a Qwen2.5-Coder-7B fine-tune), Gemma 4 E4B Uncensored and the ten GGUFs in
+`src/chat/lm_catalog.c` are files the C engine cannot run, so the script starts them on llama.cpp's
+`llama-server` on the same port. Gemma 4 E2B, Nemotron 3.5 Bolt, Granite 4.2, the Qwen3.5-2B GGUF
+and the older GGUFs use `~/opt/llama.cpp-v1.0.0`. Spark (spark2_5) uses `~/opt/llama.cpp-b10828`.
+LFM3 (lfm3) uses `~/opt/llama.cpp-b11938`. A projector is passed as `--mmproj` only when that model
+has a matching file (Gemma E2B, Gemma E2B Heretic, LFM3, LFM3 abliterated, Qwen3.5-2B; not Nemotron,
+Granite or Spark). Weights live under `~/models/<alias>/` as named in the catalog. Only one model
+runs at a time: starting any model stops the other server first. For llama-server, `--ctx` (default
+8192; the picker caps WhiteRabbitNeo and Granite at 16k and the other GGUFs at 32k), `--threads`,
+`--seed`, `--max-tokens`, `--timeout`, `--name` and `--think` / `--no-think` (`--reasoning on` /
+`off`) are translated; `--cache-mb` and `--fast` are refused.
 WhiteRabbitNeo has no vision; Gemma reads images. llama-server has no `capabilities` field, so the
 app reads the window from `meta.n_ctx` and vision from `architecture.input_modalities` in
 `/v1/models`. Gemma 4 thinks before it answers (shown under "Thinking"); `--no-think` turns that off.

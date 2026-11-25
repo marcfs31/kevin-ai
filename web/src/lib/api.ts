@@ -78,7 +78,7 @@ function modelEntry(v: unknown): ModelEntry | null {
   if (!m) return null;
   const vision = obj(obj(m.capabilities)?.vision);
   const status = vision?.status;
-  // llama-server (WhiteRabbitNeo, Gemma uncensored) has no capabilities.vision: it lists the kinds of
+  // llama-server (WhiteRabbitNeo, Gemma uncensored, and the ten GGUF models) has no capabilities.vision: it lists the kinds of
   // input the loaded model takes, and the window it was started with.
   const inputs = obj(m.architecture)?.input_modalities;
   const byModality = Array.isArray(inputs) ? (inputs.includes('image') ? 'ok' : 'unavailable') : 'unknown';

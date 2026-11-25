@@ -27,6 +27,10 @@ describe('parseServeOptions', () => {
     expect(parseServeOptions({ model: 'gemma-uncensored', ctx: 8192 })).toMatchObject({ model: 'gemma-uncensored', ctx: 8192 });
     expect(serveScriptArgs({ model: 'gemma-uncensored', ctx: 8192 })).toEqual(['--id', 'gemma-uncensored', '--ctx', '8192']);
     expect(parseServeOptions({ model: 'gemma-uncensored-2' })).toBeNull();
+    expect(parseServeOptions({ model: 'gemma-e2b' })).toMatchObject({ model: 'gemma-e2b' });
+    expect(serveScriptArgs({ model: 'spark' })).toEqual(['--id', 'spark']);
+    expect(serveScriptArgs({ model: 'qwen2b', ctx: 8192 })).toEqual(['--id', 'qwen2b', '--ctx', '8192']);
+    expect(parseServeOptions({ model: 'qwen3.5-4b' })).toBeNull();
   });
 
   it('accepts whiterabbitneo and passes it to the script', () => {
