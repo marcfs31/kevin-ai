@@ -333,6 +333,63 @@ check '[ "$(grep -c "POST /v1/chat/completions 200" "$tmp/serve.err")" = 2 ] && 
       "the two replies were not served in order: $(cat "$tmp/serve.err")"
 stop
 
+# a client who leaves while its request waits in the queue gets no work: the reply it would
+# have had is a 499, and the model never sees the prompt
+start
+long='{"messages":[{"role":"user","content":"hi"}],"max_tokens":4000,"temperature":1,"stream":true}'
+curl -s -N -o /dev/null -d "$long" "$url/v1/chat/completions" &
+long_pid=$!
+sleep 0.4
+curl -s -o /dev/null -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":2}' "$url/v1/chat/completions" &
+gone_pid=$!
+sleep 0.3
+kill "$gone_pid" 2> /dev/null; wait "$gone_pid" 2> /dev/null
+wait "$long_pid"
+for _ in $(seq 50); do grep -q "499" "$tmp/serve.err" && break; sleep 0.1; done
+check 'grep -q "POST /v1/chat/completions 499" "$tmp/serve.err"' \
+      "a client gone from the queue was still served: $(cat "$tmp/serve.err")"
+check '[ "$(grep -c "prompt" "$tmp/serve.err")" = 1 ]' \
+      "the cancelled request reached the model: $(cat "$tmp/serve.err")"
+stop
+
+# when the process runs out of file descriptors, new connections are shed and the server lives
+( ulimit -n 48; exec "$SERVE" --model "$tmp/model" --weights "$tmp/model/model.q8.safetensors" --port 0 --name tiny 2> "$tmp/serve.err" ) &
+pid=$!
+url=
+for _ in $(seq 100); do
+    url=$(sed -n 's/^lm-serve: listening on \(http:[^ ]*\).*/\1/p' "$tmp/serve.err")
+    [ -n "$url" ] && break
+    kill -0 "$pid" 2> /dev/null || break
+    sleep 0.1
+done
+check '[ -n "$url" ]' "the fd-capped server did not start: $(cat "$tmp/serve.err")"
+if [ -n "$url" ]; then
+    python3 -I - "${url#http://}" <<'PYEOF' &
+import socket, sys, time
+host, port = sys.argv[1].rsplit(":", 1)
+socks = []
+for _ in range(60):
+    try:
+        s = socket.create_connection((host, int(port)))
+        s.sendall(b"POST /v1/chat/completions HTTP/1.1\r\nX: ")
+        socks.append(s)
+    except OSError:
+        break
+time.sleep(20)
+PYEOF
+    flood=$!
+    sleep 1
+    ok=
+    for _ in $(seq 40); do
+        [ "$(code -m 2 "$url/health")" = 200 ] && { ok=1; break; }
+        sleep 0.25
+    done
+    check '[ -n "$ok" ] && kill -0 "$pid" 2>/dev/null && ! grep -q "accept failed" "$tmp/serve.err"' \
+          "the server did not survive running out of file descriptors: $(cat "$tmp/serve.err")"
+    kill "$flood" 2> /dev/null; wait "$flood" 2> /dev/null
+fi
+stop
+
 # SIGTERM does not wait out the request deadlines of stalled or idle clients
 start
 python3 -I - "${url#http://}" > "$tmp/stall" 2>&1 <<'PYEOF' &
