@@ -84,6 +84,22 @@ Tests: `python3 -m unittest discover -s tools -p 'test_chat_server.py'`.
   images and compacts at 90%. Choosing a speed also sets the effort it starts from (Low, Medium,
   High); the effort can then be changed on its own. Before its first message a new chat starts
   from the last pick.
+- **Time spent per mode.** Neither switch changes the engine's tokens/s. Wall time is mostly
+  (thinking tokens + answer tokens) / generate rate, plus image encode and any compaction call.
+  Measured 2026-11-25 on the target through the tunnel, Gemma 4 E4B Uncensored already loaded,
+  same prompt ("In one short paragraph, explain what a mutex is and when to use one."),
+  temperature 0.2:
+
+  | Effort | Thinking | Cap | Wall | Prompt / completion tokens |
+  |---|---|---:|---:|---|
+  | Low | off | 512 | **26 s** | 25 / 124 |
+  | Medium | off | 2048 | **25 s** | 25 / 123 |
+  | High | on | 4096 | **54 s** | 31 / 258 |
+
+  Low and Medium matched here because the model stopped around 120 tokens either way; High took
+  about **2×** as long because thinking ran and the completion roughly doubled. Speed alone does
+  not change that text-only timing: Fast / Balanced / Thorough only change image size and when
+  auto-compact fires (and Fast/Balanced/Thorough also *start* Effort at Low/Medium/High).
 - **Redirect.** While a reply streams in the open chat, type a new message and press Redirect (or
   Enter): the reply stops where it is, is kept and marked stopped, and the new message is sent
   right after it with everything already written, so the model carries on from there. Not offered

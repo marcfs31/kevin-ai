@@ -98,6 +98,22 @@ Se pueden arrancar cinco modelos desde el chat (Settings, o el selector del enca
 | WhiteRabbitNeo 2.5 7B | `whiterabbitneo` | llama.cpp `llama-server` | `whiterabbitneo-2.5-7b/*-Q8_0.gguf` | hasta 16.384 | fine-tune de Qwen2.5-Coder-7B, Apache-2.0, solo texto; ver "WhiteRabbitNeo (GGUF)" |
 | Gemma 4 E4B Uncensored | `gemma-uncensored` | llama.cpp `llama-server` | `gemma-4-e4b-uncensored/*-Q6_K_P.gguf` y el proyector `mmproj` | hasta 32.768 | fine-tune de Gemma 4 E4B que lee imágenes; Gemma Terms of Use; ver "Gemma 4 E4B Uncensored" |
 
+**Tiempo de carga (medido 2026-11-25).** Arranques en serie con `scripts/start-remote-lm-serve.sh --id <id>`
+(con `--no-think` en los ids de llama-server), reloj de pared hasta que `/health` remoto responde ok. Un modelo
+a la vez; al arrancar uno se para el otro. El camino seguro más rápido es ese script (el mismo que el chat).
+
+| `--id` | runtime | Carga hasta healthy |
+|---|---|---:|
+| `qwen-uncensored` | `lm-serve` | **2,7 s** |
+| `qwen` | `lm-serve` | 3,3 s |
+| `gemma` | `lm-serve` | 3,7 s |
+| `gemma-uncensored` | `llama-server` | 7,0 s |
+| `whiterabbitneo` | `llama-server` | 8,2 s |
+
+Las tasas sostenidas al generar están en [Estado](#estado) y en las secciones GGUF de abajo (Gemma Uncensored
+unos **4,3–4,9 tok/s** es el camino de respuesta más rápido). Comparación de tiempo de Effort / Speed del chat:
+[web/README.md](web/README.md) (Effort High cerca de **2×** Low/Medium en un párrafo corto con thinking).
+
 Checkpoints: Qwen3.5-4B son 9.32 GB en bf16 (2 shards) y Gemma 4 E4B 15.99 GB en bf16 (1 archivo); `bin/lm-quant` escribe los archivos q8 con los que el motor suele correr. El chat marca los dos objetivos uncensored con un aviso: tienen menos filtros de seguridad que los checkpoints de stock.
 
 El motor tiene sus propios loaders para los tres primeros. Los otros dos solo se distribuyen como GGUF, que el motor no puede ejecutar para Gemma 4, así que el chat los arranca con el `llama-server` de llama.cpp en el mismo puerto; los flags de `lm-serve` `--cache-mb` y `--fast` no les aplican. Una tercera familia del motor, `qwen2`, también puede cargar el WhiteRabbitNeo Q4_K_M con `bin/lm-serve --model ~/models/whiterabbitneo-2.5-7b-q4km` (ver su sección).
@@ -664,7 +680,10 @@ curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/
 
 Una UI de chat Vite + React para `lm-serve`. El comportamiento completo, el serve de producción y la puerta están en [web/README.md](web/README.md); esto es lo que hace en resumen, y cómo correrlo en local.
 
-- **Chat.** Respuestas en streaming con Stop y Redirect, un bloque de thinking, modelo, effort y speed por chat, una barra de contexto con compactación automática, retry, rewind (Delete from here, o Edit para devolver uno de tus mensajes a la caja, cambiarlo y enviarlo otra vez), estadísticas de tokens, Markdown con tablas, código y LaTeX, inglés y español. Las conversaciones viven solo en el navegador.
+- **Chat.** Respuestas en streaming con Stop y Redirect, un bloque de thinking, modelo, effort y speed por chat
+  (Effort High cerca de **2×** el tiempo de pared de Low/Medium en un párrafo corto cuando corre el thinking; ver
+  [web/README.md](web/README.md)),
+  una barra de contexto con compactación automática, retry, rewind (Delete from here, o Edit para devolver uno de tus mensajes a la caja, cambiarlo y enviarlo otra vez), estadísticas de tokens, Markdown con tablas, código y LaTeX, inglés y español. Las conversaciones viven solo en el navegador.
 - **Panel de stats.** A la derecha del chat: la ventana de contexto como una franja con leyenda (prompt, tools, última respuesta, libre), los totales del chat, y un visor de tools que agrupa las tools enviadas con la última petición (integradas, luego un grupo por servidor) como chips. Ocúltalo para un chat más ancho y tráelo de vuelta con el botón "Show chat stats" junto a Compact chat; en un teléfono se abre en lugar del chat. La elección se guarda.
 - **Modelos.** Settings y el encabezado arrancan cualquiera de los cinco modelos (Qwen3.5-4B, Qwen3.5-4B Uncensored, Gemma 4 E4B, WhiteRabbitNeo 2.5 7B, Gemma 4 E4B Uncensored; ver [Los cinco modelos](#los-cinco-modelos)) con un tamaño de contexto que cabe en la máquina; cada chat recuerda qué modelo usa.
 - **Archivos.** Se pueden adjuntar texto, código, PDFs e imágenes (cuando el modelo puede ver), con vista previa antes y después de enviar.

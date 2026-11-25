@@ -148,6 +148,23 @@ starting one stops the other.
 | WhiteRabbitNeo 2.5 7B | `whiterabbitneo` | llama.cpp `llama-server` | `whiterabbitneo-2.5-7b/*-Q8_0.gguf` | up to 16,384 | fine-tune of Qwen2.5-Coder-7B, Apache-2.0, text only; see "WhiteRabbitNeo (GGUF)" |
 | Gemma 4 E4B Uncensored | `gemma-uncensored` | llama.cpp `llama-server` | `gemma-4-e4b-uncensored/*-Q6_K_P.gguf` and the `mmproj` projector | up to 32,768 | fine-tune of Gemma 4 E4B that reads images; Gemma Terms of Use; see "Gemma 4 E4B Uncensored" |
 
+**Load time (measured 2026-11-25).** Sequential `scripts/start-remote-lm-serve.sh --id <id>`
+(with `--no-think` for the llama-server ids), wall clock until remote `/health` is ok. One model
+at a time; starting one stops the other. Fastest safe path is that script (same as the chat).
+
+| `--id` | runtime | Load to healthy |
+|---|---|---:|
+| `qwen-uncensored` | `lm-serve` | **2.7 s** |
+| `qwen` | `lm-serve` | 3.3 s |
+| `gemma` | `lm-serve` | 3.7 s |
+| `gemma-uncensored` | `llama-server` | 7.0 s |
+| `whiterabbitneo` | `llama-server` | 8.2 s |
+
+Sustained generate rates are in [Status](#status) and the GGUF sections below (Gemma Uncensored
+about **4.3–4.9 tok/s** is the fastest reply path). Chat Effort / Speed wall-clock comparison:
+[web/README.md](web/README.md) (High Effort about **2×** Low/Medium on a short paragraph when
+thinking is on).
+
 Checkpoints: Qwen3.5-4B is 9.32 GB in bf16 (2 shards) and Gemma 4 E4B 15.99 GB in bf16 (1 file); `bin/lm-quant`
 writes the q8 files the engine normally runs. The chat marks the two uncensored targets with a warning badge:
 they have fewer safety filters than the stock checkpoints.
@@ -932,7 +949,9 @@ curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/
 A Vite + React chat UI for `lm-serve`. Full behaviour, production serve, and the gate are in
 [web/README.md](web/README.md); this is what it does in short, and how to run it locally.
 
-- **Chat.** Streaming replies with Stop and Redirect, a thinking block, per-chat model, effort and speed,
+- **Chat.** Streaming replies with Stop and Redirect, a thinking block, per-chat model, effort and speed
+  (High Effort about **2×** the wall time of Low/Medium on a short paragraph when thinking runs; see
+  [web/README.md](web/README.md)),
   a context bar with automatic compaction, retry, rewind (Delete from here, or Edit to take one of your messages back
   into the box, change it and send it again), token statistics, Markdown with tables, code
   and LaTeX, English and Spanish. Conversations live in the browser only.
