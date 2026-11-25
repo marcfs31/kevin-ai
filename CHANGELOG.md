@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-11-26
+
+### Added
+- Model picker and Settings serve actions: stock models and uncensored models in separate groups (English and Spanish), with shared group styling.
+
 ## [1.0.5] - 2026-11-25
 
 ### Fixed
