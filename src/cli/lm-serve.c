@@ -1,4 +1,4 @@
-/* lm-serve -- an OpenAI-compatible HTTP endpoint for one model, one request at a time.
+/* lm-serve -- an OpenAI-compatible HTTP endpoint for one model, one reply at a time.
  *
  *   lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
  *            [--think | --no-think] [--max-tokens N] [--seed N] [--ctx N] [--threads N]
@@ -45,7 +45,10 @@
  * address is printed on stderr. If LM_SERVE_API_KEY is set (in the environment, so it never
  * shows up in ps), every /v1 path requires "Authorization: Bearer <key>", checked before
  * the body is read. A request has --timeout seconds (default 30) to arrive in full, so a slow
- * client cannot hold the server. Requests are logged as counts and timings only, never their
+ * client cannot hold the server. Each connection is read on its own thread (at most
+ * MAX_CONNS at once): /health, /v1/models and refusals are answered there, even while a reply
+ * is being generated; chat requests, once read in full, wait their turn for the model, which
+ * only the main thread touches. Requests are logged as counts and timings only, never their
  * text. SIGINT/SIGTERM stop the reply being generated and exit. Original to this repository. */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -54,6 +57,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -1063,18 +1067,37 @@ out:
     json_free_tree(req);
 }
 
-static void handle(Server *s, Conn *c, int timeout_s)
-{
-    const double t0 = mono_s();
-    c->deadline = t0 + timeout_s;
+/* One connection, from accept to close. A thread reads it and answers what needs no model;
+ * the rest goes to the main thread through the queue. */
+typedef struct Job {
+    Conn c;
     Log log;
-    memset(&log, 0, sizeof log);
+    double t0;
+    struct Job *next;
+} Job;
+
+#define MAX_CONNS 16 /* connections being read, waiting or answered at once */
+
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER; /* a job was queued or a connection ended */
+static Job *g_head, *g_tail;                            /* read in full, waiting for the model */
+static int g_conns;                                     /* connections open, queued ones included */
+static pthread_mutex_t g_log_mu = PTHREAD_MUTEX_INITIALIZER;
+
+/* Read the request and answer it if it needs no model: 1 = the model thread must answer it,
+ * 0 = answered, -1 = nothing to answer (the client left or sent nothing). */
+static int answer_quick(Server *s, Job *j, int timeout_s)
+{
+    Conn *c = &j->c;
+    Log *log = &j->log;
+    j->t0 = mono_s();
+    c->deadline = j->t0 + timeout_s;
     const int rh = read_head(c);
-    if (rh < 0) return;
+    if (rh < 0) return -1;
     if (rh > 0) {
-        respond_error(c, log.status = rh, NULL, "%s", reason(rh));
+        respond_error(c, log->status = rh, NULL, "%s", reason(rh));
     } else if (!strcmp(c->path, "/health")) {
-        if (strcmp(c->method, "GET")) respond_error(c, log.status = 405, NULL, "use GET");
+        if (strcmp(c->method, "GET")) respond_error(c, log->status = 405, NULL, "use GET");
         else {
             Buf b = { 0 };
             buf_str(&b, "{\"status\":\"ok\",\"model\":");
@@ -1086,16 +1109,16 @@ static void handle(Server *s, Conn *c, int timeout_s)
             else if (s->vision)
                 buf_str(&b, ",\"tokens_per_image\":280");
             buf_str(&b, "}}}");
-            if (b.oom) respond_error(c, log.status = 500, NULL, "out of memory");
-            else respond(c, log.status = 200, NULL, b.s, b.n);
+            if (b.oom) respond_error(c, log->status = 500, NULL, "out of memory");
+            else respond(c, log->status = 200, NULL, b.s, b.n);
             free(b.s);
         }
     } else if (strncmp(c->path, "/v1/", 4)) {
-        respond_error(c, log.status = 404, NULL, "no such endpoint: %s", c->path);
+        respond_error(c, log->status = 404, NULL, "no such endpoint: %s", c->path);
     } else if (!authorised(s, c)) { /* before the body: no key, no large body read */
-        respond_error(c, log.status = 401, "invalid_api_key", "a valid \"Authorization: Bearer <key>\" header is required");
+        respond_error(c, log->status = 401, "invalid_api_key", "a valid \"Authorization: Bearer <key>\" header is required");
     } else if (!strcmp(c->path, "/v1/models")) {
-        if (strcmp(c->method, "GET")) respond_error(c, log.status = 405, NULL, "use GET");
+        if (strcmp(c->method, "GET")) respond_error(c, log->status = 405, NULL, "use GET");
         else {
             Buf b = { 0 };
             buf_str(&b, "{\"object\":\"list\",\"data\":[{\"id\":");
@@ -1108,33 +1131,52 @@ static void handle(Server *s, Conn *c, int timeout_s)
             else if (s->vision)
                 buf_str(&b, ",\"tokens_per_image\":280");
             buf_str(&b, "}}}]}");
-            if (b.oom) respond_error(c, log.status = 500, NULL, "out of memory");
-            else respond(c, log.status = 200, NULL, b.s, b.n);
+            if (b.oom) respond_error(c, log->status = 500, NULL, "out of memory");
+            else respond(c, log->status = 200, NULL, b.s, b.n);
             free(b.s);
         }
     } else if (!strcmp(c->path, "/v1/chat/reset")) {
-        if (strcmp(c->method, "POST")) respond_error(c, log.status = 405, NULL, "use POST");
-        else {
-            lm_chat_purge(s->chat);
-            static const char body[] = "{\"status\":\"ok\"}";
-            respond(c, log.status = 200, NULL, body, sizeof body - 1);
-        }
+        if (strcmp(c->method, "POST")) respond_error(c, log->status = 405, NULL, "use POST");
+        else return 1;
     } else if (!strcmp(c->path, "/v1/chat/completions")) {
-        if (strcmp(c->method, "POST")) respond_error(c, log.status = 405, NULL, "use POST");
+        if (strcmp(c->method, "POST")) respond_error(c, log->status = 405, NULL, "use POST");
         else {
+            /* the whole body before the queue, so a slow client never holds the model */
             const int rb = read_body(c);
-            if (rb > 0) respond_error(c, log.status = rb, NULL, "%s", reason(rb));
-            else if (rb == 0) { s->requests++; chat_completions(s, c, &log); }
+            if (rb > 0) respond_error(c, log->status = rb, NULL, "%s", reason(rb));
+            else if (rb == 0) return 1;
         }
     } else {
-        respond_error(c, log.status = 404, NULL, "no such endpoint: %s", c->path);
+        respond_error(c, log->status = 404, NULL, "no such endpoint: %s", c->path);
     }
+    return 0;
+}
+
+/* on the main thread only: the model, the chat state and g_reply are its alone */
+static void answer_model(Server *s, Job *j)
+{
+    Conn *c = &j->c;
+    if (!strcmp(c->path, "/v1/chat/reset")) {
+        lm_chat_purge(s->chat);
+        static const char body[] = "{\"status\":\"ok\"}";
+        respond(c, j->log.status = 200, NULL, body, sizeof body - 1);
+    } else {
+        s->requests++;
+        chat_completions(s, c, &j->log);
+    }
+}
+
+static void log_request(const Job *j)
+{
+    const Conn *c = &j->c;
+    const Log *log = &j->log;
     /* the path is the client's: no control bytes reach the log */
     char path[sizeof c->path];
     size_t i = 0;
     for (; c->path[i]; i++) path[i] = (unsigned char)c->path[i] < 0x20 || c->path[i] == 0x7f ? '?' : c->path[i];
     path[i] = 0;
-    const double dt = mono_s() - t0;
+    const double dt = mono_s() - j->t0;
+    pthread_mutex_lock(&g_log_mu);
     /* A file log stays within g_log_max. The journal is not a regular file, so the unit
      * sends stderr to a file. Truncate, then write this request's line. */
     fflush(stderr);
@@ -1144,13 +1186,131 @@ static void handle(Server *s, Conn *c, int timeout_s)
         if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > g_log_max && ftruncate(fd, 0) == 0)
             fseek(stderr, 0, SEEK_SET);
     }
-    if (log.n_prompt)
+    if (log->n_prompt)
         fprintf(stderr, "lm-serve: %s %s %d%s | prompt %d, %d from cache, %d kept by rewind, fed %d%s at %.2f tok/s | generated %d at %.2f tok/s | %.1f s\n",
-                c->method, path, log.status, c->broken ? " (client gone)" : "", log.n_prompt, log.n_cached, log.n_rewound,
-                log.n_prefill, log.reprefill ? " (re-fed)" : "", log.prefill_s > 0 ? log.n_prefill / log.prefill_s : 0.0,
-                log.n_gen, log.decode_s > 0 ? log.n_gen / log.decode_s : 0.0, dt);
+                c->method, path, log->status, c->broken ? " (client gone)" : "", log->n_prompt, log->n_cached, log->n_rewound,
+                log->n_prefill, log->reprefill ? " (re-fed)" : "", log->prefill_s > 0 ? log->n_prefill / log->prefill_s : 0.0,
+                log->n_gen, log->decode_s > 0 ? log->n_gen / log->decode_s : 0.0, dt);
     else
-        fprintf(stderr, "lm-serve: %s %s %d | %.3f s\n", c->method, path, log.status, dt);
+        fprintf(stderr, "lm-serve: %s %s %d | %.3f s\n", c->method, path, log->status, dt);
+    pthread_mutex_unlock(&g_log_mu);
+}
+
+/* close the connection and give its slot back; answered = it gets a log line */
+static void job_done(Job *j, int answered)
+{
+    if (answered) log_request(j);
+    finish_conn(&j->c);
+    free(j->c.raw);
+    free(j->c.body);
+    free(j->c.auth);
+    close(j->c.fd);
+    free(j);
+    pthread_mutex_lock(&g_mu);
+    g_conns--;
+    pthread_cond_broadcast(&g_cv);
+    pthread_mutex_unlock(&g_mu);
+}
+
+typedef struct { Server *s; int timeout_s; Job *j; } ConnArg;
+
+static void *conn_thread(void *arg)
+{
+    ConnArg a = *(ConnArg *)arg;
+    free(arg);
+    const int r = answer_quick(a.s, a.j, a.timeout_s);
+    if (r != 1) { job_done(a.j, r == 0); return NULL; }
+    pthread_mutex_lock(&g_mu);
+    if (g_tail) g_tail->next = a.j;
+    else g_head = a.j;
+    g_tail = a.j;
+    pthread_cond_broadcast(&g_cv);
+    pthread_mutex_unlock(&g_mu);
+    return NULL;
+}
+
+/* the next queued job, or NULL after up to half a second */
+static Job *next_job(void)
+{
+    pthread_mutex_lock(&g_mu);
+    if (!g_head) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 500000000L;
+        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+        pthread_cond_timedwait(&g_cv, &g_mu, &ts);
+    }
+    Job *j = g_head;
+    if (j) {
+        g_head = j->next;
+        if (!g_head) g_tail = NULL;
+        j->next = NULL;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return j;
+}
+
+typedef struct { Server *s; int lfd, timeout_s, failed; } Acceptor;
+
+/* accepts while the server runs; at MAX_CONNS it waits, and new clients wait in the backlog */
+static void *accept_thread(void *arg)
+{
+    Acceptor *ac = (Acceptor *)arg;
+    while (!g_stop) {
+        pthread_mutex_lock(&g_mu);
+        while (g_conns >= MAX_CONNS && !g_stop) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec++;
+            pthread_cond_timedwait(&g_cv, &g_mu, &ts);
+        }
+        pthread_mutex_unlock(&g_mu);
+        if (g_stop) break;
+        /* wait in short slices so a signal that lands just before accept() is seen */
+        struct pollfd lp = { ac->lfd, POLLIN, 0 };
+        if (poll(&lp, 1, 500) <= 0) continue;
+        int fd = accept(ac->lfd, NULL, NULL);
+        if (fd < 0) {
+            if (errno == EINTR || errno == ECONNABORTED || errno == EAGAIN) continue;
+            fprintf(stderr, "lm-serve: accept failed: %s\n", strerror(errno));
+            ac->failed = 1;
+            g_stop = 1;
+            break;
+        }
+        struct timeval tv = { ac->timeout_s, 0 }; /* a client that stops reading cannot hold a write */
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+#ifdef SO_NOSIGPIPE
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+        Job *j = (Job *)calloc(1, sizeof *j);
+        ConnArg *a = (ConnArg *)malloc(sizeof *a);
+        pthread_t t;
+        pthread_attr_t attr;
+        int ok = j && a && pthread_attr_init(&attr) == 0;
+        if (ok) {
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            j->c.fd = fd;
+            *a = (ConnArg){ ac->s, ac->timeout_s, j };
+            pthread_mutex_lock(&g_mu);
+            g_conns++;
+            pthread_mutex_unlock(&g_mu);
+            if (pthread_create(&t, &attr, conn_thread, a)) {
+                pthread_mutex_lock(&g_mu);
+                g_conns--;
+                pthread_mutex_unlock(&g_mu);
+                ok = 0;
+            }
+            pthread_attr_destroy(&attr);
+        }
+        if (!ok) {
+            fputs("lm-serve: cannot start a connection thread\n", stderr);
+            free(j);
+            free(a);
+            close(fd);
+        }
+    }
+    return NULL;
 }
 
 /* ---- setup ------------------------------------------------------------------------- */
@@ -1355,34 +1515,42 @@ int main(int argc, char **argv)
         fputs("lm-serve: warning: reachable from other machines and LM_SERVE_API_KEY is not set: "
               "anyone who can connect can use the model\n", stderr);
 
-    while (!g_stop) {
-        /* wait in short slices so a signal that lands just before accept() is seen */
-        struct pollfd lp = { lfd, POLLIN, 0 };
-        if (poll(&lp, 1, 500) <= 0) continue;
-        int fd = accept(lfd, NULL, NULL);
-        if (fd < 0) {
-            if (errno == EINTR || errno == ECONNABORTED || errno == EAGAIN) continue;
-            fprintf(stderr, "lm-serve: accept failed: %s\n", strerror(errno));
-            break;
-        }
-        struct timeval tv = { timeout_s, 0 }; /* a client that stops reading cannot hold a write */
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-#ifdef SO_NOSIGPIPE
-        int one = 1;
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-#endif
-        Conn c;
-        memset(&c, 0, sizeof c);
-        c.fd = fd;
-        handle(&s, &c, (int)timeout_s);
-        finish_conn(&c);
-        free(c.raw);
-        free(c.body);
-        free(c.auth);
-        close(fd);
+    /* the connection threads must not take SIGINT/SIGTERM: the main thread stops the reply */
+    sigset_t block, old;
+    sigemptyset(&block);
+    sigaddset(&block, SIGINT);
+    sigaddset(&block, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &block, &old);
+    Acceptor ac = { &s, lfd, (int)timeout_s, 0 };
+    pthread_t acceptor;
+    const int started = pthread_create(&acceptor, NULL, accept_thread, &ac) == 0;
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    if (!started) fputs("lm-serve: cannot start the accept thread\n", stderr);
+    while (started && !g_stop) {
+        Job *j = next_job();
+        if (!j) continue;
+        answer_model(&s, j);
+        job_done(j, 1);
     }
+    if (started) pthread_join(acceptor, NULL);
+    /* the connection threads see g_stop and end; queued requests are refused */
+    pthread_mutex_lock(&g_mu);
+    while (g_conns > 0) {
+        Job *j = g_head;
+        if (j) {
+            g_head = j->next;
+            if (!g_head) g_tail = NULL;
+            pthread_mutex_unlock(&g_mu);
+            respond_error(&j->c, j->log.status = 503, NULL, "the server is stopping");
+            job_done(j, 1);
+            pthread_mutex_lock(&g_mu);
+            continue;
+        }
+        pthread_cond_wait(&g_cv, &g_mu);
+    }
+    pthread_mutex_unlock(&g_mu);
     close(lfd);
-    status = g_stop ? 0 : 1;
+    status = started && !ac.failed ? 0 : 1;
     fputs("lm-serve: stopped\n", stderr);
 done:
     lm_chat_free(s.chat);
