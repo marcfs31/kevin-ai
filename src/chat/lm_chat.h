@@ -27,6 +27,16 @@
  * evict a snapshot that saves more than it does. Restoring is bit-identical to
  * feeding (lm_restore), so the cache changes speed, never output.
  *
+ * Rewind marks. A backend with mark/rewind also keeps up to LM_CHAT_MARKS marks (lm_mark: the
+ * state that later positions overwrite, a fixed size whatever the position) at the start of
+ * each turn's new tail and one id before the end of its prompt. When a prompt does not extend
+ * the fed ids but shares a prefix with them (the last reply regenerated, the last user message
+ * edited, a reply stopped and retried), the loop rewinds to the latest mark inside that prefix
+ * and feeds only the rest: one id for a regenerate. Marks share cfg.cache_bytes with the prefix
+ * cache, oldest dropped first (the newest always stays); a reset, a cache restore or a prompt
+ * with images drops them. Rewinding is bit-identical to feeding, so marks change speed, never
+ * output.
+ *
  * Tokens that were sampled but not fed (the last one when max_tokens or the context
  * ends the turn, a stop id) are simply part of the next prompt's tail. */
 #ifndef LM_CHAT_H
@@ -65,8 +75,15 @@ typedef struct {
      * image spans; without it those turns fail. */
     int (*prefill_image)(void *ctx, const float *rows, int n, int width, int grid_h, int grid_w,
                          float *logits);
+    /* Optional, both or none, and only with the four above (rewind marks): a mark of the
+     * current state or NULL (the turn goes on without it); rewind to a mark taken since the
+     * last reset or restore, at or behind the current position, LM_OK or an error (nothing
+     * changed: the loop resets). drop and snap_bytes free and size marks too. */
+    void *(*mark)(void *ctx);
+    int   (*rewind)(void *ctx, void *mark);
 } LmBackend;
 
+#define LM_CHAT_MARKS 4            /* rewind marks kept at most */
 #define LM_CHAT_CACHE_MIN 16       /* the shortest shared prefix worth a snapshot */
 #define LM_CHAT_PREFILL_CHUNK 16   /* ids per prefill call: most of the batching gain, Ctrl-C answers in a chunk */
 
@@ -105,6 +122,9 @@ int lm_chat_fed(const LmChat *c);
 int lm_chat_cached(const LmChat *c);
 int lm_chat_cache_slots(const LmChat *c);
 size_t lm_chat_cache_bytes(const LmChat *c);
+/* Rewind marks held now, and the bytes they hold (beside lm_chat_cache_bytes). */
+int lm_chat_marks(const LmChat *c);
+size_t lm_chat_mark_bytes(const LmChat *c);
 
 /* Replace the conversation with msgs[0..n): an optional system message first, then user and
  * assistant messages (content only for assistants; reasoning and gen_ids are ignored). This
@@ -154,6 +174,7 @@ typedef struct {
     int n_prompt;           /* ids in this turn's rendered prompt */
     int n_prefill;          /* ids actually fed for it */
     int n_cached;           /* ids restored from the prefix cache instead of fed */
+    int n_rewound;          /* ids kept by rewinding to a mark instead of fed again */
     int reprefill;          /* 1 if the backend was reset and the state re-fed from scratch */
     int n_gen;              /* generated ids, stop id excluded */
     int tool_calls;         /* tool calls attempted, well-formed or not */

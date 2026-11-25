@@ -63,6 +63,8 @@ typedef struct {
     int saves, restores, drops, live, maxlive;    /* prefix-cache hooks: calls, snapshots alive (most at once) */
     int save_fail, restore_fail;                  /* make save return NULL / restore fail */
     int saved_pos;                                /* position of the last snapshot taken */
+    unsigned epoch;                               /* bumped by reset and restore: marks name it */
+    int marks, rewinds, rewind_fail, bad_rewind;  /* mark hooks: calls, fail, rows changed under a mark */
 } Fake;
 
 static int fk_feed(void *c, int token, float *logits)
@@ -117,13 +119,40 @@ static int fk_restore(void *c, void *snap)
     const FkSnap *s = (const FkSnap *)snap;
     f->pos = s->pos;
     memcpy(f->st, s->st, sizeof f->st);
+    f->epoch++;
+    return LM_OK;
+}
+/* a mark is the position and the epoch (the fake's state is append-only, like KV rows); the
+ * copy of the rows below it only checks that nothing overwrote them before a rewind */
+typedef struct { int pos; unsigned epoch; int st[MAXLOG]; } FkMark;
+static void *fk_mark(void *c)
+{
+    Fake *f = (Fake *)c;
+    f->marks++;
+    FkMark *k = (FkMark *)malloc(sizeof *k);
+    if (!k) return NULL;
+    k->pos = f->pos;
+    k->epoch = f->epoch;
+    memcpy(k->st, f->st, sizeof k->st);
+    if (++f->live > f->maxlive) f->maxlive = f->live;
+    return k;
+}
+static int fk_rewind(void *c, void *mark)
+{
+    Fake *f = (Fake *)c;
+    const FkMark *k = (const FkMark *)mark;
+    f->rewinds++;
+    if (f->rewind_fail || k->epoch != f->epoch || k->pos > f->pos) return LM_ERR_STATE;
+    if (memcmp(k->st, f->st, (size_t)k->pos * sizeof(int))) f->bad_rewind++;
+    f->pos = k->pos;
     return LM_OK;
 }
 static void fk_drop(void *c, void *snap) { ((Fake *)c)->drops++; ((Fake *)c)->live--; free(snap); }
 static size_t fk_bytes(void *c, void *snap) { (void)c; return 1000 + (size_t)((const FkSnap *)snap)->pos; }
 static int g_use_cache; /* mk() gives the backend the prefix-cache hooks when set */
 static size_t g_cache_bytes; /* and this budget */
-static void fk_reset(void *c) { Fake *f = (Fake *)c; f->pos = 0; f->resets++; f->nlog = 0; }
+static int g_use_mark; /* mk() gives the backend the mark hooks (with the cache ones) when set */
+static void fk_reset(void *c) { Fake *f = (Fake *)c; f->pos = 0; f->resets++; f->nlog = 0; f->epoch++; }
 static int fk_pos(void *c) { return ((Fake *)c)->pos; }
 
 static void fake_init(Fake *f, int n_ctx)
@@ -152,7 +181,8 @@ static LmChat *mk(Fake *f, int thinking, int strict, const char *system)
     cc.tpl = g_tpl;
     cc.backend = (LmBackend){ f, f->n_vocab, f->n_ctx, fk_feed, fk_reset, fk_pos, g_use_prefill ? fk_prefill : NULL,
                               g_use_cache ? fk_save : NULL, g_use_cache ? fk_restore : NULL, g_use_cache ? fk_drop : NULL,
-                              g_use_cache ? fk_bytes : NULL };
+                              g_use_cache ? fk_bytes : NULL, NULL,
+                              g_use_mark ? fk_mark : NULL, g_use_mark ? fk_rewind : NULL };
     cc.cache_bytes = g_cache_bytes;
     cc.temperature = 0;
     cc.top_p = 1;
@@ -626,6 +656,118 @@ static int shared_prefix(const char *system)
     return n;
 }
 
+/* the state of a chat without marks after one user message per turn (answers scripted) */
+static void oracle_turns(Fake *o, const char *system, const char *const *users, const char *const *answers, int n)
+{
+    const int keep_c = g_use_cache, keep_m = g_use_mark;
+    g_use_cache = g_use_mark = 0;
+    fake_init(o, 4096);
+    LmChat *c = mk(o, 0, 0, system);
+    LmTurn t;
+    for (int i = 0; i < n; i++) {
+        script(o, answers[i], "<|im_end|>", NULL);
+        CHECK(turn(c, users[i], 0, &t, NULL, NULL) == LM_OK);
+    }
+    lm_chat_free(c);
+    g_use_cache = keep_c;
+    g_use_mark = keep_m;
+}
+
+static void sync_to(LmChat *c, const LmMsg *m, int n)
+{
+    char err[256] = "";
+    CHECK_MSG(lm_chat_sync(c, m, n, err, sizeof err) == 0, "lm_chat_sync: %s", err);
+}
+
+static void test_rewind_marks(void)
+{
+    const char *sys = "You are terse.";
+    const LmMsg hi[] = { { LM_ROLE_SYSTEM, sys, NULL, NULL, 0, 0 }, { LM_ROLE_USER, "Hi", NULL, NULL, 0, 0 },
+                         { LM_ROLE_ASSISTANT, "Hello", NULL, NULL, 0, 0 } };
+    for (int pf = 0; pf < 2; pf++) {
+        g_use_prefill = pf;
+        g_use_cache = g_use_mark = 1;
+        g_cache_bytes = 1 << 20;
+        Fake f, o;
+        fake_init(&f, 4096);
+        LmChat *c = mk(&f, 0, 0, sys);
+        LmTurn t;
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK && t.n_rewound == 0);
+        CHECK_MSG(lm_chat_marks(c) == 1 && f.marks == 1, "pf=%d: %d marks after the first turn", pf, lm_chat_marks(c));
+        const int p1 = t.n_prompt;
+
+        /* regenerate: the same prompt again, rewound to one id before its end */
+        sync_to(c, hi, 1);
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Hi", 0, &t, NULL, NULL) == LM_OK);
+        CHECK_MSG(t.n_rewound == p1 - 1 && t.n_prefill == 1 && !t.reprefill && f.resets == 0,
+                  "pf=%d regenerate: rewound %d fed %d of %d, resets %d", pf, t.n_rewound, t.n_prefill, t.n_prompt, f.resets);
+        oracle_turns(&o, sys, (const char *[]){ "Hi" }, (const char *[]){ "Hello" }, 1);
+        CHECK_MSG(same_state(&f, &o), "pf=%d: the regenerated state differs from a fresh one", pf);
+
+        /* a follow-up extends (no rewind) and marks the start of its tail */
+        sync_to(c, hi, 3);
+        script(&f, "Yes", "<|im_end|>", NULL);
+        CHECK(turn(c, "More", 0, &t, NULL, NULL) == LM_OK && t.n_rewound == 0 && !t.reprefill);
+        const int tail_start = t.n_prompt - t.n_prefill;
+        CHECK(lm_chat_marks(c) == 3);
+
+        /* the last user message edited: rewound to that start, the rest fed */
+        sync_to(c, hi, 3);
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Less", 0, &t, NULL, NULL) == LM_OK);
+        CHECK_MSG(t.n_rewound == tail_start && t.n_prefill == t.n_prompt - tail_start && !t.reprefill && f.resets == 0,
+                  "pf=%d edit: rewound %d (want %d) fed %d of %d", pf, t.n_rewound, tail_start, t.n_prefill, t.n_prompt);
+        oracle_turns(&o, sys, (const char *[]){ "Hi", "Less" }, (const char *[]){ "Hello", "Hello" }, 2);
+        CHECK_MSG(same_state(&f, &o), "pf=%d: the edited state differs from a fresh one", pf);
+        /* the marks past the rewind went with it: the next regenerate still finds a sound one */
+        sync_to(c, hi, 3);
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Less", 0, &t, NULL, NULL) == LM_OK && t.n_prefill == 1 && same_state(&f, &o));
+        CHECK(lm_chat_marks(c) <= LM_CHAT_MARKS);
+        CHECK_MSG(f.bad_rewind == 0, "pf=%d: rewound to a mark whose rows were overwritten", pf);
+
+        /* NEGATIVE: the first message edited shares no marked prefix: re-fed (from the cache) */
+        sync_to(c, hi, 1);
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK && t.n_rewound == 0 && f.resets == 1);
+        oracle_turns(&o, sys, (const char *[]){ "Yo" }, (const char *[]){ "Hello" }, 1);
+        CHECK(same_state(&f, &o));
+
+        /* NEGATIVE: a rewind that fails resets and re-feeds; the answer state is the same */
+        f.rewind_fail = 1;
+        sync_to(c, hi, 1);
+        script(&f, "Hello", "<|im_end|>", NULL);
+        CHECK(turn(c, "Yo", 0, &t, NULL, NULL) == LM_OK && t.n_rewound == 0 && f.resets == 2);
+        CHECK(same_state(&f, &o));
+        f.rewind_fail = 0;
+
+        /* /reset drops every mark */
+        lm_chat_reset(c);
+        CHECK(lm_chat_marks(c) == 0 && lm_chat_mark_bytes(c) == 0);
+        lm_chat_free(c);
+        CHECK_MSG(f.live == 0, "pf=%d: %d marks or snapshots leaked", pf, f.live);
+
+        /* a budget of 0 keeps one mark; many turns never keep more than LM_CHAT_MARKS */
+        for (int b = 0; b < 2; b++) {
+            g_cache_bytes = b ? (size_t)1 << 30 : 0;
+            fake_init(&f, 4096);
+            c = mk(&f, 0, 0, sys);
+            for (int k = 0; k < 6; k++) {
+                script(&f, "Yes", "<|im_end|>", NULL);
+                CHECK(turn(c, "More", 0, &t, NULL, NULL) == LM_OK);
+                CHECK_MSG(lm_chat_marks(c) <= (b ? LM_CHAT_MARKS : 1), "pf=%d budget %d: %d marks", pf, b, lm_chat_marks(c));
+            }
+            CHECK(b == 0 || lm_chat_marks(c) == LM_CHAT_MARKS);
+            lm_chat_free(c);
+            CHECK(f.live == 0);
+        }
+    }
+    g_use_prefill = g_use_cache = g_use_mark = 0;
+    g_cache_bytes = 0;
+}
+
 static void test_prefix_cache(void)
 {
     const char *sys = "You are terse. Answer in one short line.";
@@ -905,6 +1047,7 @@ int main(void)
     test_set_sampling();
     test_nul_byte();
     test_prefix_cache();
+    test_rewind_marks();
     test_prefix_cache_sync();
     test_prefix_cache_failures();
     test_prefix_cache_slots();

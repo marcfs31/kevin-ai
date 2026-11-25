@@ -819,7 +819,7 @@ static int parse_tool_calls(const jval *tc, int msg_i, ParsedMsg *p, char *err, 
     return 0;
 }
 
-typedef struct { int status, n_prompt, n_cached, n_prefill, n_gen, reprefill; double prefill_s, decode_s; } Log;
+typedef struct { int status, n_prompt, n_cached, n_rewound, n_prefill, n_gen, reprefill; double prefill_s, decode_s; } Log;
 
 static void usage_json(Buf *b, const LmTurn *t)
 {
@@ -979,6 +979,7 @@ static void chat_completions(Server *s, Conn *c, Log *log)
     log->n_prompt = t.n_prompt;
     log->n_prefill = t.n_prefill;
     log->n_cached = t.n_cached;
+    log->n_rewound = t.n_rewound;
     log->n_gen = t.n_gen;
     log->reprefill = t.reprefill;
     log->prefill_s = t.prefill_s;
@@ -1144,9 +1145,9 @@ static void handle(Server *s, Conn *c, int timeout_s)
             fseek(stderr, 0, SEEK_SET);
     }
     if (log.n_prompt)
-        fprintf(stderr, "lm-serve: %s %s %d%s | prompt %d, %d from cache, fed %d%s at %.2f tok/s | generated %d at %.2f tok/s | %.1f s\n",
-                c->method, path, log.status, c->broken ? " (client gone)" : "", log.n_prompt, log.n_cached, log.n_prefill,
-                log.reprefill ? " (re-fed)" : "", log.prefill_s > 0 ? log.n_prefill / log.prefill_s : 0.0,
+        fprintf(stderr, "lm-serve: %s %s %d%s | prompt %d, %d from cache, %d kept by rewind, fed %d%s at %.2f tok/s | generated %d at %.2f tok/s | %.1f s\n",
+                c->method, path, log.status, c->broken ? " (client gone)" : "", log.n_prompt, log.n_cached, log.n_rewound,
+                log.n_prefill, log.reprefill ? " (re-fed)" : "", log.prefill_s > 0 ? log.n_prefill / log.prefill_s : 0.0,
                 log.n_gen, log.decode_s > 0 ? log.n_gen / log.decode_s : 0.0, dt);
     else
         fprintf(stderr, "lm-serve: %s %s %d | %.3f s\n", c->method, path, log.status, dt);
@@ -1166,6 +1167,7 @@ static void *be_save(void *ctx) { return lm_snapshot((const LmModel *)ctx); }
 static int be_restore(void *ctx, void *snap) { return lm_restore((LmModel *)ctx, (const LmSnapshot *)snap); }
 static void be_drop(void *ctx, void *snap) { (void)ctx; lm_snapshot_free((LmSnapshot *)snap); }
 static size_t be_snap_bytes(void *ctx, void *snap) { (void)ctx; return lm_snapshot_bytes((const LmSnapshot *)snap); }
+static void *be_mark(void *ctx) { return lm_mark((const LmModel *)ctx); }
 
 /* Listen on host:port. *loopback says whether only this machine can connect. */
 static int listen_on(const char *host, const char *port, char *bound, size_t boundlen, int *loopback)
@@ -1324,7 +1326,8 @@ int main(int argc, char **argv)
     cc.tok = tok;
     cc.tpl = tpl;
     cc.backend = (LmBackend){ m, lm_n_vocab(m), lm_n_ctx(m), be_feed, be_reset, be_pos, be_prefill,
-                              be_save, be_restore, be_drop, be_snap_bytes, be_prefill_image };
+                              be_save, be_restore, be_drop, be_snap_bytes, be_prefill_image,
+                              be_mark, be_restore };
     cc.cache_bytes = (size_t)cache_mb << 20;
     cc.temperature = s.temperature;
     cc.top_p = s.top_p;

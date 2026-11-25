@@ -59,8 +59,8 @@ int  lm_n_ctx(const LmModel *m);
 int  lm_pos(const LmModel *m);      /* tokens fed since the last reset */
 
 /* Drop the KV cache and every recurrent/conv state, back to position 0. Linear-
- * attention state cannot be rewound, so there is no truncate: a caller whose new
- * prompt does not extend what was fed resets and re-prefills. */
+ * attention state cannot be truncated, so going back needs a mark (lm_mark) or a snapshot;
+ * without one a caller whose new prompt does not extend what was fed resets and re-prefills. */
 void lm_reset(LmModel *m);
 
 /* Append one token at the next position and run all layers. If logits is non-NULL it
@@ -144,6 +144,17 @@ int         lm_restore(LmModel *m, const LmSnapshot *s);
 int         lm_snapshot_pos(const LmSnapshot *s);
 size_t      lm_snapshot_bytes(const LmSnapshot *s);
 void        lm_snapshot_free(LmSnapshot *s);               /* NULL is a no-op */
+
+/* A mark: a snapshot of only the state that later positions overwrite -- the conv and
+ * delta-rule state (Qwen3.5), the sliding-window rings shorter than the context (Gemma 4),
+ * nothing but the position for Qwen2 -- and not the KV rows below the position, which are
+ * append-only. lm_restore of a mark rewinds the model back to it, BIT-IDENTICAL to the moment
+ * it was taken, while the rows below the mark are still the ones fed then: it returns -1
+ * (nothing changed) after an lm_reset or the lm_restore of a full snapshot since, or when the
+ * model is behind the mark. Rewinding below a mark and feeding again overwrites rows the mark
+ * relies on, which the engine does not see: the caller drops such marks. Size, whatever the
+ * position: for Qwen3.5-4B about 50 MiB; lm_snapshot_pos, _bytes and _free apply. */
+LmSnapshot *lm_mark(const LmModel *m);                     /* NULL on allocation failure */
 
 /* Where the time goes (lm-run --profile). Process-wide and OFF by default; while on, every
  * lm_feed and lm_prefill adds wall-clock seconds to these counters. Results are unchanged by

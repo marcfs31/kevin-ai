@@ -121,19 +121,26 @@ check 'grep -Eq "image_unsupported|image_invalid" "$tmp/body"' "remote image_url
 # temperature 0 is reproducible
 chat "$req" > /dev/null
 check '[ "$(j "json.dumps(d[\"choices\"][0][\"message\"][\"content\"])")" = "$answer" ]' "temperature 0 gave two different answers"
+# that was a regenerate: rewound to the mark one id before the end of the prompt, one id fed
+check 'tail -1 "$tmp/serve.err" | grep -Eq "prompt ([0-9]+), 0 from cache, [1-9][0-9]* kept by rewind, fed 1 at"' \
+      "the regenerate was not rewound: $(tail -1 "$tmp/serve.err")"
 
 # the client sends the answer back with a new message: only the new part is fed
 req2='{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":'"$answer"'},{"role":"user","content":"more"}],"max_tokens":3,"temperature":0}'
 check '[ "$(chat "$req2")" = 200 ]' "follow-up status: $(cat "$tmp/body")"
-check 'tail -1 "$tmp/serve.err" | grep -q "prompt [0-9]*, 0 from cache, fed [0-9]* at" && ! tail -1 "$tmp/serve.err" | grep -q "re-fed"' \
+check 'tail -1 "$tmp/serve.err" | grep -q "prompt [0-9]*, 0 from cache, 0 kept by rewind, fed [0-9]* at" && ! tail -1 "$tmp/serve.err" | grep -q "re-fed"' \
       "the follow-up re-fed the conversation: $(tail -1 "$tmp/serve.err")"
 check '[ "$(j "d[\"usage\"][\"prompt_tokens\"]")" -gt "$p1" ]' "the follow-up prompt is not longer than the first"
+# the last user message edited: rewound to the start of that turn, only its new tail fed
+req3='{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":'"$answer"'},{"role":"user","content":"less please"}],"max_tokens":3,"temperature":0}'
+check '[ "$(chat "$req3")" = 200 ] && tail -1 "$tmp/serve.err" | grep -Eq "prompt [0-9]+, 0 from cache, [1-9][0-9]* kept by rewind, fed [0-9]+ at" && ! tail -1 "$tmp/serve.err" | grep -q "re-fed"' \
+      "the edited last message was not rewound: $(tail -1 "$tmp/serve.err")"
 # reset drops the conversation and the prefix cache, so the same follow-up is fed again
 check '[ "$(code "$url/v1/chat/reset")" = 405 ]' "GET /v1/chat/reset was accepted"
 check '[ "$(post -d "{}" "$url/v1/chat/reset")" = 200 ] && grep -q "\"status\":\"ok\"" "$tmp/body"' "POST /v1/chat/reset: $(cat "$tmp/body")"
 check '[ "$(chat "$req2")" = 200 ]' "chat after reset: $(cat "$tmp/body")"
 # nothing was left to extend: the whole prompt is fed, and none of it comes from the cache
-check 'tail -1 "$tmp/serve.err" | grep -Eq "prompt ([0-9]+), 0 from cache, fed \\1 at"' \
+check 'tail -1 "$tmp/serve.err" | grep -Eq "prompt ([0-9]+), 0 from cache, 0 kept by rewind, fed \\1 at"' \
       "reset left the conversation in memory: $(tail -1 "$tmp/serve.err")"
 # NEGATIVE: an edited answer cannot reuse the state
 chat '{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"edited"},{"role":"user","content":"more"}],"max_tokens":3}' > /dev/null
@@ -146,7 +153,7 @@ dreq='{"messages":[{"role":"system","content":"You answer in one short line."},{
 check '[ "$(chat "$creq")" = 200 ] && tail -1 "$tmp/serve.err" | grep -q " 0 from cache"' "conversation C: $(tail -1 "$tmp/serve.err")"
 cans=$(j 'json.dumps(d["choices"][0]["message"]["content"])')
 check '[ "$(chat "$dreq")" = 200 ] && tail -1 "$tmp/serve.err" | grep -q " 0 from cache"' "conversation D: $(tail -1 "$tmp/serve.err")"
-check '[ "$(chat "$creq")" = 200 ] && tail -1 "$tmp/serve.err" | grep -q " [1-9][0-9]* from cache, fed [0-9]* at"' \
+check '[ "$(chat "$creq")" = 200 ] && tail -1 "$tmp/serve.err" | grep -q " [1-9][0-9]* from cache, 0 kept by rewind, fed [0-9]* at"' \
       "conversation C again was not restored from the cache: $(tail -1 "$tmp/serve.err")"
 check '[ "$(j "json.dumps(d[\"choices\"][0][\"message\"][\"content\"])")" = "$cans" ]' "the cached conversation answered differently"
 

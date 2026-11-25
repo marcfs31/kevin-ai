@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Rewind marks: `lm_mark` in `lm.h` snapshots only the state that later positions overwrite (Qwen3.5 conv and delta-rule state, Gemma 4 sliding-window rings, nothing for Qwen2), a fixed size whatever the position; `lm_restore` of a mark rewinds to it bit-identically. `lm_chat` keeps up to `LM_CHAT_MARKS` (4) of them within `--cache-mb`, so `lm-serve` and `lm-chat` feed one token to regenerate or retry the last reply and only the edited message when the last user message changes, instead of re-feeding the whole conversation. The log line reports `N kept by rewind`. Tests: `tests/unit/test_mark.c`, `test_rewind_marks` in `test_chat.c`, regenerate and edit checks in `test_lm_serve.sh`.
+
 ## [1.0.1] - 2026-11-25
 
 ### Added

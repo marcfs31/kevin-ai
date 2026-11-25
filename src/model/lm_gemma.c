@@ -278,11 +278,12 @@ void lm_gemma_reset(LmGemma *g)
     g->pos = 0;
 }
 
-void lm_gemma_state_regions(LmGemma *g, int pos, LmRegionFn fn, void *user)
+void lm_gemma_state_regions(LmGemma *g, int pos, int rings_only, LmRegionFn fn, void *user)
 {
     const LmGemmaCfg *c = &g->cfg;
     for (int i = 0; i < c->first_shared; i++) {
         const int slots = slots_of(c, c->full[i], g->ctx);
+        if (rings_only && slots >= g->ctx) continue;
         const size_t rows = (size_t)(pos < slots ? pos : slots), kvd = (size_t)c->kv_heads * hd_of(c, c->full[i]);
         fn(user, g->kc[i], rows * kvd);
         fn(user, g->vc[i], rows * kvd);

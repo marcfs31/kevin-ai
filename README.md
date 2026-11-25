@@ -799,9 +799,10 @@ flowchart TD
   `lm_prefill` (a batch of tokens), `lm_reset`, `lm_pos` and the size queries. Speculative
   decoding adds `lm_draft`, `lm_verify`, `lm_accept` and `lm_greedy_check` (Qwen's MTP head).
   Errors are small integer codes (`LM_ERR_CTX`, `LM_ERR_TOKEN`, `LM_ERR_IO`). A model is
-  never truncated, because linear-attention state cannot be rewound; a caller that changes
+  never truncated, because linear-attention state cannot be cut back; a caller that changes
   the prompt resets and re-feeds, or restores a snapshot: `lm_snapshot` copies the state at
-  the current position and `lm_restore` puts it back bit-identically. `lm_times_enable` and
+  the current position and `lm_restore` puts it back bit-identically. `lm_mark` copies only
+  the state later positions overwrite, and restoring it rewinds the model to that point. `lm_times_enable` and
   `lm_times_get` report where the time went (what `--profile` prints).
 - **`src/model`.** `lm_open` reads `config.json` and dispatches on `model_type`: `qwen3_5`
   goes to `lm_layers`, `gemma4` to `lm_gemma`. Each reader is strict: a missing field is an
@@ -964,9 +965,16 @@ bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
   server; with a key set, the key is checked before the body is read.
 - It listens on 127.0.0.1:8080. To reach it from the network, pass `--host 0.0.0.0` and set
   `LM_SERVE_API_KEY` in the environment; `/v1` then needs `Authorization: Bearer <key>`.
-- The model state cannot be rewound, so it is reused only when a request continues the last
-  conversation with the previous answer sent back unchanged (what chat clients do). Then only
-  the new message is fed.
+- The model state is reused when a request continues the last conversation with the
+  previous answer sent back unchanged (what chat clients do). Then only the new message is fed.
+- A request that goes back in the last conversation is rewound instead of re-fed: the server
+  keeps up to four marks (`lm_mark`) at the start of each turn's new part and one token before
+  the end of its prompt. Regenerating or retrying the last reply then feeds one token, and
+  editing the last message feeds only that message. The log line says `N kept by rewind`, and
+  the answer is the same as when fed from scratch. A mark holds only the state later tokens
+  overwrite, not the KV rows, so its size does not grow with the conversation: about 50 MiB for
+  Qwen3.5-4B, the sliding-window rings for Gemma 4, nothing for `qwen2`. Marks share
+  `--cache-mb` with the snapshots below, oldest dropped first.
 - Otherwise a prefix cache helps: when two conversations in a row share their system prompt
   (at least 16 tokens), the server keeps a snapshot of the state at its end, and a later
   conversation with the same system prompt is restored from it and feeds only the rest. The
