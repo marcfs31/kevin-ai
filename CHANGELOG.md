@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.4] - 2026-11-25
 
 ### Changed
 - `lm-serve` reads each connection on its own thread (`MAX_CONNS`, 16 at once): `/health`, `/v1/models` and refusals are answered there, so a page reload during a long reply no longer waits for the reply to end. Chat requests are read in full first, then answered one at a time and in order on the main thread, the only one that touches the model; a request still queued at shutdown gets a 503. Test: `/health` and a queued request during a reply in `test_lm_serve.sh`.
