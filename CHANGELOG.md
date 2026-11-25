@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.31] - 2026-11-25
 
 ### Added
 - READMEs: measured load times for each chat model id, and Effort Low/Medium/High wall-clock comparison (Gemma Uncensored) in `web/README.md`, with pointers from `README.md` / `README.es.md`.
