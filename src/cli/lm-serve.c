@@ -1304,6 +1304,12 @@ static void *accept_thread(void *arg)
                     ac->spare = open("/dev/null", O_RDONLY);
                 } else {
                     ac->spare = open("/dev/null", O_RDONLY);
+                    if (ac->spare < 0) {
+                        /* no shedding possible: the pending connection keeps poll() ready, so
+                         * without a pause this loop would spin until a descriptor frees */
+                        const struct timespec pause = { 0, 100000000L };
+                        nanosleep(&pause, NULL);
+                    }
                 }
                 continue;
             }
