@@ -54,6 +54,7 @@
  * text. Original to this repository. */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <math.h>
 #include <netdb.h>
@@ -62,6 +63,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,7 +92,8 @@
 
 enum { MAX_HEAD = 16 * 1024, MAX_BODY = 24 * 1024 * 1024, MAX_IMAGES = 8, MAX_TOOLS = 32, MAX_TOOL_CALLS = 32 };
 
-static volatile sig_atomic_t g_stop = 0;
+/* read and written from several threads; lock-free on every platform this builds on */
+static _Atomic int g_stop = 0;
 /* a byte on the pipe wakes every poll() the moment a signal lands: the workers do not wait
  * out their request deadlines after SIGINT/SIGTERM */
 static int g_stop_pipe[2] = { -1, -1 };
@@ -1170,6 +1173,13 @@ static int answer_quick(Server *s, Job *j, int timeout_s)
 static void answer_model(Server *s, Job *j)
 {
     Conn *c = &j->c;
+    /* the client left while the request waited in the queue: nothing to answer, and the
+     * prompt (and any image encoding) is not work the live requests should wait for */
+    if (client_gone(c)) {
+        c->broken = 1;
+        j->log.status = 499;
+        return;
+    }
     if (!strcmp(c->path, "/v1/chat/reset")) {
         lm_chat_purge(s->chat);
         static const char body[] = "{\"status\":\"ok\"}";
@@ -1264,7 +1274,7 @@ static Job *next_job(void)
     return j;
 }
 
-typedef struct { Server *s; int lfd, timeout_s, failed; } Acceptor;
+typedef struct { Server *s; int lfd, timeout_s, failed, spare; } Acceptor;
 
 /* accepts while the server runs; at MAX_CONNS it waits, and new clients wait in the backlog */
 static void *accept_thread(void *arg)
@@ -1280,6 +1290,16 @@ static void *accept_thread(void *arg)
         int fd = accept(ac->lfd, NULL, NULL);
         if (fd < 0) {
             if (errno == EINTR || errno == ECONNABORTED || errno == EAGAIN) continue;
+            /* out of descriptors (a peer holding connections open before they are read):
+             * shed one connection and keep serving rather than stop. The spare descriptor
+             * makes one accept() possible; the connection is closed at once */
+            if ((errno == EMFILE || errno == ENFILE) && ac->spare >= 0) {
+                close(ac->spare);
+                int drop = accept(ac->lfd, NULL, NULL);
+                if (drop >= 0) close(drop);
+                ac->spare = open("/dev/null", O_RDONLY);
+                continue;
+            }
             fprintf(stderr, "lm-serve: accept failed: %s\n", strerror(errno));
             ac->failed = 1;
             g_stop = 1;
@@ -1534,7 +1554,7 @@ int main(int argc, char **argv)
     sigaddset(&block, SIGINT);
     sigaddset(&block, SIGTERM);
     pthread_sigmask(SIG_BLOCK, &block, &old);
-    Acceptor ac = { &s, lfd, (int)timeout_s, 0 };
+    Acceptor ac = { &s, lfd, (int)timeout_s, 0, open("/dev/null", O_RDONLY) };
     pthread_t acceptor;
     const int started = pthread_create(&acceptor, NULL, accept_thread, &ac) == 0;
     pthread_sigmask(SIG_SETMASK, &old, NULL);
