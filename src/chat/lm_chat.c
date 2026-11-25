@@ -36,6 +36,7 @@ typedef struct {
 typedef struct { char *s; size_t n, cap; } Buf;
 
 typedef struct { void *snap; LmIds ids; size_t bytes; } Slot;   /* a backend snapshot of ids */
+typedef struct { void *snap; int pos; size_t bytes; } Mark;     /* a rewind mark at fed.ids[0..pos) */
 
 struct LmChat {
     LmChatConfig cfg;
@@ -51,6 +52,9 @@ struct LmChat {
     Slot *slot;      /* the prefix cache, most recently used first */
     int nslot, capslot;
     size_t slot_bytes;   /* sum of slot[].bytes */
+    Mark mark[LM_CHAT_MARKS];   /* oldest first; every pos <= fed.n, taken since the last reset */
+    int nmark;
+    size_t mark_bytes;   /* sum of mark[].bytes */
     int reprefills;
     float *logits;
     const jval *tools;   /* borrowed, see lm_chat_set_tools */
@@ -245,7 +249,8 @@ LmChat *lm_chat_new(const LmChatConfig *cfg, char *err, size_t errlen)
     if (!cfg || !cfg->tok || !cfg->tpl || !cfg->backend.feed || !cfg->backend.reset ||
         !cfg->backend.pos || cfg->backend.n_vocab <= 0 || cfg->backend.n_ctx <= 0 ||
         !cfg->backend.save != !cfg->backend.restore || !cfg->backend.save != !cfg->backend.drop ||
-        !cfg->backend.save != !cfg->backend.snap_bytes) {
+        !cfg->backend.save != !cfg->backend.snap_bytes || !cfg->backend.mark != !cfg->backend.rewind ||
+        (cfg->backend.mark && !cfg->backend.save)) {
         set_err(err, errlen, "lm_chat_new: incomplete configuration or backend");
         return NULL;
     }
@@ -273,9 +278,40 @@ static void drop_slot(LmChat *c, int i)
     c->nslot--;
 }
 
+static void drop_mark(LmChat *c, int i)
+{
+    c->cfg.backend.drop(c->cfg.backend.ctx, c->mark[i].snap);
+    c->mark_bytes -= c->mark[i].bytes;
+    memmove(c->mark + i, c->mark + i + 1, (size_t)(c->nmark - i - 1) * sizeof *c->mark);
+    c->nmark--;
+}
+
+/* Drop the marks past pos (all of them for -1): feeding from pos overwrites what they rely on. */
+static void drop_marks_after(LmChat *c, int pos)
+{
+    for (int i = c->nmark - 1; i >= 0; i--)
+        if (c->mark[i].pos > pos) drop_mark(c, i);
+}
+
+/* Mark the state, which holds c->fed, unless a mark is there already; then drop the oldest
+ * while there are too many or they and the prefix cache exceed the budget (the new one stays). */
+static void add_mark(LmChat *c)
+{
+    const LmBackend *be = &c->cfg.backend;
+    if (!be->mark || c->fed.n == 0) return;
+    for (int i = 0; i < c->nmark; i++) if (c->mark[i].pos == c->fed.n) return;
+    if (c->nmark == LM_CHAT_MARKS) drop_mark(c, 0);
+    void *snap = be->mark(be->ctx);
+    if (!snap) return;
+    c->mark[c->nmark] = (Mark){ snap, c->fed.n, be->snap_bytes(be->ctx, snap) };
+    c->mark_bytes += c->mark[c->nmark++].bytes;
+    while (c->nmark > 1 && c->slot_bytes + c->mark_bytes > c->cfg.cache_bytes) drop_mark(c, 0);
+}
+
 void lm_chat_free(LmChat *c)
 {
     if (!c) return;
+    while (c->nmark > 0) drop_mark(c, c->nmark - 1);
     hist_clear(c);
     free(c->h);
     lm_ids_free(&c->fed);
@@ -301,12 +337,14 @@ void lm_chat_reset(LmChat *c)
     c->prev_imgs = c->fed_imgs;
     c->fed_imgs = NULL;
     c->dirty = 0;
+    drop_marks_after(c, -1);
     c->cfg.backend.reset(c->cfg.backend.ctx);
 }
 
 void lm_chat_purge(LmChat *c)
 {
     hist_clear(c);
+    drop_marks_after(c, -1);
     lm_ids_free(&c->fed);
     lm_ids_free(&c->prev);
     free(c->fed_imgs);
@@ -335,6 +373,8 @@ int lm_chat_fed(const LmChat *c) { return c->fed.n; }
 int lm_chat_cached(const LmChat *c) { return c->nslot ? c->slot[0].ids.n : 0; }
 int lm_chat_cache_slots(const LmChat *c) { return c->nslot; }
 size_t lm_chat_cache_bytes(const LmChat *c) { return c->slot_bytes; }
+int lm_chat_marks(const LmChat *c) { return c->nmark; }
+size_t lm_chat_mark_bytes(const LmChat *c) { return c->mark_bytes; }
 
 int lm_chat_sync(LmChat *c, const LmMsg *msgs, int n, char *err, size_t errlen)
 {
@@ -551,6 +591,30 @@ static int restore_cache(LmChat *c, const LmIds *prompt)
     return s.ids.n;
 }
 
+/* The backend holds c->fed, which the prompt does not extend. Rewind to the latest mark inside
+ * their common prefix (leaving at least the last id to feed) unless a cache slot would cover
+ * more; returns the ids now held, 0 if no mark applies. A mark that fails to rewind drops them
+ * all (the caller then resets). */
+static int rewind_to_mark(LmChat *c, const LmIds *prompt)
+{
+    const LmBackend *be = &c->cfg.backend;
+    int shared = common_prefix(&c->fed, prompt), best = -1;
+    if (shared >= prompt->n) shared = prompt->n - 1;
+    for (int k = 0; k < c->nmark; k++)
+        if (c->mark[k].pos <= shared && (best < 0 || c->mark[k].pos > c->mark[best].pos)) best = k;
+    if (best < 0) return 0;
+    const int pos = c->mark[best].pos;
+    for (int k = 0; k < c->nslot; k++) {
+        const LmIds *ids = &c->slot[k].ids;
+        if (ids->n > pos && ids->n < prompt->n && !memcmp(ids->ids, prompt->ids, (size_t)ids->n * sizeof(int)))
+            return 0;
+    }
+    if (be->rewind(be->ctx, c->mark[best].snap) != LM_OK) { drop_marks_after(c, -1); return 0; }
+    c->fed.n = pos;
+    drop_marks_after(c, pos);
+    return pos;
+}
+
 /* Add a snapshot of the state, which holds c->fed, as the most recently used slot, then drop
  * the least recently used ones while the slots exceed the budget (the new one always stays).
  * With no budget the old slot goes first: two snapshots alive at once could be what exhausts
@@ -678,6 +742,9 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
     int reuse = !c->dirty && c->fed.n < prompt.n && be->pos(be->ctx) == c->fed.n &&
                 (c->fed.n == 0 || !memcmp(c->fed.ids, prompt.ids, (size_t)c->fed.n * sizeof(int))) &&
                 !strcmp(fed_fp, img_fp);
+    if (!reuse && c->nmark && !c->dirty && !has_images && !*fed_fp && be->pos(be->ctx) == c->fed.n &&
+        prompt.n <= be->n_ctx && (res->n_rewound = rewind_to_mark(c, &prompt)) > 0)
+        reuse = 1;
     int start = reuse ? c->fed.n : 0;
     int save_at = 0;
     /* Prefix cache skips prompts that contain images (simpler; never restores wrong pixels). */
@@ -697,6 +764,7 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
     if (!reuse) {
         if (c->fed.n > 0 || c->dirty) { res->reprefill = 1; c->reprefills++; }
         if (c->fed.n > 0 || c->dirty || be->pos(be->ctx) != 0) be->reset(be->ctx);
+        drop_marks_after(c, -1);
         c->fed.n = 0;
         free(c->fed_imgs);
         c->fed_imgs = NULL;
@@ -707,6 +775,10 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
         if (start > 0 && res->reprefill) { res->reprefill = 0; c->reprefills--; }
         if (save_at <= start) save_at = 0;
     }
+
+    const int mark_ok = be->mark && !has_images;
+    if (mark_ok && reuse && start > 0) add_mark(c);
+    const int mark_at = mark_ok && prompt.n - 1 > start ? prompt.n - 1 : 0;
 
     double t0 = now_s();
     const int chunk = be->prefill ? LM_CHAT_PREFILL_CHUNK : 1;
@@ -754,6 +826,7 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
         int n = prompt.n - i < chunk ? prompt.n - i : chunk;
         if (span_i < n_spans && i + n > spans[span_i].id_start) n = spans[span_i].id_start - i;
         if (i < save_at && i + n > save_at) n = save_at - i;
+        if (i < mark_at && i + n > mark_at) n = mark_at - i;
         if (n < 1) n = 1;
         const int last = i + n == prompt.n;
         int frc = be->prefill ? be->prefill(be->ctx, prompt.ids + i, n, last ? c->logits : NULL)
@@ -776,6 +849,7 @@ static int turn_core(LmChat *c, const LmTurnOpts *opts, LmTurn *res, char *err, 
         res->n_prefill += n;
         i += n;
         if (save_at && c->fed.n == save_at) save_cache(c);
+        if (mark_at && c->fed.n == mark_at) add_mark(c);
     }
     res->prefill_s = now_s() - t0;
     free(spans);

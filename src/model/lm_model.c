@@ -60,6 +60,7 @@ typedef struct {
 
 struct LmModel {
     unsigned long id;                        /* unique per lm_open: snapshots name their model by it */
+    unsigned long epoch;                     /* bumped by lm_reset and a full lm_restore: marks name it */
     LmGemma *gemma;                          /* non-NULL: a Gemma 4 model, every other field unused */
     LmQwen2 *q2;                             /* non-NULL: a Qwen2 GGUF model, every other field unused */
     LmCfg    cfg;
@@ -380,6 +381,7 @@ int  lm_pos(const LmModel *m)     { return m->gemma ? lm_gemma_pos(m->gemma) : m
 
 void lm_reset(LmModel *m)
 {
+    m->epoch++;
     if (m->gemma) { lm_gemma_reset(m->gemma); return; }
     if (m->q2) { lm_qwen2_reset(m->q2); return; }
     const LmCfg *c = &m->cfg;
@@ -399,28 +401,32 @@ void lm_reset(LmModel *m)
 /* ---- snapshots ------------------------------------------------------------------- */
 
 struct LmSnapshot {
-    unsigned long model;
+    unsigned long model, epoch;
+    int light;                               /* lm_mark: only the state later positions overwrite */
     int pos, rope_pos, last_t, last_h, last_w;
     size_t n;
     float *data;
 };
 
-/* The state regions at position pos, in a fixed order (lm_gemma_state_regions for Gemma). */
-static void state_regions(LmModel *m, int pos, LmRegionFn fn, void *user)
+/* The state regions at position pos, in a fixed order (lm_gemma_state_regions for Gemma).
+ * light: skip the append-only KV rows, which positions after pos never overwrite (lm_mark). */
+static void state_regions(LmModel *m, int pos, int light, LmRegionFn fn, void *user)
 {
-    if (m->gemma) { lm_gemma_state_regions(m->gemma, pos, fn, user); return; }
-    if (m->q2) { lm_qwen2_state_regions(m->q2, pos, fn, user); return; }
+    if (m->gemma) { lm_gemma_state_regions(m->gemma, pos, light, fn, user); return; }
+    if (m->q2) { if (!light) lm_qwen2_state_regions(m->q2, pos, fn, user); return; }
     const LmCfg *c = &m->cfg;
     const size_t kvd = (size_t)c->kv_heads * c->head_dim;
     for (int i = 0; i < c->layers; i++) {
         if (m->conv[i]) fn(user, m->conv[i], (size_t)c->conv_dim * (size_t)(c->conv_k - 1) + 1);
         if (m->S[i]) fn(user, m->S[i], (size_t)c->lv_heads * c->lk_dim * c->lv_dim);
-        if (m->kc[i]) fn(user, m->kc[i], (size_t)pos * kvd);
-        if (m->vc[i]) fn(user, m->vc[i], (size_t)pos * kvd);
+        if (m->kc[i] && !light) fn(user, m->kc[i], (size_t)pos * kvd);
+        if (m->vc[i] && !light) fn(user, m->vc[i], (size_t)pos * kvd);
     }
     if (m->mtp) {
-        fn(user, m->mkc, (size_t)pos * kvd);
-        fn(user, m->mvc, (size_t)pos * kvd);
+        if (!light) {
+            fn(user, m->mkc, (size_t)pos * kvd);
+            fn(user, m->mvc, (size_t)pos * kvd);
+        }
         fn(user, m->hlast, (size_t)c->hidden);
     }
 }
@@ -435,17 +441,19 @@ static void walk(void *u, float *p, size_t n)
     w->off += n;
 }
 
-LmSnapshot *lm_snapshot(const LmModel *cm)
+static LmSnapshot *take(const LmModel *cm, int light)
 {
     LmModel *m = (LmModel *)cm; /* the walk only reads when saving */
     const int pos = lm_pos(m);
     Walk w = { NULL, 0, 0 };
-    state_regions(m, pos, walk, &w);
+    state_regions(m, pos, light, walk, &w);
     LmSnapshot *s = (LmSnapshot *)calloc(1, sizeof *s);
     if (!s) return NULL;
     s->data = (float *)malloc((w.off ? w.off : 1) * sizeof(float));
     if (!s->data) { free(s); return NULL; }
     s->model = m->id;
+    s->epoch = m->epoch;
+    s->light = light;
     s->pos = pos;
     s->rope_pos = m->gemma || m->q2 ? 0 : m->rope_pos;
     s->last_t = m->gemma || m->q2 ? 0 : m->last_t;
@@ -453,15 +461,20 @@ LmSnapshot *lm_snapshot(const LmModel *cm)
     s->last_w = m->gemma || m->q2 ? 0 : m->last_w;
     s->n = w.off;
     Walk save = { s->data, 0, 1 };
-    state_regions(m, pos, walk, &save);
+    state_regions(m, pos, light, walk, &save);
     return s;
 }
+
+LmSnapshot *lm_snapshot(const LmModel *m) { return take(m, 0); }
+LmSnapshot *lm_mark(const LmModel *m) { return take(m, 1); }
 
 int lm_restore(LmModel *m, const LmSnapshot *s)
 {
     if (!s || s->model != m->id) return -1;
+    if (s->light && (s->epoch != m->epoch || s->pos > lm_pos(m))) return -1;
+    if (!s->light) m->epoch++;
     Walk w = { s->data, 0, 2 };
-    state_regions(m, s->pos, walk, &w);
+    state_regions(m, s->pos, s->light, walk, &w);
     if (m->gemma) lm_gemma_set_pos(m->gemma, s->pos);
     else if (m->q2) lm_qwen2_set_pos(m->q2, s->pos);
     else {

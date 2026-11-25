@@ -60,9 +60,11 @@ int      lm_gemma_prefill_image(LmGemma *g, const float *rows, int n, int width,
 
 /* The state regions at position pos, in a fixed order: for every cache-owning layer its K and
  * V rows in use (min(pos, slots) of them; a ring once it wrapped is all of its slots). With
- * lm_gemma_set_pos this is what lm_snapshot / lm_restore copy. */
+ * lm_gemma_set_pos this is what lm_snapshot / lm_restore copy. rings_only: just the layers whose
+ * cache is a sliding-window ring shorter than the context, the only rows that later positions
+ * overwrite (what lm_mark copies). */
 typedef void (*LmRegionFn)(void *user, float *p, size_t n);
-void     lm_gemma_state_regions(LmGemma *g, int pos, LmRegionFn fn, void *user);
+void     lm_gemma_state_regions(LmGemma *g, int pos, int rings_only, LmRegionFn fn, void *user);
 void     lm_gemma_set_pos(LmGemma *g, int pos);
 
 #endif /* LM_GEMMA_H */
