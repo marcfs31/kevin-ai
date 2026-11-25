@@ -1293,11 +1293,18 @@ static void *accept_thread(void *arg)
             /* out of descriptors (a peer holding connections open before they are read):
              * shed one connection and keep serving rather than stop. The spare descriptor
              * makes one accept() possible; the connection is closed at once */
-            if ((errno == EMFILE || errno == ENFILE) && ac->spare >= 0) {
-                close(ac->spare);
-                int drop = accept(ac->lfd, NULL, NULL);
-                if (drop >= 0) close(drop);
-                ac->spare = open("/dev/null", O_RDONLY);
+            if (errno == EMFILE || errno == ENFILE) {
+                if (ac->spare >= 0) {
+                    close(ac->spare);
+                    int drop = accept(ac->lfd, NULL, NULL);
+                    if (drop >= 0) close(drop);
+                    /* under ENFILE another process can take the slot first: then there is
+                     * no spare, shedding pauses, and the reopen is retried below — the
+                     * connection deadlines free our own descriptors whatever happens */
+                    ac->spare = open("/dev/null", O_RDONLY);
+                } else {
+                    ac->spare = open("/dev/null", O_RDONLY);
+                }
                 continue;
             }
             fprintf(stderr, "lm-serve: accept failed: %s\n", strerror(errno));
@@ -1305,6 +1312,10 @@ static void *accept_thread(void *arg)
             g_stop = 1;
             break;
         }
+        /* the listener is non-blocking and on macOS/BSD the accepted socket inherits that:
+         * clear it, or a full client buffer would read as a disconnect in send_all */
+        const int cfl = fcntl(fd, F_GETFL);
+        if (cfl >= 0) fcntl(fd, F_SETFL, cfl & ~O_NONBLOCK);
         struct timeval tv = { ac->timeout_s, 0 }; /* a client that stops reading cannot hold a write */
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 #ifdef SO_NOSIGPIPE
