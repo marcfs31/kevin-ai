@@ -62,6 +62,17 @@ flowchart LR
 
 La página solo habla con su propio origen (una Content-Security-Policy estricta dice `'self'`): el proxy reenvía `/v1/*` al servidor del modelo, `/tools/*` al servicio de herramientas del servidor del modelo y `/tools-local/*` a una segunda copia en el Mac. El servidor del modelo se alcanza por túneles SSH en los puertos 8080 y 8081.
 
+### Sitio de documentación de arquitectura
+
+Una guía VitePress (en inglés) explica Vite frente a `chat_server.py`, cómo están hechas las API y cómo se arrancan los modelos, con diagramas Mermaid:
+
+```bash
+cd docs-site && npm ci && npm run docs:dev
+```
+
+Mapa interactivo del repositorio: [gitdiagram.com/marcfs31/kevin-ai](https://gitdiagram.com/marcfs31/kevin-ai)
+([GitDiagram](https://gitdiagram.com/) — resumen generado por IA; comprueba los detalles con este README y `docs-site/`).
+
 ## Máquina objetivo
 
 El motor se desarrolla y se mide en una sola máquina. Cada cifra de este README es para ella.

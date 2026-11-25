@@ -101,6 +101,19 @@ The page only ever talks to its own origin (a strict Content-Security-Policy say
 `/v1/*` to the model server, `/tools/*` to the tool service on the model server and `/tools-local/*` to a second
 copy of it on the Mac. The model server is reached through SSH tunnels on ports 8080 and 8081.
 
+### Architecture docs site
+
+A VitePress guide explains Vite vs `chat_server.py`, how the APIs are built, and how models
+run, with Mermaid diagrams:
+
+```bash
+cd docs-site && npm ci && npm run docs:dev
+```
+
+Interactive repository map: [gitdiagram.com/marcfs31/kevin-ai](https://gitdiagram.com/marcfs31/kevin-ai)
+([GitDiagram](https://gitdiagram.com/) — AI overview; verify details against this README and
+`docs-site/`).
+
 ## Target machine
 
 The engine is developed and measured on one machine. Every number in this README is for it.
