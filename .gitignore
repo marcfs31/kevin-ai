@@ -12,3 +12,8 @@ __pycache__/
 /.claude/
 /web/node_modules/
 /web/dist/
+/docs-site/node_modules/
+/docs-site/.vitepress/dist/
+/.agents/
+/skills-lock.json
+/docs-site/.vitepress/cache/
