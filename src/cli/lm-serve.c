@@ -1381,6 +1381,12 @@ static int listen_on(const char *host, const char *port, char *bound, size_t bou
     }
     freeaddrinfo(ai);
     if (fd < 0) return -1;
+    /* non-blocking, so accept() can never hang: a connection the kernel drops between poll()
+     * and accept() (or in the EMFILE shed path) must not leave accept() waiting for the next
+     * client — EAGAIN is already handled as "nothing there" */
+    const int fl = fcntl(fd, F_GETFL);
+    if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    else fprintf(stderr, "lm-serve: cannot make the listener non-blocking: %s\n", strerror(errno));
     struct sockaddr_storage ss;
     socklen_t sl = sizeof ss;
     char ip[INET6_ADDRSTRLEN] = "?";
