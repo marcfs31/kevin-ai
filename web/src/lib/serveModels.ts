@@ -34,6 +34,9 @@ export const SERVE_MODEL_OPTIONS: ServeModelOption[] = [
   { id: 'lfm3-abliterated', label: 'LFM3-VL 2B Abliterated', labelEs: 'LFM3-VL 2B abliterado', alias: 'lfm3-vl-2b-abliterated', maxCtx: 32768, uncensored: true },
 ];
 
+export const censoredOptions = SERVE_MODEL_OPTIONS.filter((o) => !o.uncensored);
+export const uncensoredOptions = SERVE_MODEL_OPTIONS.filter((o) => o.uncensored);
+
 export const SERVE_MODEL_LABEL: Record<ServeModelId, string> = Object.fromEntries(
   SERVE_MODEL_OPTIONS.map((o) => [o.id, o.label]),
 ) as Record<ServeModelId, string>;

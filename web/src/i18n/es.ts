@@ -80,6 +80,8 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'picker.startNone': 'Arrancar un modelo',
   'picker.title': 'Modelo y contexto',
   'picker.model': 'Modelo',
+  'picker.modelGroupStock': 'Modelos estándar',
+  'picker.modelGroupUncensored': 'Sin censura',
   'picker.ctx': 'Ventana de contexto',
   'picker.ctxAuto': 'Automático (predeterminado del servidor)',
   'picker.ctxSize': '{label}',

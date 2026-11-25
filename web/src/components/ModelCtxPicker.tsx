@@ -3,12 +3,13 @@ import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { startRemoteServe, type ServeModelId } from '../lib/serve';
 import {
-  SERVE_MODEL_OPTIONS,
+  censoredOptions,
   ctxPresetsFor,
   formatCtxPreset,
   isUncensoredServeModel,
   matchServeModel,
   serveModelLabel,
+  uncensoredOptions,
 } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
 import { draftToOptions, EMPTY_SERVE_DRAFT } from './ServerPanel';
@@ -73,6 +74,27 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
     };
   }, [open, close]);
 
+  const renderModelChoice = (id: ServeModelId) => {
+    const label = serveModelLabel(id, locale);
+    return (
+      <button
+        key={id}
+        type="button"
+        className={isUncensoredServeModel(id) ? 'has-uncensored-warn' : undefined}
+        aria-pressed={model === id}
+        disabled={disabled}
+        onClick={() => {
+          setModel(id);
+          const next = ctxPresetsFor(id, modelName, contextLength);
+          if (ctxPreset !== null && !next.includes(ctxPreset)) setCtxPreset(null);
+        }}
+      >
+        {isUncensoredServeModel(id) && <UncensoredMark />}
+        {label}
+      </button>
+    );
+  };
+
   const start = async () => {
     const draft = {
       ...EMPTY_SERVE_DRAFT,
@@ -133,27 +155,19 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
           </h2>
           <div className="model-picker-section">
             <h3>{t('picker.model')}</h3>
-            <div className="model-picker-choices" role="group">
-              {SERVE_MODEL_OPTIONS.map(({ id }) => {
-                const label = serveModelLabel(id, locale);
-                return (
-                <button
-                  key={id}
-                  type="button"
-                  className={isUncensoredServeModel(id) ? 'has-uncensored-warn' : undefined}
-                  aria-pressed={model === id}
-                  disabled={disabled}
-                  onClick={() => {
-                    setModel(id);
-                    const next = ctxPresetsFor(id, modelName, contextLength);
-                    if (ctxPreset !== null && !next.includes(ctxPreset)) setCtxPreset(null);
-                  }}
-                >
-                  {isUncensoredServeModel(id) && <UncensoredMark />}
-                  {label}
-                </button>
-                );
-              })}
+            <div className="model-picker-groups">
+              <div className="model-picker-group">
+                <h4 className="model-picker-group-title">{t('picker.modelGroupStock')}</h4>
+                <div className="model-picker-choices" role="group" aria-label={t('picker.modelGroupStock')}>
+                  {censoredOptions.map(({ id }) => renderModelChoice(id))}
+                </div>
+              </div>
+              <div className="model-picker-group">
+                <h4 className="model-picker-group-title">{t('picker.modelGroupUncensored')}</h4>
+                <div className="model-picker-choices" role="group" aria-label={t('picker.modelGroupUncensored')}>
+                  {uncensoredOptions.map(({ id }) => renderModelChoice(id))}
+                </div>
+              </div>
             </div>
           </div>
           <div className="model-picker-section">

@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { SERVE_DEFAULTS, startRemoteServe, type ServeModelId, type ServeOptions } from '../lib/serve';
-import { isServeModelRunning, SERVE_MODEL_OPTIONS, serveModelLabel } from '../lib/serveModels';
+import { censoredOptions, isServeModelRunning, serveModelLabel, uncensoredOptions } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
 
 export interface ServeDraft {
@@ -81,6 +81,23 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
 
   const set = <K extends keyof ServeDraft>(k: K, v: ServeDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
 
+  const renderServeButton = (opt: (typeof censoredOptions)[number]) => {
+    const name = serveModelLabel(opt.id, locale);
+    return (
+      <button
+        key={opt.id}
+        type="button"
+        className={opt.uncensored ? 'primary has-uncensored-warn' : 'primary'}
+        aria-pressed={isServeModelRunning(runningModel, opt.id)}
+        disabled={busy || starting}
+        onClick={() => void start(opt.id)}
+      >
+        {opt.uncensored && <UncensoredMark />}
+        {starting && status.model === opt.id ? t('serve.starting', { model: name }) : t('serve.startNamed', { model: name })}
+      </button>
+    );
+  };
+
   const start = async (model: ServeModelId) => {
     const opts = draftToOptions(model, draft);
     if (!opts) {
@@ -113,23 +130,15 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
       <p className="hint" id={`${id}-hint`}>
         {t('serve.hint')}
       </p>
-      <div className="serve-actions" role="group" aria-describedby={`${id}-hint`}>
-        {SERVE_MODEL_OPTIONS.map((opt) => {
-          const name = serveModelLabel(opt.id, locale);
-          return (
-            <button
-              key={opt.id}
-              type="button"
-              className={opt.uncensored ? 'primary has-uncensored-warn' : 'primary'}
-              aria-pressed={isServeModelRunning(runningModel, opt.id)}
-              disabled={busy || starting}
-              onClick={() => void start(opt.id)}
-            >
-              {opt.uncensored && <UncensoredMark />}
-              {starting && status.model === opt.id ? t('serve.starting', { model: name }) : t('serve.startNamed', { model: name })}
-            </button>
-          );
-        })}
+      <div className="serve-model-groups" role="group" aria-describedby={`${id}-hint`}>
+        <div className="model-picker-group">
+          <h3 className="model-picker-group-title">{t('picker.modelGroupStock')}</h3>
+          <div className="serve-actions">{censoredOptions.map(renderServeButton)}</div>
+        </div>
+        <div className="model-picker-group">
+          <h3 className="model-picker-group-title">{t('picker.modelGroupUncensored')}</h3>
+          <div className="serve-actions">{uncensoredOptions.map(renderServeButton)}</div>
+        </div>
       </div>
       {status.kind === 'ok' && (
         <p className="hint" role="status">

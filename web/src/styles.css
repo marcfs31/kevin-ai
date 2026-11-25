@@ -257,7 +257,23 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
 .model-picker-title { margin: 0; font-size: 0.875rem; font-weight: 650; }
 .model-picker-section { display: flex; flex-direction: column; gap: 0.4rem; }
 .model-picker-section h3 { margin: 0; font-size: 0.75rem; font-weight: 650; color: var(--muted); }
+.model-picker-groups { display: flex; flex-direction: column; gap: 0.55rem; }
+.model-picker-group { display: flex; flex-direction: column; gap: 0.35rem; }
+.model-picker-group + .model-picker-group {
+  padding-block-start: 0.55rem;
+  border-block-start: 1px solid var(--line);
+}
+.model-picker-group-title {
+  margin: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 .model-picker-choices { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.serve-model-groups { display: flex; flex-direction: column; gap: 0.85rem; }
+.serve-model-groups .serve-actions { margin: 0; }
 .model-picker-choices button.has-uncensored-warn,
 .serve-actions button.has-uncensored-warn {
   display: inline-flex;

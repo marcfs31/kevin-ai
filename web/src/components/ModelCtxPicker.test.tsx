@@ -29,6 +29,19 @@ describe('ModelCtxPicker', () => {
     expect(screen.getByRole('dialog', { name: 'Model and context' })).toBeTruthy();
   });
 
+  it('groups stock and uncensored models under section headings', () => {
+    renderPicker();
+    fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
+    expect(screen.getByText('Stock models')).toBeTruthy();
+    expect(screen.getByText('Uncensored')).toBeTruthy();
+    const stockGroup = screen.getByRole('group', { name: 'Stock models' });
+    const uncensoredGroup = screen.getByRole('group', { name: 'Uncensored' });
+    expect(stockGroup.querySelectorAll('button')).toHaveLength(8);
+    expect(uncensoredGroup.querySelectorAll('button')).toHaveLength(7);
+    expect(stockGroup.querySelector('.model-warn')).toBeNull();
+    expect(uncensoredGroup.querySelector('.model-warn')).toBeTruthy();
+  });
+
   it('marks Uncensored models with a warning', () => {
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
