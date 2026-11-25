@@ -1,5 +1,7 @@
 # Kevin AI
 
+[Español](README.es.md)
+
 Created by **Marc Fors i Soler**.
 
 A private, local AI assistant for one small machine, in three parts that work together:
