@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.5] - 2026-11-25
 
 ### Fixed
 - `lm-serve`: a client who closes its connection while its request waits in the queue no longer gets the reply generated (and paid for) anyway: the request is answered 499 before the model sees it. Running out of file descriptors (a peer holding connections open) no longer stops the server: one connection is shed and serving continues. `g_stop` is `_Atomic`, so the shutdown flag the signal handler writes is read with proper synchronization by every thread. Tests in `test_lm_serve.sh`.
