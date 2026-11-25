@@ -45,11 +45,13 @@
  * address is printed on stderr. If LM_SERVE_API_KEY is set (in the environment, so it never
  * shows up in ps), every /v1 path requires "Authorization: Bearer <key>", checked before
  * the body is read. A request has --timeout seconds (default 30) to arrive in full, so a slow
- * client cannot hold the server. Each connection is read on its own thread (at most
- * MAX_CONNS at once): /health, /v1/models and refusals are answered there, even while a reply
- * is being generated; chat requests, once read in full, wait their turn for the model, which
- * only the main thread touches. Requests are logged as counts and timings only, never their
- * text. SIGINT/SIGTERM stop the reply being generated and exit. Original to this repository. */
+ * client cannot hold the server. Each connection is read on its own thread: /health,
+ * /v1/models and refusals are answered there, even while a reply is being generated; chat
+ * requests, once read in full, wait their turn for the model, which only the main thread
+ * touches. The head of a request has at most ten seconds to arrive; the body shares the
+ * --timeout deadline with it. SIGINT/SIGTERM stop the reply being generated and exit without
+ * waiting out slow clients. Requests are logged as counts and timings only, never their
+ * text. Original to this repository. */
 #include <arpa/inet.h>
 #include <errno.h>
 #include <limits.h>
@@ -89,8 +91,16 @@
 enum { MAX_HEAD = 16 * 1024, MAX_BODY = 24 * 1024 * 1024, MAX_IMAGES = 8, MAX_TOOLS = 32, MAX_TOOL_CALLS = 32 };
 
 static volatile sig_atomic_t g_stop = 0;
+/* a byte on the pipe wakes every poll() the moment a signal lands: the workers do not wait
+ * out their request deadlines after SIGINT/SIGTERM */
+static int g_stop_pipe[2] = { -1, -1 };
 static long g_log_max = 1 << 20; /* stderr, when it is a file, is cut back to this */
-static void on_signal(int sig) { (void)sig; g_stop = 1; }
+static void on_signal(int sig)
+{
+    (void)sig;
+    g_stop = 1;
+    if (g_stop_pipe[1] >= 0 && write(g_stop_pipe[1], "x", 1) < 0) { /* full or closing: the flag is set anyway */ }
+}
 
 static double mono_s(void)
 {
@@ -189,9 +199,9 @@ static int wait_readable(const Conn *c)
         if (g_stop) return 0;
         const double left = c->deadline - mono_s();
         if (left <= 0) return 0;
-        struct pollfd p = { c->fd, POLLIN, 0 };
-        int r = poll(&p, 1, (int)(left * 1000) + 1);
-        if (r > 0) return 1;
+        struct pollfd p[2] = { { c->fd, POLLIN, 0 }, { g_stop_pipe[0], POLLIN, 0 } };
+        int r = poll(p, 2, (int)(left * 1000) + 1);
+        if (r > 0) return p[0].revents ? 1 : 0;
         if (r == 0) return 0;
         if (errno != EINTR) return 0;
     }
@@ -1076,12 +1086,10 @@ typedef struct Job {
     struct Job *next;
 } Job;
 
-#define MAX_CONNS 16 /* connections being read, waiting or answered at once */
-
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER; /* a job was queued or a connection ended */
 static Job *g_head, *g_tail;                            /* read in full, waiting for the model */
-static int g_conns;                                     /* connections open, queued ones included */
+static int g_conns;                                     /* connections open, queued ones included (shutdown waits for 0) */
 static pthread_mutex_t g_log_mu = PTHREAD_MUTEX_INITIALIZER;
 
 /* Read the request and answer it if it needs no model: 1 = the model thread must answer it,
@@ -1091,8 +1099,14 @@ static int answer_quick(Server *s, Job *j, int timeout_s)
     Conn *c = &j->c;
     Log *log = &j->log;
     j->t0 = mono_s();
-    c->deadline = j->t0 + timeout_s;
+    const double full = j->t0 + timeout_s;
+    /* the head must arrive quickly: a client that trickles it ties up its thread for seconds,
+     * not the whole request timeout, and the connection is fresh (no keep-alive), so a head
+     * has no reason to be slow */
+    const double head_deadline = timeout_s > 10 ? j->t0 + 10 : full;
+    c->deadline = head_deadline;
     const int rh = read_head(c);
+    c->deadline = full;
     if (rh < 0) return -1;
     if (rh > 0) {
         respond_error(c, log->status = rh, NULL, "%s", reason(rh));
@@ -1257,15 +1271,9 @@ static void *accept_thread(void *arg)
 {
     Acceptor *ac = (Acceptor *)arg;
     while (!g_stop) {
-        pthread_mutex_lock(&g_mu);
-        while (g_conns >= MAX_CONNS && !g_stop) {
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_sec++;
-            pthread_cond_timedwait(&g_cv, &g_mu, &ts);
-        }
-        pthread_mutex_unlock(&g_mu);
-        if (g_stop) break;
+        /* no cap on the count here: refusing to accept is what a stalled client wants —
+         * it would keep /health out. The threads are cheap and each is bounded by its
+         * deadline; the file-descriptor limit is the real bound, as before */
         /* wait in short slices so a signal that lands just before accept() is seen */
         struct pollfd lp = { ac->lfd, POLLIN, 0 };
         if (poll(&lp, 1, 500) <= 0) continue;
@@ -1515,6 +1523,11 @@ int main(int argc, char **argv)
         fputs("lm-serve: warning: reachable from other machines and LM_SERVE_API_KEY is not set: "
               "anyone who can connect can use the model\n", stderr);
 
+    if (pipe(g_stop_pipe)) {
+        fputs("lm-serve: pipe failed\n", stderr);
+        close(lfd);
+        goto done;
+    }
     /* the connection threads must not take SIGINT/SIGTERM: the main thread stops the reply */
     sigset_t block, old;
     sigemptyset(&block);

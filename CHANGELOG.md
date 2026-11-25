@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [1.0.4] - 2026-11-25
 
 ### Changed
-- `lm-serve` reads each connection on its own thread (`MAX_CONNS`, 16 at once): `/health`, `/v1/models` and refusals are answered there, so a page reload during a long reply no longer waits for the reply to end. Chat requests are read in full first, then answered one at a time and in order on the main thread, the only one that touches the model; a request still queued at shutdown gets a 503. Test: `/health` and a queued request during a reply in `test_lm_serve.sh`.
+- `lm-serve` reads each connection on its own thread: `/health`, `/v1/models` and refusals are answered there, so a page reload during a long reply no longer waits for the reply to end. Chat requests are read in full first, then answered one at a time and in order on the main thread, the only one that touches the model; a request still queued at shutdown gets a 503. The head of a request has ten seconds to arrive, so stalled clients cannot tie up the server for the whole `--timeout`, and SIGINT/SIGTERM wake every poll, so shutdown does not wait out slow clients. Tests: `/health` and a queued request during a reply, and SIGTERM with a stalled client, in `test_lm_serve.sh`.
 
 ## [1.0.3] - 2026-11-25
 

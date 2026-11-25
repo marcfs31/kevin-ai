@@ -333,6 +333,22 @@ check '[ "$(grep -c "POST /v1/chat/completions 200" "$tmp/serve.err")" = 2 ] && 
       "the two replies were not served in order: $(cat "$tmp/serve.err")"
 stop
 
+# SIGTERM does not wait out the request deadlines of stalled or idle clients
+start
+python3 -I - "${url#http://}" > "$tmp/stall" 2>&1 <<'PYEOF' &
+import socket, sys, time
+host, port = sys.argv[1].rsplit(":", 1)
+s = socket.create_connection((host, int(port)))
+s.sendall(b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 99\r\n\r\n{}")
+time.sleep(60)
+PYEOF
+stall_py=$!
+sleep 0.5
+t0=$(date +%s)
+stop
+check '[ "$rc_stop" -eq 0 ] && [ $(( $(date +%s) - t0 )) -le 5 ]' "SIGTERM waited for a stalled client: $(( $(date +%s) - t0 )) s (exit $rc_stop)"
+kill "$stall_py" 2> /dev/null; wait "$stall_py" 2> /dev/null
+
 # exposed beyond loopback without a key: a warning; with a key: none
 start --host 0.0.0.0
 check 'grep -q "warning: reachable from other machines" "$tmp/serve.err"' "no warning for 0.0.0.0 without a key"
