@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test_lm_serve.sh - bin/lm-serve end to end on the tiny Qwen3.5 fixture over real HTTP (curl):
 # the endpoints, streaming, state reuse when the client sends the previous answer back, the
-# API key, and the refusals (bad JSON, unsupported parameters, wrong method, unknown path,
+# API key, /health and queueing during a reply, and the refusals (bad JSON, unsupported parameters, wrong method, unknown path,
 # oversized body), and lm-chat's default reply length on the same model. Run from the
 # repository root after `make`.
 #
@@ -312,6 +312,26 @@ kill "$pid"
 wait "$curl_pid"
 check '[ "$(cat "$tmp/code")" = 503 ] && grep -q "shutting down" "$tmp/body"' "a reply cut by SIGTERM: status $(cat "$tmp/code"), $(head -c 300 "$tmp/body")"
 wait "$pid" 2> /dev/null; pid=
+
+# while a reply is being generated: /health and /v1/models answer at once, a second chat
+# request waits its turn and is answered after the first
+start
+long='{"messages":[{"role":"user","content":"hi"}],"max_tokens":4000,"temperature":1,"stream":true}'
+curl -s -N -o "$tmp/long" -d "$long" "$url/v1/chat/completions" &
+long_pid=$!
+for _ in $(seq 100); do [ -s "$tmp/long" ] && break; sleep 0.02; done
+check '[ "$(code -m 2 "$url/health")" = 200 ] && [ "$(code -m 2 "$url/v1/models")" = 200 ]' \
+      "/health or /v1/models did not answer during a reply"
+check '! grep -q "POST /v1/chat/completions" "$tmp/serve.err" && grep -q "GET /health 200" "$tmp/serve.err"' \
+      "the reply was over before /health answered, or /health was not logged: $(cat "$tmp/serve.err")"
+curl -s -o "$tmp/second" -w '%{http_code}' -d '{"messages":[{"role":"user","content":"hi"}],"max_tokens":2}' \
+     "$url/v1/chat/completions" > "$tmp/second.code"
+wait "$long_pid"
+check '[ "$(cat "$tmp/second.code")" = 200 ] && grep -q "\[DONE\]" "$tmp/long"' \
+      "a request sent during a reply: $(cat "$tmp/second.code") $(head -c 200 "$tmp/second")"
+check '[ "$(grep -c "POST /v1/chat/completions 200" "$tmp/serve.err")" = 2 ] && grep "POST /v1/chat/completions" "$tmp/serve.err" | head -1 | grep -q "generated 4000"' \
+      "the two replies were not served in order: $(cat "$tmp/serve.err")"
+stop
 
 # exposed beyond loopback without a key: a warning; with a key: none
 start --host 0.0.0.0

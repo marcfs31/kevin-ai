@@ -684,7 +684,7 @@ bin/lm-chat --model DIR --weights FILE [--prompt TEXT] [--system TEXT]
 
 ### bin/lm-serve
 
-Un endpoint HTTP compatible con OpenAI, para que otros programas (editores, front ends de chat, scripts) puedan usar el modelo. Una petición a la vez; las demás esperan su turno.
+Un endpoint HTTP compatible con OpenAI, para que otros programas (editores, front ends de chat, scripts) puedan usar el modelo. Una respuesta a la vez: las peticiones de chat esperan su turno, en orden. Cada conexión se lee en su propio hilo (16 como máximo), así que `/health`, `/v1/models` y los rechazos responden al momento aunque se esté generando una respuesta, y un cliente lento nunca retiene el modelo.
 
 ```
 bin/lm-serve --model DIR [--weights FILE] [--host ADDR] [--port N] [--name ID]
