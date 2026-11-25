@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Ten GGUF models in the chat picker (English and Spanish) and on `scripts/start-remote-lm-serve.sh`. Gemma 4 E2B (Q6_K + f16 mmproj) and Nemotron 3.5 Bolt E4B (UD-Q4_K_XL, no projector in that repo) follow the Gemma 4 path on llama.cpp v1.0.0. Granite 4.2 3B (Q8_0, and the Heretic Q8_0) uses the granite architecture on that build. Spark-X2.6-4B (Q4_K_M, and the Heretic Q6_K) is spark2_5 and needs llama.cpp b10828. LFM3-VL-2B (Q8_0 + f16 mmproj, and the abliterated Q8_0 + f16 mmproj) is lfm3 and needs llama.cpp b11938. Qwen3.5-2B abliterated (Q8_0 + f16 mmproj) is the Qwen path for the 2B, not the installed 4B. Vision is passed only when that model has a matching mmproj. The map is `src/chat/lm_catalog.c`; opening one of these architectures in the native loader names the build that serves it. `scripts/download-model.sh` pins each file.
+
 ## [0.3.31] - 2026-11-25
 
 ### Added

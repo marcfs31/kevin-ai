@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { SERVE_DEFAULTS, startRemoteServe, type ServeModelId, type ServeOptions } from '../lib/serve';
-import { isServeModelRunning, SERVE_MODEL_LABEL } from '../lib/serveModels';
+import { isServeModelRunning, SERVE_MODEL_OPTIONS, serveModelLabel } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
 
 export interface ServeDraft {
@@ -73,7 +73,7 @@ interface Props {
 }
 
 export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const id = useId();
   const [draft, setDraft] = useState<ServeDraft>(EMPTY_SERVE_DRAFT);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
@@ -87,7 +87,7 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
       setStatus({ kind: 'error', message: t('serve.badParams') });
       return;
     }
-    if (!window.confirm(t('serve.confirm', { model: SERVE_MODEL_LABEL[model] }))) return;
+    if (!window.confirm(t('serve.confirm', { model: serveModelLabel(model, locale) }))) return;
     setStatus({ kind: 'starting', model });
     try {
       const result = await startRemoteServe(opts);
@@ -114,27 +114,26 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
         {t('serve.hint')}
       </p>
       <div className="serve-actions" role="group" aria-describedby={`${id}-hint`}>
-        <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'qwen')} disabled={busy || starting} onClick={() => void start('qwen')}>
-          {starting && status.model === 'qwen' ? t('serve.starting', { model: SERVE_MODEL_LABEL.qwen }) : t('serve.startQwen')}
-        </button>
-        <button type="button" className="primary has-uncensored-warn" aria-pressed={isServeModelRunning(runningModel, 'qwen-uncensored')} disabled={busy || starting} onClick={() => void start('qwen-uncensored')}>
-          <UncensoredMark />
-          {starting && status.model === 'qwen-uncensored' ? t('serve.starting', { model: SERVE_MODEL_LABEL['qwen-uncensored'] }) : t('serve.startQwenUncensored')}
-        </button>
-        <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'gemma')} disabled={busy || starting} onClick={() => void start('gemma')}>
-          {starting && status.model === 'gemma' ? t('serve.starting', { model: SERVE_MODEL_LABEL.gemma }) : t('serve.startGemma')}
-        </button>
-        <button type="button" className="primary" aria-pressed={isServeModelRunning(runningModel, 'whiterabbitneo')} disabled={busy || starting} onClick={() => void start('whiterabbitneo')}>
-          {starting && status.model === 'whiterabbitneo' ? t('serve.starting', { model: SERVE_MODEL_LABEL.whiterabbitneo }) : t('serve.startWhiteRabbitNeo')}
-        </button>
-        <button type="button" className="primary has-uncensored-warn" aria-pressed={isServeModelRunning(runningModel, 'gemma-uncensored')} disabled={busy || starting} onClick={() => void start('gemma-uncensored')}>
-          <UncensoredMark />
-          {starting && status.model === 'gemma-uncensored' ? t('serve.starting', { model: SERVE_MODEL_LABEL['gemma-uncensored'] }) : t('serve.startGemmaUncensored')}
-        </button>
+        {SERVE_MODEL_OPTIONS.map((opt) => {
+          const name = serveModelLabel(opt.id, locale);
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              className={opt.uncensored ? 'primary has-uncensored-warn' : 'primary'}
+              aria-pressed={isServeModelRunning(runningModel, opt.id)}
+              disabled={busy || starting}
+              onClick={() => void start(opt.id)}
+            >
+              {opt.uncensored && <UncensoredMark />}
+              {starting && status.model === opt.id ? t('serve.starting', { model: name }) : t('serve.startNamed', { model: name })}
+            </button>
+          );
+        })}
       </div>
       {status.kind === 'ok' && (
         <p className="hint" role="status">
-          {t('serve.started', { model: SERVE_MODEL_LABEL[status.model] })}
+          {t('serve.started', { model: serveModelLabel(status.model, locale) })}
         </p>
       )}
       {status.kind === 'error' && (

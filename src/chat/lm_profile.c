@@ -1,5 +1,6 @@
 /* lm_profile.c -- see lm_profile.h. Original to this repository; the config.json reading is
  * the code that used to live in src/cli/lm-chat.c. */
+#include "chat/lm_catalog.h"
 #include "chat/lm_profile.h"
 #include "io/lm_gguf.h"
 
@@ -70,10 +71,14 @@ int lm_profile_read(const char *dir, LmProfile *p, char *err, size_t errlen)
     if (lm_gguf_locate(dir, gp, sizeof gp)) {   /* a GGUF model: architecture and stop id from its metadata */
         LmGguf g;
         if (lm_gguf_open(&g, gp, err, errlen) != 0) return -1;
-        LmGgufStr arch;
+        LmGgufStr arch = { 0 };
         uint64_t eos;
         if (lm_gguf_get_str(&g, "general.architecture", &arch) != 0 || arch.n != 5 || memcmp(arch.s, "qwen2", 5) != 0) {
-            snprintf(err, errlen, "%s: only the qwen2 GGUF architecture is supported", gp);
+            const char *hint = arch.s ? lm_catalog_arch_hint(arch.s, arch.n) : NULL;
+            if (hint)
+                snprintf(err, errlen, "%s: only the qwen2 GGUF architecture is loaded here; %s", gp, hint);
+            else
+                snprintf(err, errlen, "%s: only the qwen2 GGUF architecture is supported", gp);
             lm_gguf_close(&g);
             return -1;
         }

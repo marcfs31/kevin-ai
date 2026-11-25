@@ -3,12 +3,12 @@ import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { startRemoteServe, type ServeModelId } from '../lib/serve';
 import {
-  SERVE_MODEL_LABEL,
   SERVE_MODEL_OPTIONS,
   ctxPresetsFor,
   formatCtxPreset,
   isUncensoredServeModel,
   matchServeModel,
+  serveModelLabel,
 } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
 import { draftToOptions, EMPTY_SERVE_DRAFT } from './ServerPanel';
@@ -27,7 +27,7 @@ interface Props {
 }
 
 export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const uid = useId();
   const panelId = `${uid}-panel`;
   const titleId = `${uid}-title`;
@@ -83,7 +83,7 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
       setStatus({ kind: 'error', message: t('serve.badParams') });
       return;
     }
-    if (!window.confirm(t('serve.confirm', { model: SERVE_MODEL_LABEL[model] }))) return;
+    if (!window.confirm(t('serve.confirm', { model: serveModelLabel(model, locale) }))) return;
     setStatus({ kind: 'starting', model });
     try {
       const result = await startRemoteServe(opts);
@@ -134,7 +134,9 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
           <div className="model-picker-section">
             <h3>{t('picker.model')}</h3>
             <div className="model-picker-choices" role="group">
-              {SERVE_MODEL_OPTIONS.map(({ id, label }) => (
+              {SERVE_MODEL_OPTIONS.map(({ id }) => {
+                const label = serveModelLabel(id, locale);
+                return (
                 <button
                   key={id}
                   type="button"
@@ -150,7 +152,8 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
                   {isUncensoredServeModel(id) && <UncensoredMark />}
                   {label}
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
           <div className="model-picker-section">
@@ -178,7 +181,7 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
             </div>
           </div>
           <button type="button" className="primary" disabled={disabled} onClick={() => void start()}>
-            {starting ? t('serve.starting', { model: SERVE_MODEL_LABEL[status.model] }) : t('picker.start')}
+            {starting ? t('serve.starting', { model: serveModelLabel(status.model, locale) }) : t('picker.start')}
           </button>
           {status.kind === 'error' && (
             <>

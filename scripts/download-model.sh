@@ -11,8 +11,8 @@ Usage: scripts/download-model.sh [--model NAME] [--allow-hdd] [--help] [MODEL_DI
 
 Downloads the pinned checkpoint files for one model into MODEL_DIR.
 
-  --model NAME  qwen3.5-4b (default), gemma-4-e4b, whiterabbitneo-2.5-7b-q4km or
-                gemma-4-e4b-uncensored
+  --model NAME  qwen3.5-4b (default), gemma-4-e4b, whiterabbitneo-2.5-7b-q4km,
+                gemma-4-e4b-uncensored, or one of the ten GGUF ids below
   --allow-hdd   Continue when MODEL_DIR is on a rotational disk. Not recommended: the
                 engine reads the weights from this directory and an HDD is far too slow.
   --help        Show this help and exit.
@@ -56,6 +56,30 @@ gemma-4-e4b-uncensored (GGUF Gemma 4 E4B fine-tune, Gemma Terms of Use; for llam
     mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf      990288832 bytes, sha256 pinned
   scripts/start-remote-lm-serve.sh --id gemma-uncensored starts them. The engine cannot read this
   GGUF (two .gguf files, no Gemma 4 GGUF loader), so lm-serve is not used.
+
+Ten more GGUFs (src/chat/lm_catalog.c). Each --model name is the directory under the models root.
+A projector is downloaded only when that row has a matching mmproj. Sizes and sha256 are pinned.
+
+  gemma-4-e2b                 unsloth/gemma-4-E2B-it-GGUF @ 0314792d7f1f7e229411f620751375812bb9faf2
+                              gemma-4-E2B-it-Q6_K.gguf + mmproj-F16.gguf (gemma4, llama-server v1.0.0)
+  nemotron-3.5-bolt-e4b       LlamaPal/NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL-GGUF @ a66cd4c2f72de88bb83120bc6ac11ca5608f6a9b
+                              NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf (gemma4, no projector in that repo)
+  granite-4.2-3b              ibm-granite/granite-4.2-3b-GGUF @ c40945d71cd90f249a56985e8155551a9188dc30
+                              granite-4.2-3b-Q8_0.gguf (granite)
+  spark-x2.6-4b               bartowski/Spark-X2.6-4B-GGUF @ 17682e38297a4510899b12a95ab3d8dcebc674e5
+                              Spark-X2.6-4B-Q4_K_M.gguf (spark2_5, llama.cpp b10828 or later)
+  lfm3-vl-2b                  LiquidAI/LFM3-VL-2B-GGUF @ 1add221a5ea6c047fcf1eaaf2d247939d7cf8849
+                              LFM3-VL-2B-Q8_0.gguf + mmproj-LFM3-VL-2B-F16.gguf (lfm3, llama.cpp b11938 or later)
+  gemma-4-e2b-heretic         llmfan46/gemma-4-E2B-it-ultra-uncensored-heretic-GGUF @ e16997210b96c34c4dbd61a452765819db5f0c0e
+                              Q6_K weights + the repo's mmproj
+  spark-x2.6-4b-heretic       mradermacher/Spark-X2.6-4B-heretic-GGUF @ 52b0599835ab71058515faba28c228c60b7559af
+                              Spark-X2.6-4B-heretic.Q6_K.gguf (spark2_5, b10828, text only)
+  granite-4.2-3b-heretic      mradermacher/granite-4.2-3b-Heretic-GGUF @ b113a4c18ed0063886211387945bc0254e7dd8af
+                              granite-4.2-3b-Heretic.Q8_0.gguf (granite, text only)
+  qwen3.5-2b-abliterated      mradermacher/Huihui-Qwen3.5-2B-abliterated-GGUF @ 7f5aee7d2dc4df18bd67eab85ea81e0bc2e98a2c
+                              the 2B Q8_0 plus its f16 mmproj, not the installed Qwen3.5-4B
+  lfm3-vl-2b-abliterated      mradermacher/LFM3-VL-2B-Surgical-Abliterated-GGUF @ 98588af5cc8487c191e896b1970c099221a15eb9
+                              Q8_0 plus its f16 mmproj (lfm3, b11938)
 
 Behaviour:
   - Requires curl and sha256sum, and free space of the checkpoint size plus 1 GB.
@@ -139,8 +163,83 @@ case "$MODEL" in
       "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf|990288832|debad39ab9c1152ab67695a674fb35e8375b2320c57bfd5075835d3ccb16c7db"
     )
     ;;
+  gemma-4-e2b)
+    BASE_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2"
+    CHECKPOINT_BYTES=5487375264
+    FILES=(
+      "gemma-4-E2B-it-Q6_K.gguf|4501721184|f7b8980ecc1c115898fd8d9a3d421d90becbac984194a44b478669c26815843d"
+      "mmproj-F16.gguf|985654080|140be8d7849741f88c50757d529b84373ee8e27052cc2236855b537f4a8215fa"
+    )
+    ;;
+  nemotron-3.5-bolt-e4b)
+    BASE_URL="https://huggingface.co/LlamaPal/NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL-GGUF/resolve/a66cd4c2f72de88bb83120bc6ac11ca5608f6a9b"
+    CHECKPOINT_BYTES=5060482240
+    FILES=(
+      "NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf|5060482240|84ff34f5834b929043f5ae74799e8d562d4056998f6a5923ceb44831e8ad84d6"
+    )
+    ;;
+  granite-4.2-3b)
+    BASE_URL="https://huggingface.co/ibm-granite/granite-4.2-3b-GGUF/resolve/c40945d71cd90f249a56985e8155551a9188dc30"
+    CHECKPOINT_BYTES=3892651552
+    FILES=(
+      "granite-4.2-3b-Q8_0.gguf|3892651552|fbe986738041418e26de9e123ba740cb654931f85bf572a71bd01f9e6b85e53d"
+    )
+    ;;
+  spark-x2.6-4b)
+    BASE_URL="https://huggingface.co/bartowski/Spark-X2.6-4B-GGUF/resolve/17682e38297a4510899b12a95ab3d8dcebc674e5"
+    CHECKPOINT_BYTES=2621104768
+    FILES=(
+      "Spark-X2.6-4B-Q4_K_M.gguf|2621104768|30b77e2ede85c37da7071048c91fcf47c3e8cbfad51971640530f8ba9753301a"
+    )
+    ;;
+  lfm3-vl-2b)
+    BASE_URL="https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/1add221a5ea6c047fcf1eaaf2d247939d7cf8849"
+    CHECKPOINT_BYTES=2225234528
+    FILES=(
+      "LFM3-VL-2B-Q8_0.gguf|1846238496|e138e54189a751d90ea8c0b236360490613ecd465d28d68fa6094d3db7fa6727"
+      "mmproj-LFM3-VL-2B-F16.gguf|378996032|1d8e6e58eefc093e09d6332f081516e1ddbd5b35cfca7f35463fb270db230b1e"
+    )
+    ;;
+  gemma-4-e2b-heretic)
+    BASE_URL="https://huggingface.co/llmfan46/gemma-4-E2B-it-ultra-uncensored-heretic-GGUF/resolve/e16997210b96c34c4dbd61a452765819db5f0c0e"
+    CHECKPOINT_BYTES=4832178912
+    FILES=(
+      "gemma-4-E2B-it-ultra-uncensored-heretic-Q6_K.gguf|3845345504|cb4fe5236c5750ea700f2d51f5635d3ca1e0c303a11241e5c9a7eb72690190a1"
+      "gemma-4-E2B-it-mmproj-BF16.gguf|986833408|d460bb51ce5115232a723a7366694c8ee70d8aa8f60159d182a1da0777d10db3"
+    )
+    ;;
+  spark-x2.6-4b-heretic)
+    BASE_URL="https://huggingface.co/mradermacher/Spark-X2.6-4B-heretic-GGUF/resolve/52b0599835ab71058515faba28c228c60b7559af"
+    CHECKPOINT_BYTES=3379174368
+    FILES=(
+      "Spark-X2.6-4B-heretic.Q6_K.gguf|3379174368|468cbfea25ce55a5ed7e87de121695df0497aa80766d98a89bf0d95b86efa6fb"
+    )
+    ;;
+  granite-4.2-3b-heretic)
+    BASE_URL="https://huggingface.co/mradermacher/granite-4.2-3b-Heretic-GGUF/resolve/b113a4c18ed0063886211387945bc0254e7dd8af"
+    CHECKPOINT_BYTES=3892652640
+    FILES=(
+      "granite-4.2-3b-Heretic.Q8_0.gguf|3892652640|8e3fbd9a66ebf76e900b5647de12ec3d4c86943bed85268322e01b84e7337491"
+    )
+    ;;
+  qwen3.5-2b-abliterated)
+    BASE_URL="https://huggingface.co/mradermacher/Huihui-Qwen3.5-2B-abliterated-GGUF/resolve/7f5aee7d2dc4df18bd67eab85ea81e0bc2e98a2c"
+    CHECKPOINT_BYTES=2680240192
+    FILES=(
+      "Huihui-Qwen3.5-2B-abliterated.Q8_0.gguf|2012012992|fb724dfeb9c268e4752b944d35213e959b525cab39db021cc2bdf439901d4deb"
+      "Huihui-Qwen3.5-2B-abliterated.mmproj-f16.gguf|668227200|ca72dabcfb10c4954d533dd73e1365f790df0b9fe4941d9030b6a0d2c46abb7c"
+    )
+    ;;
+  lfm3-vl-2b-abliterated)
+    BASE_URL="https://huggingface.co/mradermacher/LFM3-VL-2B-Surgical-Abliterated-GGUF/resolve/98588af5cc8487c191e896b1970c099221a15eb9"
+    CHECKPOINT_BYTES=2225234816
+    FILES=(
+      "LFM3-VL-2B-Surgical-Abliterated.Q8_0.gguf|1846238912|0e79bfd4fe30186741050ccff8e702cb7de2bec33a1cef72342813303fbaea67"
+      "LFM3-VL-2B-Surgical-Abliterated.mmproj-f16.gguf|378995904|1a0e25010fa894ee476e34dd0359e709f01dedd981dbea5e488e40f9c7d2f098"
+    )
+    ;;
   *)
-    usage_error "unknown model: $MODEL (use qwen3.5-4b, gemma-4-e4b, whiterabbitneo-2.5-7b-q4km or gemma-4-e4b-uncensored)"
+    usage_error "unknown model: $MODEL (see --help)"
     ;;
 esac
 

@@ -1,29 +1,39 @@
 #!/usr/bin/env bash
-# Stop the remote model server (if any) and start one model: Qwen, Qwen uncensored or Gemma on
-# lm-serve, or a GGUF the engine cannot run on llama.cpp's llama-server: WhiteRabbitNeo 2.5
-# (Qwen2.5-Coder-7B) and Gemma 4 E4B Uncensored (with its vision projector). One model at a time: the 11 GB host cannot hold two. For lm-serve, extra flags
-# are forwarded as-is; for llama-server the lm-serve flags it has an equivalent for are
-# translated and the others refused. Omit a flag to keep the server's own default.
+# Stop the remote model server (if any) and start one model. Qwen, Qwen uncensored and Gemma
+# run on lm-serve. GGUFs the engine cannot load run on llama.cpp's llama-server: WhiteRabbitNeo,
+# Gemma 4 E4B Uncensored, and the ten models in src/chat/lm_catalog.c. Gemma 4 E2B and Nemotron
+# are gemma4 (the same llama-server build as Gemma 4 E4B Uncensored). Granite 4.2 is the granite
+# architecture on that build. Spark is spark2_5 and needs llama.cpp b10828 or later. LFM3 is lfm3
+# and needs llama.cpp b11938 or later. The Qwen3.5-2B GGUF is the Qwen path for the 2B, not the
+# installed 4B. A vision projector is passed only when that model has a matching mmproj.
+# One model at a time: the 11 GB host cannot hold two. For lm-serve, extra flags are forwarded
+# as-is; for llama-server the lm-serve flags it has an equivalent for are translated and the
+# others refused. Omit a flag to keep the server's own default.
 # The local SSH tunnel to port 8080 is left alone — only the remote process is replaced.
 set -euo pipefail
 
 usage() {
   cat <<'EOF' >&2
-usage: start-remote-lm-serve.sh --id qwen|qwen-uncensored|gemma|whiterabbitneo|gemma-uncensored [flags…]
+usage: start-remote-lm-serve.sh --id ID [flags…]
 
-  --id qwen|qwen-uncensored|gemma|whiterabbitneo|gemma-uncensored
-                    which model under ~/models on the remote host
+  --id ID           which model under ~/models on the remote host.
+                    lm-serve: qwen, qwen-uncensored, gemma.
+                    llama-server (v1.0.0): whiterabbitneo, gemma-uncensored,
+                      gemma-e2b, nemotron, granite, gemma-e2b-heretic, granite-heretic, qwen2b.
+                    llama-server b10828 (spark2_5): spark, spark-heretic.
+                    llama-server b11938 (lfm3): lfm3, lfm3-abliterated.
   Remaining arguments are lm-serve flags (for example --ctx 8192 --think).
-  whiterabbitneo and gemma-uncensored run on llama-server and take only --ctx (default 8192),
-  --threads, --seed, --max-tokens, --timeout, --name and --think / --no-think (--reasoning on / off;
-  Gemma thinks before it answers unless told not to).
+  llama-server models take only --ctx (default 8192), --threads, --seed, --max-tokens,
+  --timeout, --name and --think / --no-think (--reasoning on / off).
   --host and --port are always 127.0.0.1 and 8080 so the local tunnel keeps working.
 
 Environment (optional):
-  LM_SERVE_SSH              default toor@192.168.1.96
-  LM_SERVE_REMOTE_BIN       default ~/kevin-ai/bin/lm-serve
-  LM_SERVE_REMOTE_LLAMA_BIN default ~/opt/llama.cpp-v1.0.0/build/bin/llama-server
-  LM_SERVE_REMOTE_ROOT      default ~/models
+  LM_SERVE_SSH                    default toor@192.168.1.96
+  LM_SERVE_REMOTE_BIN             default ~/kevin-ai/bin/lm-serve
+  LM_SERVE_REMOTE_LLAMA_BIN       default ~/opt/llama.cpp-v1.0.0/build/bin/llama-server
+  LM_SERVE_REMOTE_LLAMA_SPARK_BIN default ~/opt/llama.cpp-b10828/build/bin/llama-server
+  LM_SERVE_REMOTE_LLAMA_LFM_BIN   default ~/opt/llama.cpp-b11938/build/bin/llama-server
+  LM_SERVE_REMOTE_ROOT            default ~/models
 EOF
   exit 2
 }
@@ -71,7 +81,7 @@ translate_for_llama() {
 }
 
 main() {
-  local ID="" DIR_NAME RUNTIME WEIGHTS MMPROJ="" SSH_TARGET REMOTE_BIN REMOTE_ROOT quoted
+  local ID="" DIR_NAME RUNTIME WEIGHTS MMPROJ="" LLAMA_BUILD=v1.0.0 SSH_TARGET REMOTE_BIN REMOTE_ROOT quoted
   local -a EXTRA=() args=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -115,7 +125,68 @@ main() {
       WEIGHTS=Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf
       MMPROJ=mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf
       ;;
-    *) echo "start-remote-lm-serve.sh: --id must be qwen, qwen-uncensored, gemma, whiterabbitneo or gemma-uncensored" >&2; usage ;;
+    # The ten GGUFs in src/chat/lm_catalog.c. File names must match that table.
+    gemma-e2b)
+      DIR_NAME=gemma-4-e2b
+      RUNTIME=llama-server
+      WEIGHTS=gemma-4-E2B-it-Q6_K.gguf
+      MMPROJ=mmproj-F16.gguf
+      ;;
+    nemotron)
+      DIR_NAME=nemotron-3.5-bolt-e4b
+      RUNTIME=llama-server
+      WEIGHTS=NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf
+      ;;
+    granite)
+      DIR_NAME=granite-4.2-3b
+      RUNTIME=llama-server
+      WEIGHTS=granite-4.2-3b-Q8_0.gguf
+      ;;
+    spark)
+      DIR_NAME=spark-x2.6-4b
+      RUNTIME=llama-server
+      LLAMA_BUILD=b10828
+      WEIGHTS=Spark-X2.6-4B-Q4_K_M.gguf
+      ;;
+    lfm3)
+      DIR_NAME=lfm3-vl-2b
+      RUNTIME=llama-server
+      LLAMA_BUILD=b11938
+      WEIGHTS=LFM3-VL-2B-Q8_0.gguf
+      MMPROJ=mmproj-LFM3-VL-2B-F16.gguf
+      ;;
+    gemma-e2b-heretic)
+      DIR_NAME=gemma-4-e2b-heretic
+      RUNTIME=llama-server
+      WEIGHTS=gemma-4-E2B-it-ultra-uncensored-heretic-Q6_K.gguf
+      MMPROJ=gemma-4-E2B-it-mmproj-BF16.gguf
+      ;;
+    spark-heretic)
+      DIR_NAME=spark-x2.6-4b-heretic
+      RUNTIME=llama-server
+      LLAMA_BUILD=b10828
+      WEIGHTS=Spark-X2.6-4B-heretic.Q6_K.gguf
+      ;;
+    granite-heretic)
+      DIR_NAME=granite-4.2-3b-heretic
+      RUNTIME=llama-server
+      WEIGHTS=granite-4.2-3b-Heretic.Q8_0.gguf
+      ;;
+    qwen2b)
+      # Qwen3.5-2B abliterated, not the installed qwen3.5-4b safetensors.
+      DIR_NAME=qwen3.5-2b-abliterated
+      RUNTIME=llama-server
+      WEIGHTS=Huihui-Qwen3.5-2B-abliterated.Q8_0.gguf
+      MMPROJ=Huihui-Qwen3.5-2B-abliterated.mmproj-f16.gguf
+      ;;
+    lfm3-abliterated)
+      DIR_NAME=lfm3-vl-2b-abliterated
+      RUNTIME=llama-server
+      LLAMA_BUILD=b11938
+      WEIGHTS=LFM3-VL-2B-Surgical-Abliterated.Q8_0.gguf
+      MMPROJ=LFM3-VL-2B-Surgical-Abliterated.mmproj-f16.gguf
+      ;;
+    *) echo "start-remote-lm-serve.sh: unknown --id (see --help)" >&2; usage ;;
   esac
   if [[ "$RUNTIME" == llama-server ]]; then
     translate_for_llama ${EXTRA[@]+"${EXTRA[@]}"}
@@ -123,7 +194,11 @@ main() {
   fi
 
   SSH_TARGET=${LM_SERVE_SSH:-toor@192.168.1.96}
-  if [[ "$RUNTIME" == llama-server ]]; then
+  if [[ "$RUNTIME" == llama-server && "$LLAMA_BUILD" == b10828 ]]; then
+    REMOTE_BIN=${LM_SERVE_REMOTE_LLAMA_SPARK_BIN:-'$HOME/opt/llama.cpp-b10828/build/bin/llama-server'}
+  elif [[ "$RUNTIME" == llama-server && "$LLAMA_BUILD" == b11938 ]]; then
+    REMOTE_BIN=${LM_SERVE_REMOTE_LLAMA_LFM_BIN:-'$HOME/opt/llama.cpp-b11938/build/bin/llama-server'}
+  elif [[ "$RUNTIME" == llama-server ]]; then
     REMOTE_BIN=${LM_SERVE_REMOTE_LLAMA_BIN:-'$HOME/opt/llama.cpp-v1.0.0/build/bin/llama-server'}
   else
     REMOTE_BIN=${LM_SERVE_REMOTE_BIN:-'$HOME/kevin-ai/bin/lm-serve'}

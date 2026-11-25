@@ -14,6 +14,7 @@
 #include "io/lm_io.h"
 #include "model/lm_ctx.h"
 #include "model/lm_layers.h"
+#include "chat/lm_catalog.h"
 #include "model/lm_qwen2.h"
 
 typedef struct {
@@ -150,8 +151,13 @@ static int read_cfg(LmQwen2 *q, char *err, size_t errlen)
     LmQwen2Cfg *c = &q->cfg;
     LmGgufStr arch;
     if (lm_gguf_get_str(g, "general.architecture", &arch) != 0) return lm_fail(err, errlen, "%s: general.architecture is missing", g->path);
-    if (arch.n != 5 || memcmp(arch.s, "qwen2", 5) != 0)
+    if (arch.n != 5 || memcmp(arch.s, "qwen2", 5) != 0) {
+        const char *hint = lm_catalog_arch_hint(arch.s, arch.n);
+        if (hint)
+            return lm_fail(err, errlen, "%s: architecture \"%.*s\" is not the native qwen2 loader; %s",
+                           g->path, (int)arch.n, arch.s, hint);
         return lm_fail(err, errlen, "%s: architecture \"%.40s\" is not supported (supported: qwen2)", g->path, arch.s);
+    }
     if (need_u64(g, "qwen2.block_count", &c->layers, err, errlen) || need_u64(g, "qwen2.embedding_length", &c->hidden, err, errlen) ||
         need_u64(g, "qwen2.feed_forward_length", &c->inter, err, errlen) || need_u64(g, "qwen2.attention.head_count", &c->heads, err, errlen) ||
         need_u64(g, "qwen2.attention.head_count_kv", &c->kv_heads, err, errlen) || need_u64(g, "qwen2.context_length", &c->max_pos, err, errlen))

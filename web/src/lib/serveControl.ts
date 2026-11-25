@@ -2,7 +2,22 @@
 // Only lm-serve flags that already exist on the binary are accepted. Null/undefined omits
 // the flag so lm-serve keeps its own default.
 
-export type ServeModelId = 'qwen' | 'qwen-uncensored' | 'gemma' | 'whiterabbitneo' | 'gemma-uncensored';
+export type ServeModelId =
+  | 'qwen'
+  | 'qwen-uncensored'
+  | 'gemma'
+  | 'whiterabbitneo'
+  | 'gemma-uncensored'
+  | 'gemma-e2b'
+  | 'nemotron'
+  | 'granite'
+  | 'spark'
+  | 'lfm3'
+  | 'gemma-e2b-heretic'
+  | 'spark-heretic'
+  | 'granite-heretic'
+  | 'qwen2b'
+  | 'lfm3-abliterated';
 
 export interface ServeOptions {
   model: ServeModelId;
@@ -100,7 +115,11 @@ export function controlRequestAllowed(req: ControlRequest): ControlDecision {
   return { ok: true };
 }
 
-const MODELS: ServeModelId[] = ['qwen', 'qwen-uncensored', 'gemma', 'whiterabbitneo', 'gemma-uncensored'];
+const MODELS: ServeModelId[] = [
+  'qwen', 'qwen-uncensored', 'gemma', 'whiterabbitneo', 'gemma-uncensored',
+  'gemma-e2b', 'nemotron', 'granite', 'spark', 'lfm3',
+  'gemma-e2b-heretic', 'spark-heretic', 'granite-heretic', 'qwen2b', 'lfm3-abliterated',
+];
 
 function intOrNull(v: unknown, lo: number, hi: number): number | null | undefined {
   if (v === undefined || v === null || v === '') return null;
