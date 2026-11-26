@@ -7,9 +7,9 @@ import {
   ctxPresetsFor,
   formatCtxPreset,
   isUncensoredServeModel,
-  isVisionServeModel,
   matchServeModel,
   serveModelLabel,
+  showsVisionServeMark,
   uncensoredOptions,
 } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
@@ -25,11 +25,13 @@ interface Props {
   /** The model the server reports, or null when it cannot be reached: the picker is then how to start one. */
   modelName: string | null;
   contextLength: number | null;
+  /** Vision status from `/v1/models` when `modelName` is the running model. */
+  vision?: 'ok' | 'unavailable' | 'unknown' | null;
   busy: boolean;
   onStarted: () => void;
 }
 
-export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Props) {
+export function ModelCtxPicker({ modelName, contextLength, vision = null, busy, onStarted }: Props) {
   const { t, locale } = useI18n();
   const uid = useId();
   const panelId = `${uid}-panel`;
@@ -78,12 +80,13 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
 
   const renderModelChoice = (id: ServeModelId) => {
     const label = serveModelLabel(id, locale);
+    const showVision = showsVisionServeMark(id, modelName, vision);
     return (
       <button
         key={id}
         type="button"
         className={[
-          isUncensoredServeModel(id) || isVisionServeModel(id) ? 'has-model-mark' : '',
+          isUncensoredServeModel(id) || showVision ? 'has-model-mark' : '',
           isUncensoredServeModel(id) ? 'has-uncensored-warn' : '',
         ].filter(Boolean).join(' ') || undefined}
         aria-pressed={model === id}
@@ -95,9 +98,9 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
         }}
       >
         <span className="model-choice-label">{label}</span>
-        {(isVisionServeModel(id) || isUncensoredServeModel(id)) && (
+        {(showVision || isUncensoredServeModel(id)) && (
           <span className="model-marks">
-            {isVisionServeModel(id) && <VisionMark />}
+            {showVision && <VisionMark />}
             {isUncensoredServeModel(id) && <UncensoredMark />}
           </span>
         )}

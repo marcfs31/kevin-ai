@@ -11,7 +11,11 @@ export interface ServeModelOption {
   /** Picker cap. llama-server allocates the whole window up front. */
   maxCtx: number;
   uncensored: boolean;
-  /** Has a vision projector (mmproj) or the engine serves images for this id. */
+  /**
+   * Expected image support for a current install (mmproj or lm-serve embedded encoder).
+   * Older q8 files written before vision weights may still report unavailable at run time;
+   * the launch UI then hides the eye via `showsVisionServeMark`.
+   */
   vision: boolean;
 }
 
@@ -66,8 +70,24 @@ export function isUncensoredServeModel(id: ServeModelId): boolean {
   return option(id).uncensored;
 }
 
-/** Start targets that read images (mmproj / vision projector). */
+/** Start targets expected to read images (mmproj / embedded encoder on a current q8). */
 export function isVisionServeModel(id: ServeModelId): boolean {
+  return option(id).vision;
+}
+
+/**
+ * Whether the launch UI should show the eye for this start target.
+ * When that model is already running, trust `/v1/models` vision status so an older
+ * q8 without an encoder does not keep advertising "Reads images".
+ */
+export function showsVisionServeMark(
+  id: ServeModelId,
+  runningModel?: string | null,
+  runningVision?: 'ok' | 'unavailable' | 'unknown' | null,
+): boolean {
+  if (isServeModelRunning(runningModel, id) && (runningVision === 'ok' || runningVision === 'unavailable')) {
+    return runningVision === 'ok';
+  }
   return option(id).vision;
 }
 

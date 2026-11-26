@@ -60,6 +60,17 @@ describe('ModelCtxPicker', () => {
     expect(rabbit.querySelector('.model-vision')).toBeNull();
   });
 
+  it('hides the eye on the running model when vision is unavailable', () => {
+    render(
+      <I18nProvider locale="en">
+        <ModelCtxPicker modelName="qwen3.5-4b" contextLength={8192} vision="unavailable" busy={false} onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
+    expect(screen.getByRole('button', { name: /^Qwen3\.5-4B(?! Uncensored)/ }).querySelector('.model-vision')).toBeNull();
+    expect(screen.getByRole('button', { name: /LFM3-VL 2B(?! Abliterated)/ }).querySelector('.model-vision')).toBeTruthy();
+  });
+
   it('marks Uncensored models with a warning', () => {
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));

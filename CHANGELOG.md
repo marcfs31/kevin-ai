@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 - Vision eye marks on Settings start buttons: use the accent label colour so they stay visible on the filled primary chrome (muted grey on dark accent had vanished).
 - Stock Qwen3.5-4B, Qwen3.5-4B Uncensored, and Gemma 4 E4B show the eye mark: `lm-serve` opens their embedded vision encoder from the q8 weights.
+- When the running model reports vision unavailable (older q8 without an encoder), the launch menus hide that model's eye so the badge does not overstate support.
 
 ### Changed
 - Vision eye SVG uses explicit cubic lids plus iris ring so the mark stays clean at 14 px.

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ctxPresetsFor, formatCtxPreset, isServeModelRunning, isUncensoredServeModel, isVisionServeModel, matchServeModel, serveModelLabel } from './serveModels';
+import {
+  ctxPresetsFor,
+  formatCtxPreset,
+  isServeModelRunning,
+  isUncensoredServeModel,
+  isVisionServeModel,
+  matchServeModel,
+  serveModelLabel,
+  showsVisionServeMark,
+} from './serveModels';
 
 describe('formatCtxPreset', () => {
   it('formats ladder sizes as k labels', () => {
@@ -143,5 +152,19 @@ describe('isVisionServeModel', () => {
     expect(isVisionServeModel('nemotron')).toBe(false);
     expect(isVisionServeModel('whiterabbitneo')).toBe(false);
     expect(isVisionServeModel('granite')).toBe(false);
+  });
+});
+
+describe('showsVisionServeMark', () => {
+  it('hides the eye when the running model reports vision unavailable', () => {
+    expect(showsVisionServeMark('qwen', 'qwen3.5-4b', 'unavailable')).toBe(false);
+    expect(showsVisionServeMark('qwen', 'qwen3.5-4b', 'ok')).toBe(true);
+    // Other catalog vision targets still show when a different model is running.
+    expect(showsVisionServeMark('lfm3', 'qwen3.5-4b', 'unavailable')).toBe(true);
+    // Catalog expectation when nothing is running / status unknown.
+    expect(showsVisionServeMark('qwen', null, null)).toBe(true);
+    expect(showsVisionServeMark('qwen', 'qwen3.5-4b', 'unknown')).toBe(true);
+    // NEGATIVE: text-only
+    expect(showsVisionServeMark('nemotron', null, null)).toBe(false);
   });
 });
