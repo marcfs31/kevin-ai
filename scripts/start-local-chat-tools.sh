@@ -100,12 +100,15 @@ main() {
 # The directory is made absolute first: the parser's working directory is the project, so a
 # relative binary would run a file from that project. An explicit KEVIN_OXR_BIN is left as set;
 # the tool service still refuses a relative one.
+# OXR is optional. A directory that exists but cannot be entered (mode 000, for example) is
+# skipped: the failed cd must not abort the launcher under set -e.
 discover_oxr() {
-  local state=$1 oxr
+  local state=$1 oxr resolved
   [[ -z "${KEVIN_OXR_BIN:-}" ]] || return 0
   oxr=$state/oxr
   if [[ -d "$oxr" ]]; then
-    oxr=$(cd "$oxr" && pwd -P)
+    resolved=$(cd "$oxr" && pwd -P) || return 0
+    oxr=$resolved
   fi
   if [[ -x "$oxr/crispembed" && -f "$oxr/oxr-1.0-q4_k-head.gguf" ]]; then
     export KEVIN_OXR_BIN="$oxr/crispembed"

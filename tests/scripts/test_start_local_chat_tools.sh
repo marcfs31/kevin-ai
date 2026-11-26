@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# start-local-chat-tools.sh: arguments and the command it would run (--dry-run). No process is started.
+# start-local-chat-tools.sh: arguments, the command it would run (--dry-run), and one real start
+# when the optional OXR directory cannot be entered.
 set -u
 root=$(cd "$(dirname "$0")/../.." && pwd)
 script=$root/scripts/start-local-chat-tools.sh
@@ -8,7 +9,15 @@ check() { checks=$((checks + 1)); if ! eval "$1"; then fails=$((fails + 1)); ech
 
 home=$(mktemp -d)
 extra=$(mktemp -d)
-trap 'find "$home" -delete; find "$extra" -delete' EXIT
+cleanup() {
+  if [[ -n "${locked:-}" && -d "$locked/oxr" ]]; then chmod u+rwx "$locked/oxr" 2>/dev/null || true; fi
+  if [[ -n "${locked:-}" && -f "$locked/chat-tools-local.pid" ]]; then
+    HOME=$home LM_LOCAL_TOOLS_STATE="$locked" bash "$script" --stop >/dev/null 2>&1 || true
+  fi
+  find "$home" -delete
+  find "$extra" -delete
+}
+trap cleanup EXIT
 run() { HOME=$home bash "$script" "$@" 2>&1 || true; }
 
 out=$(run --dry-run)
@@ -51,6 +60,20 @@ check '[[ "$bin" == "$abs/crispembed" && "$bin" == /* ]]' "relative state should
 check '[[ "$model" == "$abs/oxr-1.0-q4_k-head.gguf" && "$layout" == "$abs/oxr-1.0-dfine-layout-f32.gguf" ]]' "model and layout should be absolute too, got: $out"
 out=$(cd "$extra/proj" && KEVIN_OXR_BIN=crispembed env -u KEVIN_OXR_MODEL -u KEVIN_OXR_LAYOUT bash -c 'source "$1"; discover_oxr ../state; printf "%s\n" "$KEVIN_OXR_BIN"' _ "$script")
 check '[[ "$out" == "crispembed" ]]' "an explicit relative binary must stay relative, got: $out"
+# The directory is visible (-d) but not searchable. Startup must continue, and the parser stays unset.
+locked=$extra/locked-state
+mkdir -p "$locked/oxr"
+chmod 000 "$locked/oxr"
+port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+status=0
+out=$(HOME=$home LM_LOCAL_TOOLS_STATE="$locked" LM_LOCAL_PROJECTS_BASE= env -u KEVIN_OXR_BIN -u KEVIN_OXR_MODEL -u KEVIN_OXR_LAYOUT bash "$script" --port "$port" 2>&1) || status=$?
+pid=$(cat "$locked/chat-tools-local.pid" 2>/dev/null || true)
+envdump=
+if [[ "$pid" =~ ^[0-9]+$ ]]; then envdump=$(ps eww -p "$pid" -o command= 2>/dev/null || true); fi
+HOME=$home LM_LOCAL_TOOLS_STATE="$locked" bash "$script" --stop >/dev/null 2>&1 || true
+chmod u+rwx "$locked/oxr" 2>/dev/null || true
+check '[[ "$status" == 0 && "$out" == *"local tool service up on 127.0.0.1:$port"* ]]' "unsearchable oxr dir must not block startup (status $status): $out"
+check '[[ "$envdump" != *KEVIN_OXR_* ]]' "unsearchable oxr dir must not export parser paths: $envdump"
 
 if [ "$fails" -ne 0 ]; then echo "test_start_local_chat_tools: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_start_local_chat_tools: $checks checks passed"
