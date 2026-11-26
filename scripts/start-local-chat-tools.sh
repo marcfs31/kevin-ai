@@ -78,6 +78,15 @@ main() {
     set -a; . "$envfile"; set +a
   fi
   [[ -f "$root/tools/chat_tools.py" ]] || { echo "missing $root/tools/chat_tools.py" >&2; exit 1; }
+  # SoMark OXR lives on this Mac (Metal). The model server does not get these variables.
+  local oxr=$state/oxr
+  if [[ -z "${KEVIN_OXR_BIN:-}" && -x "$oxr/crispembed" && -f "$oxr/oxr-1.0-q4_k-head.gguf" ]]; then
+    export KEVIN_OXR_BIN="$oxr/crispembed"
+    export KEVIN_OXR_MODEL="$oxr/oxr-1.0-q4_k-head.gguf"
+    if [[ -f "$oxr/oxr-1.0-dfine-layout-f32.gguf" ]]; then
+      export KEVIN_OXR_LAYOUT="$oxr/oxr-1.0-dfine-layout-f32.gguf"
+    fi
+  fi
   stop_old
   nohup "${cmd[@]}" >"$log" 2>&1 &
   local pid=$!

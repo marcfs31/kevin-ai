@@ -18,6 +18,7 @@ import chat_projects as cp  # noqa: E402
 
 class Base(unittest.TestCase):
     def setUp(self):
+        self._oxr_env = {k: os.environ.pop(k, None) for k in ("KEVIN_OXR_BIN", "KEVIN_OXR_MODEL", "KEVIN_OXR_LAYOUT")}
         self.tmp = tempfile.mkdtemp()
         self.base = os.path.join(self.tmp, "base")
         os.makedirs(os.path.join(self.base, "demo", "src"))
@@ -34,6 +35,11 @@ class Base(unittest.TestCase):
     def tearDown(self):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
+        for k, v in self._oxr_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     def write_registry(self, projects):
         with open(self.registry, "w") as f:
@@ -289,6 +295,79 @@ class Selection(Base):
 
     def test_an_unknown_tool_is_an_error_result_not_a_crash(self):
         self.fails("rm_rf", "no tool named", path="x")
+
+
+class DocParse(Base):
+    def setUp(self):
+        super().setUp()
+        self.bin_dir = os.path.join(self.tmp, "oxr")
+        os.makedirs(self.bin_dir)
+        self.binary = os.path.join(self.bin_dir, "crispembed")
+        self.model = os.path.join(self.bin_dir, "model.gguf")
+        with open(self.model, "wb") as f:
+            f.write(b"gguf")
+
+    def _install(self, body):
+        with open(self.binary, "w") as f:
+            f.write(body)
+        os.chmod(self.binary, 0o755)
+        os.environ["KEVIN_OXR_BIN"] = self.binary
+        os.environ["KEVIN_OXR_MODEL"] = self.model
+        os.environ.pop("KEVIN_OXR_LAYOUT", None)
+
+    def test_without_a_runtime_the_tool_is_hidden_and_refuses(self):
+        names = [t["name"] for t in cp.tool_defs()]
+        self.assertNotIn("doc_parse", names)
+        self.fails("doc_parse", "not installed", path="page.png")
+
+    def test_a_path_outside_the_project_or_the_wrong_kind_is_refused(self):
+        self._install("#!/bin/sh\nprintf ok\n")
+        self.put("page.png", b"\x89PNG\r\n", binary=True)
+        self.put("notes.txt", "hello")
+        self.fails("doc_parse", ".. is not", path="../outside/secret.png")
+        self.fails("doc_parse", "relative", path="/etc/passwd")
+        self.fails("doc_parse", "png, jpeg, or bmp", path="notes.txt")
+        os.symlink(os.path.join(self.outside, "secret.txt"), os.path.join(self.root, "escape.png"))
+        self.fails("doc_parse", "leaves the project", path="escape.png")
+
+    def test_the_model_cannot_choose_the_program_or_pass_a_token(self):
+        self._install(
+            "#!/usr/bin/env python3\n"
+            "import os, sys\n"
+            "here = os.path.dirname(os.path.abspath(sys.argv[0]))\n"
+            "open(os.path.join(here, 'argv'), 'w').write('\\n'.join(sys.argv))\n"
+            "keys = [k for k in os.environ if 'TOKEN' in k or k.startswith('CRISPEMBED_')]\n"
+            "open(os.path.join(here, 'env'), 'w').write('\\n'.join(sorted(keys)))\n"
+            "print('hello from oxr')\n"
+        )
+        self.put("page.png", b"\x89PNG\r\n", binary=True)
+        os.environ["KEVIN_GITHUB_TOKEN"] = "should-not-pass"
+        try:
+            text = self.ok("doc_parse", path="page.png")
+        finally:
+            os.environ.pop("KEVIN_GITHUB_TOKEN", None)
+        self.assertIn("hello from oxr", text)
+        self.assertIn("SoMark OXR", text)
+        with open(os.path.join(self.bin_dir, "argv")) as f:
+            argv = f.read().splitlines()
+        self.assertEqual(argv[0], self.binary)
+        self.assertEqual(argv[1:7], ["--ocr-pipeline", os.path.join(self.root, "page.png"), "--ocr-engine", "oxr", "--ocr-rec", self.model])
+        with open(os.path.join(self.bin_dir, "env")) as f:
+            seen = f.read()
+        self.assertNotIn("should-not-pass", seen)
+        self.assertIn("CRISPEMBED_ACCEPT_OXR_LICENSE", seen)
+        names = [t["name"] for t in cp.NativeProjectClient("project", {}, {}, self.host).request("tools/list")["tools"]]
+        self.assertIn("doc_parse", names)
+        self.assertEqual(len(names), 23)
+
+    def test_a_failing_parser_is_an_error_and_a_symlink_runtime_is_ignored(self):
+        self._install("#!/bin/sh\necho no\nexit 3\n")
+        self.put("page.png", b"\x89PNG\r\n", binary=True)
+        self.fails("doc_parse", "exit code 3", path="page.png")
+        link = os.path.join(self.tmp, "linked-bin")
+        os.symlink(self.binary, link)
+        os.environ["KEVIN_OXR_BIN"] = link
+        self.fails("doc_parse", "not installed", path="page.png")
 
 
 class Client(Base):

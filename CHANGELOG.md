@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Local project tool `doc_parse`: when SoMark OXR is installed on this Mac (`~/.local/share/kevin-ai/oxr`), any chat model can turn a project png, jpeg, or bmp into markdown. The model server does not load it (the chat model already fills that machine). The tool runs a fixed binary on a jailed path; the model cannot pass a program, a URL, or extra arguments. Local use under the OXR license (Apache-2.0 plus SoMark's funding and revenue limits); it is not a public document-parsing API.
+
 ## [1.0.9] - 2026-11-26
 
 ### Fixed
