@@ -174,24 +174,32 @@ OXR_MAX_OUT = 64 * 1024
 OXR_TIMEOUT = 300
 
 
-def _oxr_file(path, exe=False):
-    if not isinstance(path, str) or not path or path.startswith("-") or "\x00" in path:
-        return False
-    if not os.path.isfile(path) or os.path.islink(path):
-        return False
-    return not exe or os.access(path, os.X_OK)
-
-
-def oxr_runtime():
-    """(binary, model, layout or None) from the environment, or None when this host has no OXR."""
-    binary = os.environ.get("KEVIN_OXR_BIN", "")
-    model = os.environ.get("KEVIN_OXR_MODEL", "")
-    layout = os.environ.get("KEVIN_OXR_LAYOUT", "")
-    if not _oxr_file(binary, exe=True) or not _oxr_file(model):
+def _oxr_abs(path, exe=False):
+    """An absolute regular file, or None. A relative path is refused: the parser is started with
+    the project as its working directory, so a relative name would run a file from the project."""
+    if not isinstance(path, str) or not os.path.isabs(path) or path.startswith("-") or "\x00" in path:
         return None
-    if layout and not _oxr_file(layout):
-        layout = ""
-    return binary, model, layout or None
+    if os.path.islink(path):
+        return None
+    real = os.path.realpath(path)
+    if not os.path.isfile(real):
+        return None
+    if exe and not os.access(real, os.X_OK):
+        return None
+    return real
+
+
+def oxr_runtime(root=None):
+    """(binary, model, layout or None) from the environment, or None when this host has no OXR.
+    With a project root, a runtime that lives inside that project is treated as absent."""
+    binary = _oxr_abs(os.environ.get("KEVIN_OXR_BIN", ""), exe=True)
+    model = _oxr_abs(os.environ.get("KEVIN_OXR_MODEL", ""))
+    if not binary or not model:
+        return None
+    layout = _oxr_abs(os.environ.get("KEVIN_OXR_LAYOUT", ""))
+    if root is not None and (inside(root, binary) or inside(root, model) or (layout and inside(root, layout))):
+        return None
+    return binary, model, layout
 
 
 def tool_defs(extra=()):
@@ -202,7 +210,7 @@ def tool_defs(extra=()):
 
 
 def doc_parse(root, args):
-    runtime = oxr_runtime()
+    runtime = oxr_runtime(root)
     if not runtime:
         raise ToolFail("SoMark OXR is not installed on this machine")
     binary, model, _layout = runtime
@@ -437,7 +445,9 @@ class ProjectHost:
             commands = {pid: p["commands"] for pid, p in self.projects().items()}
         except RegistryError:
             return TOOLS_VERSION + "-bad"
-        return hashlib.sha256((TOOLS_VERSION + json.dumps(commands, sort_keys=True)).encode()).hexdigest()[:12]
+        oxr = oxr_runtime()
+        marker = "" if oxr is None else json.dumps(oxr)
+        return hashlib.sha256((TOOLS_VERSION + marker + json.dumps(commands, sort_keys=True)).encode()).hexdigest()[:12]
 
     def _command(self, name):
         for pid, p in self.projects().items():
