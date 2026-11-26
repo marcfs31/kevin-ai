@@ -87,18 +87,18 @@ def tool_def(pid, cmd):
     }
 
 
-def _tail(text_bytes, total):
+def _tail(text_bytes, total, max_out=MAX_OUT):
     text = text_bytes.decode("utf-8", "replace")
     cut = ""
     if total > len(text_bytes):
         cut = f"[{total - len(text_bytes)} earlier bytes left out]\n"
-    if len(text) > MAX_OUT:
-        cut = f"[output cut to the last {MAX_OUT} characters]\n"
-        text = text[-MAX_OUT:]
+    if len(text) > max_out:
+        cut = f"[output cut to the last {max_out} characters]\n"
+        text = text[-max_out:]
     return cut + text
 
 
-def run(project, cmd, env_in=None):
+def run(project, cmd, env_in=None, max_out=MAX_OUT):
     """Runs one allowlisted command. Returns (text, ok): the exit status and the tail of its output."""
     root = project["root"]
     cwd = resolve(root, cmd["cwd"]) if cmd["cwd"] else root
@@ -144,7 +144,7 @@ def run(project, cmd, env_in=None):
             pass
         reader.join(5)
         proc.stdout.close()
-        output = _tail(b"".join(ring), total[0])
+        output = _tail(b"".join(ring), total[0], max_out)
         if timed_out:
             return f"timed out after {cmd['timeout']} s and was stopped\n{output}".rstrip(), False
         return f"exit code {rc}\n{output}".rstrip(), rc == 0

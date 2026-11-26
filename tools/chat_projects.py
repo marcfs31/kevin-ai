@@ -11,6 +11,10 @@ the host whose service is asked.
   paths, no "..", no symlink that leaves the root, nothing under .git.
 - Tools: project_list, fs_read, fs_list, fs_search, fs_write, fs_edit. Writes are capped in size and refused
   when the volume is short of free space (the SSD also holds the models).
+- doc_parse, only when the owner has installed SoMark OXR on this host (KEVIN_OXR_BIN and
+  KEVIN_OXR_MODEL). It runs that fixed binary on one jailed image. The model cannot pass a
+  program, a URL, or extra arguments. The model server does not set those variables, so the
+  tool stays off beside the loaded chat model.
 
 Python 3 standard library only.
 """
@@ -154,6 +158,74 @@ TOOLS = [
            "replace_all": {"type": "boolean"}}, ["path", "old", "new"]),
 ]
 TOOLS += chat_git.GIT_DEFS + chat_remote.REMOTE_DEFS
+
+# SoMark OXR (document images -> markdown). Present only when this host has the runtime.
+# The paths are the owner's environment, never arguments from the model.
+DOC_PARSE = _tool(
+    "doc_parse",
+    "Read one document image in this project with SoMark OXR and return its text as markdown. "
+    "Use it when the chat model cannot see the picture. path is a png, jpeg, or bmp file inside the project. "
+    "SoMark OXR runs on this machine; it does not replace the chat model.",
+    {"path": {"type": "string", "description": "Project-relative image path (png, jpeg, or bmp)."}},
+    ["path"], True)
+OXR_EXTS = {".png", ".jpg", ".jpeg", ".bmp"}
+OXR_MAX_BYTES = 15 * 1024 * 1024
+OXR_MAX_OUT = 64 * 1024
+OXR_TIMEOUT = 300
+
+
+def _oxr_file(path, exe=False):
+    if not isinstance(path, str) or not path or path.startswith("-") or "\x00" in path:
+        return False
+    if not os.path.isfile(path) or os.path.islink(path):
+        return False
+    return not exe or os.access(path, os.X_OK)
+
+
+def oxr_runtime():
+    """(binary, model, layout or None) from the environment, or None when this host has no OXR."""
+    binary = os.environ.get("KEVIN_OXR_BIN", "")
+    model = os.environ.get("KEVIN_OXR_MODEL", "")
+    layout = os.environ.get("KEVIN_OXR_LAYOUT", "")
+    if not _oxr_file(binary, exe=True) or not _oxr_file(model):
+        return None
+    if layout and not _oxr_file(layout):
+        layout = ""
+    return binary, model, layout or None
+
+
+def tool_defs(extra=()):
+    tools = list(TOOLS)
+    if oxr_runtime():
+        tools.append(DOC_PARSE)
+    return tools + list(extra)
+
+
+def doc_parse(root, args):
+    runtime = oxr_runtime()
+    if not runtime:
+        raise ToolFail("SoMark OXR is not installed on this machine")
+    binary, model, _layout = runtime
+    real = resolve(root, args.get("path"))
+    rel = rel_of(root, real)
+    if not os.path.isfile(real):
+        raise ToolFail(f"{rel} is not a file")
+    if os.path.splitext(real)[1].lower() not in OXR_EXTS:
+        raise ToolFail(f"{rel} must be a png, jpeg, or bmp image")
+    if os.path.getsize(real) > OXR_MAX_BYTES:
+        raise ToolFail(f"{rel} is too large to parse")
+    # CrispEmbed's OXR recognition stage. Its --ocr-engine path ignores a separate layout file.
+    argv = [binary, "--ocr-pipeline", real, "--ocr-engine", "oxr", "--ocr-rec", model, "-t", "4"]
+    text, ok = chat_commands.run(
+        {"root": root},
+        {"argv": argv, "timeout": OXR_TIMEOUT, "cwd": None, "env": {
+            "CRISPEMBED_OXR": "1",
+            "CRISPEMBED_ACCEPT_OXR_LICENSE": "1",
+        }},
+        max_out=OXR_MAX_OUT)
+    if not ok:
+        raise ToolFail(text)
+    return f"{rel} parsed with SoMark OXR\n{text}"
 # The tools that change something: these are recorded in the audit log.
 CHANGING = {t["name"] for t in TOOLS if not t["annotations"]["readOnlyHint"]}
 # Changes whenever a definition changes, so a kept tool list is never older than the code.
@@ -420,6 +492,9 @@ class ProjectHost:
         try:
             if name == "project_list":
                 return _result(self._list())
+            if name == "doc_parse":
+                project = self._project(args)
+                return _result(doc_parse(project["root"], args))
             if name in FILE_TOOLS:
                 project = self._project(args)
                 result = _result(FILE_TOOLS[name](project["root"], args, self))
@@ -477,9 +552,9 @@ class NativeProjectClient:
             return {"protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "serverInfo": {"name": "kevin-projects", "version": TOOLS_VERSION}}
         if method == "tools/list":
             try:
-                return {"tools": TOOLS + self.host.command_tools()}
+                return {"tools": tool_defs(self.host.command_tools())}
             except RegistryError:
-                return {"tools": TOOLS}
+                return {"tools": tool_defs()}
         if method == "tools/call":
             params = params or {}
             return self.host.call(params.get("name"), params.get("arguments") or {})
