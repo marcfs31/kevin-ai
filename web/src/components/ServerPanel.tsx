@@ -2,7 +2,13 @@ import { useId, useState } from 'react';
 import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { SERVE_DEFAULTS, startRemoteServe, type ServeModelId, type ServeOptions } from '../lib/serve';
-import { stockOptions, isServeModelRunning, serveModelLabel, uncensoredOptions } from '../lib/serveModels';
+import {
+  stockOptions,
+  isServeModelRunning,
+  serveModelLabel,
+  showsVisionServeMark,
+  uncensoredOptions,
+} from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
 import { VisionMark } from './VisionMark';
 
@@ -70,10 +76,12 @@ interface Props {
   busy: boolean;
   /** Model id reported by the server, when one is running. */
   runningModel?: string | null;
+  /** Vision status from `/v1/models` for the running model. */
+  runningVision?: 'ok' | 'unavailable' | 'unknown' | null;
   onStarted: () => void;
 }
 
-export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
+export function ServerPanel({ busy, runningModel = null, runningVision = null, onStarted }: Props) {
   const { t, locale } = useI18n();
   const id = useId();
   const [draft, setDraft] = useState<ServeDraft>(EMPTY_SERVE_DRAFT);
@@ -84,13 +92,14 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
 
   const renderServeButton = (opt: (typeof stockOptions)[number]) => {
     const name = serveModelLabel(opt.id, locale);
+    const vision = showsVisionServeMark(opt.id, runningModel, runningVision);
     return (
       <button
         key={opt.id}
         type="button"
         className={[
           'primary',
-          opt.uncensored || opt.vision ? 'has-model-mark' : '',
+          opt.uncensored || vision ? 'has-model-mark' : '',
           opt.uncensored ? 'has-uncensored-warn' : '',
         ].filter(Boolean).join(' ')}
         aria-pressed={isServeModelRunning(runningModel, opt.id)}
@@ -100,9 +109,9 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
         <span className="model-choice-label">
           {starting && status.model === opt.id ? t('serve.starting', { model: name }) : t('serve.startNamed', { model: name })}
         </span>
-        {(opt.vision || opt.uncensored) && (
+        {(vision || opt.uncensored) && (
           <span className="model-marks">
-            {opt.vision && <VisionMark />}
+            {vision && <VisionMark />}
             {opt.uncensored && <UncensoredMark />}
           </span>
         )}

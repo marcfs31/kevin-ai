@@ -526,6 +526,7 @@ function Chat({ state, setState, storage, notice }: {
             <ModelCtxPicker
               modelName={server.info.model}
               contextLength={server.info.contextLength}
+              vision={server.info.vision}
               busy={busy}
               onStarted={onServeStarted}
             />
@@ -579,7 +580,12 @@ function Chat({ state, setState, storage, notice }: {
         </button>
       </header>
       <SettingsModal open={settingsOpen} onClose={closeSettings}>
-        <ServerPanel busy={busy} runningModel={info?.model ?? null} onStarted={onServeStarted} />
+        <ServerPanel
+          busy={busy}
+          runningModel={info?.model ?? null}
+          runningVision={info?.vision ?? null}
+          onStarted={onServeStarted}
+        />
         <SettingsPanel settings={state.settings} onChange={updateSettings} />
             <ToolsPanel settings={state.settings} onChange={updateSettings} load={toolsOn && mcp.key === mcpKey ? mcp.load : null} reload={() => setMcpReload((n) => n + 1)} />
       </SettingsModal>

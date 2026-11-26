@@ -34,6 +34,16 @@ describe('ServerPanel', () => {
     expect(document.querySelectorAll('.serve-model-groups .model-vision')).toHaveLength(9);
   });
 
+  it('hides the eye on the running model when the server reports vision unavailable', () => {
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} runningModel="qwen3.5-4b" runningVision="unavailable" onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    expect(screen.getByRole('button', { name: /^Start Qwen3\.5-4B(?! Uncensored)/ }).querySelector('.model-vision')).toBeNull();
+    expect(document.querySelectorAll('.serve-model-groups .model-vision')).toHaveLength(8);
+  });
+
   it('groups serve buttons under stock and uncensored headings', () => {
     render(
       <I18nProvider locale="en">
