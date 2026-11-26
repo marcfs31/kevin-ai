@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - Model picker stock/uncensored lists stack one model per row so short names no longer sit side by side.
+- Vision and uncensored marks sit after the model name so labels share one start edge and icons do not overlap the text.
 
 ## [1.0.7] - 2026-11-26
 

@@ -97,9 +97,15 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
         disabled={busy || starting}
         onClick={() => void start(opt.id)}
       >
-        {opt.vision && <VisionMark />}
-        {opt.uncensored && <UncensoredMark />}
-        {starting && status.model === opt.id ? t('serve.starting', { model: name }) : t('serve.startNamed', { model: name })}
+        <span className="model-choice-label">
+          {starting && status.model === opt.id ? t('serve.starting', { model: name }) : t('serve.startNamed', { model: name })}
+        </span>
+        {(opt.vision || opt.uncensored) && (
+          <span className="model-marks">
+            {opt.vision && <VisionMark />}
+            {opt.uncensored && <UncensoredMark />}
+          </span>
+        )}
       </button>
     );
   };
