@@ -367,6 +367,32 @@ class DocParse(Base):
         os.environ.pop("KEVIN_OXR_BIN", None)
         self.assertEqual(self.host.tools_version(), before)
 
+    def test_a_runtime_inside_the_only_project_is_not_advertised(self):
+        inside = os.path.join(self.root, "oxr")
+        os.makedirs(inside)
+        binary = os.path.join(inside, "crispembed")
+        model = os.path.join(inside, "model.gguf")
+        with open(binary, "w") as f:
+            f.write("#!/bin/sh\nprintf 'should-not-run'\n")
+        os.chmod(binary, 0o755)
+        with open(model, "wb") as f:
+            f.write(b"gguf")
+        os.environ["KEVIN_OXR_BIN"] = binary
+        os.environ["KEVIN_OXR_MODEL"] = model
+        self.put("page.png", b"\x89PNG\r\n", binary=True)
+        hidden = self.host.tools_version()
+        os.environ.pop("KEVIN_OXR_BIN", None)
+        self.assertEqual(self.host.tools_version(), hidden)
+        os.environ["KEVIN_OXR_BIN"] = binary
+        listed = cp.NativeProjectClient("project", {}, {}, self.host).request("tools/list")["tools"]
+        self.assertNotIn("doc_parse", [t["name"] for t in listed])
+        self.fails("doc_parse", "not installed", path="page.png")
+        self.write_registry({"demo": {"root": "demo"}, "other": {"root": "other"}})
+        listed = cp.NativeProjectClient("project", {}, {}, self.host).request("tools/list")["tools"]
+        self.assertIn("doc_parse", [t["name"] for t in listed])
+        self.assertNotEqual(self.host.tools_version(), hidden)
+        self.fails("doc_parse", "not installed", path="page.png", project="demo")
+
     def test_a_relative_or_in_project_executable_is_refused(self):
         marker = os.path.join(self.tmp, "ran")
         planted = os.path.join(self.root, "crispembed")

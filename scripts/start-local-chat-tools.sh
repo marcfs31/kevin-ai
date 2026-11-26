@@ -79,14 +79,7 @@ main() {
   fi
   [[ -f "$root/tools/chat_tools.py" ]] || { echo "missing $root/tools/chat_tools.py" >&2; exit 1; }
   # SoMark OXR lives on this Mac (Metal). The model server does not get these variables.
-  local oxr=$state/oxr
-  if [[ -z "${KEVIN_OXR_BIN:-}" && -x "$oxr/crispembed" && -f "$oxr/oxr-1.0-q4_k-head.gguf" ]]; then
-    export KEVIN_OXR_BIN="$oxr/crispembed"
-    export KEVIN_OXR_MODEL="$oxr/oxr-1.0-q4_k-head.gguf"
-    if [[ -f "$oxr/oxr-1.0-dfine-layout-f32.gguf" ]]; then
-      export KEVIN_OXR_LAYOUT="$oxr/oxr-1.0-dfine-layout-f32.gguf"
-    fi
-  fi
+  discover_oxr "$state"
   stop_old
   nohup "${cmd[@]}" >"$log" 2>&1 &
   local pid=$!
@@ -101,6 +94,26 @@ main() {
   done
   echo "chat_tools.py did not answer in time:" >&2; tail -n 20 "$log" >&2 || true
   exit 1
+}
+
+# Fill KEVIN_OXR_* from "<state>/oxr" when the owner has not set a binary.
+# The directory is made absolute first: the parser's working directory is the project, so a
+# relative binary would run a file from that project. An explicit KEVIN_OXR_BIN is left as set;
+# the tool service still refuses a relative one.
+discover_oxr() {
+  local state=$1 oxr
+  [[ -z "${KEVIN_OXR_BIN:-}" ]] || return 0
+  oxr=$state/oxr
+  if [[ -d "$oxr" ]]; then
+    oxr=$(cd "$oxr" && pwd -P)
+  fi
+  if [[ -x "$oxr/crispembed" && -f "$oxr/oxr-1.0-q4_k-head.gguf" ]]; then
+    export KEVIN_OXR_BIN="$oxr/crispembed"
+    export KEVIN_OXR_MODEL="$oxr/oxr-1.0-q4_k-head.gguf"
+    if [[ -f "$oxr/oxr-1.0-dfine-layout-f32.gguf" ]]; then
+      export KEVIN_OXR_LAYOUT="$oxr/oxr-1.0-dfine-layout-f32.gguf"
+    fi
+  fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
