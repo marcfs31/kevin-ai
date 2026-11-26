@@ -87,6 +87,7 @@ export const es: Record<MessageKey, string> & Record<string, string> = {
   'picker.ctxSize': '{label}',
   'picker.start': 'Arrancar',
   'picker.uncensoredWarn': 'Sin censura: menos filtros de seguridad que el modelo de referencia',
+  'picker.visionMark': 'Lee imágenes',
 
   'mode.effort': 'Esfuerzo',
   'mode.effort.low': 'Bajo',

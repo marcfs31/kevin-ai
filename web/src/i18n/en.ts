@@ -85,6 +85,7 @@ export const en = {
   'picker.ctxSize': '{label}',
   'picker.start': 'Start',
   'picker.uncensoredWarn': 'Uncensored: fewer safety filters than the stock model',
+  'picker.visionMark': 'Reads images',
 
   'mode.effort': 'Effort',
   'mode.effort.low': 'Low',

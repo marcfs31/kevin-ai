@@ -11,27 +11,29 @@ export interface ServeModelOption {
   /** Picker cap. llama-server allocates the whole window up front. */
   maxCtx: number;
   uncensored: boolean;
+  /** Has a vision projector (mmproj) or the engine serves images for this id. */
+  vision: boolean;
 }
 
 /** Fixed start targets Settings / the header picker can launch. */
 export const SERVE_MODEL_OPTIONS: ServeModelOption[] = [
-  { id: 'qwen', label: 'Qwen3.5-4B', labelEs: 'Qwen3.5-4B', alias: 'qwen3.5-4b', maxCtx: 131072, uncensored: false },
-  { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored', labelEs: 'Qwen3.5-4B sin censura', alias: 'qwen3.5-4b-uncensored', maxCtx: 131072, uncensored: true },
-  { id: 'gemma', label: 'Gemma 4 E4B', labelEs: 'Gemma 4 E4B', alias: 'gemma-4-e4b', maxCtx: 131072, uncensored: false },
-  { id: 'whiterabbitneo', label: 'WhiteRabbitNeo 2.5 7B', labelEs: 'WhiteRabbitNeo 2.5 7B', alias: 'whiterabbitneo-2.5-7b', maxCtx: 16384, uncensored: false },
-  { id: 'gemma-uncensored', label: 'Gemma 4 E4B Uncensored', labelEs: 'Gemma 4 E4B Uncensored', alias: 'gemma-4-e4b-uncensored', maxCtx: 32768, uncensored: true },
+  { id: 'qwen', label: 'Qwen3.5-4B', labelEs: 'Qwen3.5-4B', alias: 'qwen3.5-4b', maxCtx: 131072, uncensored: false, vision: false },
+  { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored', labelEs: 'Qwen3.5-4B sin censura', alias: 'qwen3.5-4b-uncensored', maxCtx: 131072, uncensored: true, vision: false },
+  { id: 'gemma', label: 'Gemma 4 E4B', labelEs: 'Gemma 4 E4B', alias: 'gemma-4-e4b', maxCtx: 131072, uncensored: false, vision: false },
+  { id: 'whiterabbitneo', label: 'WhiteRabbitNeo 2.5 7B', labelEs: 'WhiteRabbitNeo 2.5 7B', alias: 'whiterabbitneo-2.5-7b', maxCtx: 16384, uncensored: false, vision: false },
+  { id: 'gemma-uncensored', label: 'Gemma 4 E4B Uncensored', labelEs: 'Gemma 4 E4B Uncensored', alias: 'gemma-4-e4b-uncensored', maxCtx: 32768, uncensored: true, vision: true },
   // Gemma 4 E2B and Nemotron follow the gemma4 path (llama-server v1.0.0). Nemotron has no mmproj.
-  { id: 'gemma-e2b', label: 'Gemma 4 E2B', labelEs: 'Gemma 4 E2B', alias: 'gemma-4-e2b', maxCtx: 32768, uncensored: false },
-  { id: 'nemotron', label: 'Nemotron 3.5 Bolt E4B', labelEs: 'Nemotron 3.5 Bolt E4B', alias: 'nemotron-3.5-bolt-e4b', maxCtx: 32768, uncensored: false },
-  { id: 'granite', label: 'Granite 4.2 3B', labelEs: 'Granite 4.2 3B', alias: 'granite-4.2-3b', maxCtx: 16384, uncensored: false },
-  { id: 'spark', label: 'Spark X2.6 4B', labelEs: 'Spark X2.6 4B', alias: 'spark-x2.6-4b', maxCtx: 32768, uncensored: false },
-  { id: 'lfm3', label: 'LFM3-VL 2B', labelEs: 'LFM3-VL 2B', alias: 'lfm3-vl-2b', maxCtx: 32768, uncensored: false },
-  { id: 'gemma-e2b-heretic', label: 'Gemma 4 E2B Heretic', labelEs: 'Gemma 4 E2B heretic', alias: 'gemma-4-e2b-heretic', maxCtx: 32768, uncensored: true },
-  { id: 'spark-heretic', label: 'Spark X2.6 4B Heretic', labelEs: 'Spark X2.6 4B heretic', alias: 'spark-x2.6-4b-heretic', maxCtx: 32768, uncensored: true },
-  { id: 'granite-heretic', label: 'Granite 4.2 3B Heretic', labelEs: 'Granite 4.2 3B heretic', alias: 'granite-4.2-3b-heretic', maxCtx: 16384, uncensored: true },
+  { id: 'gemma-e2b', label: 'Gemma 4 E2B', labelEs: 'Gemma 4 E2B', alias: 'gemma-4-e2b', maxCtx: 32768, uncensored: false, vision: true },
+  { id: 'nemotron', label: 'Nemotron 3.5 Bolt E4B', labelEs: 'Nemotron 3.5 Bolt E4B', alias: 'nemotron-3.5-bolt-e4b', maxCtx: 32768, uncensored: false, vision: false },
+  { id: 'granite', label: 'Granite 4.2 3B', labelEs: 'Granite 4.2 3B', alias: 'granite-4.2-3b', maxCtx: 16384, uncensored: false, vision: false },
+  { id: 'spark', label: 'Spark X2.6 4B', labelEs: 'Spark X2.6 4B', alias: 'spark-x2.6-4b', maxCtx: 32768, uncensored: false, vision: false },
+  { id: 'lfm3', label: 'LFM3-VL 2B', labelEs: 'LFM3-VL 2B', alias: 'lfm3-vl-2b', maxCtx: 32768, uncensored: false, vision: true },
+  { id: 'gemma-e2b-heretic', label: 'Gemma 4 E2B Heretic', labelEs: 'Gemma 4 E2B heretic', alias: 'gemma-4-e2b-heretic', maxCtx: 32768, uncensored: true, vision: true },
+  { id: 'spark-heretic', label: 'Spark X2.6 4B Heretic', labelEs: 'Spark X2.6 4B heretic', alias: 'spark-x2.6-4b-heretic', maxCtx: 32768, uncensored: true, vision: false },
+  { id: 'granite-heretic', label: 'Granite 4.2 3B Heretic', labelEs: 'Granite 4.2 3B heretic', alias: 'granite-4.2-3b-heretic', maxCtx: 16384, uncensored: true, vision: false },
   // The 2B abliterated GGUF, not the installed Qwen3.5-4B.
-  { id: 'qwen2b', label: 'Qwen3.5-2B Abliterated', labelEs: 'Qwen3.5-2B abliterado', alias: 'qwen3.5-2b-abliterated', maxCtx: 32768, uncensored: true },
-  { id: 'lfm3-abliterated', label: 'LFM3-VL 2B Abliterated', labelEs: 'LFM3-VL 2B abliterado', alias: 'lfm3-vl-2b-abliterated', maxCtx: 32768, uncensored: true },
+  { id: 'qwen2b', label: 'Qwen3.5-2B Abliterated', labelEs: 'Qwen3.5-2B abliterado', alias: 'qwen3.5-2b-abliterated', maxCtx: 32768, uncensored: true, vision: true },
+  { id: 'lfm3-abliterated', label: 'LFM3-VL 2B Abliterated', labelEs: 'LFM3-VL 2B abliterado', alias: 'lfm3-vl-2b-abliterated', maxCtx: 32768, uncensored: true, vision: true },
 ];
 
 export const stockOptions = SERVE_MODEL_OPTIONS.filter((o) => !o.uncensored);
@@ -61,6 +63,11 @@ export function serveModelLabel(id: ServeModelId, locale: string): string {
 /** Uncensored start targets (fewer safety filters than the stock checkpoints). */
 export function isUncensoredServeModel(id: ServeModelId): boolean {
   return option(id).uncensored;
+}
+
+/** Start targets that read images (mmproj / vision projector). */
+export function isVisionServeModel(id: ServeModelId): boolean {
+  return option(id).vision;
 }
 
 const CTX_LADDER = [4096, 8192, 16384, 32768, 65536, 131072] as const;

@@ -4,6 +4,7 @@ import { ApiError } from '../lib/api';
 import { SERVE_DEFAULTS, startRemoteServe, type ServeModelId, type ServeOptions } from '../lib/serve';
 import { stockOptions, isServeModelRunning, serveModelLabel, uncensoredOptions } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
+import { VisionMark } from './VisionMark';
 
 export interface ServeDraft {
   maxTokens: string;
@@ -87,11 +88,16 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
       <button
         key={opt.id}
         type="button"
-        className={opt.uncensored ? 'primary has-uncensored-warn' : 'primary'}
+        className={[
+          'primary',
+          opt.uncensored || opt.vision ? 'has-model-mark' : '',
+          opt.uncensored ? 'has-uncensored-warn' : '',
+        ].filter(Boolean).join(' ')}
         aria-pressed={isServeModelRunning(runningModel, opt.id)}
         disabled={busy || starting}
         onClick={() => void start(opt.id)}
       >
+        {opt.vision && <VisionMark />}
         {opt.uncensored && <UncensoredMark />}
         {starting && status.model === opt.id ? t('serve.starting', { model: name }) : t('serve.startNamed', { model: name })}
       </button>

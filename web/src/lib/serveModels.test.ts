@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ctxPresetsFor, formatCtxPreset, isServeModelRunning, isUncensoredServeModel, matchServeModel, serveModelLabel } from './serveModels';
+import { ctxPresetsFor, formatCtxPreset, isServeModelRunning, isUncensoredServeModel, isVisionServeModel, matchServeModel, serveModelLabel } from './serveModels';
 
 describe('formatCtxPreset', () => {
   it('formats ladder sizes as k labels', () => {
@@ -125,5 +125,20 @@ describe('the ten GGUF targets', () => {
     expect(isServeModelRunning('qwen3.5-4b-uncensored', 'qwen2b')).toBe(false);
     expect(serveModelLabel('qwen2b', 'es')).toBe('Qwen3.5-2B abliterado');
     expect(serveModelLabel('gemma-e2b', 'en')).toBe('Gemma 4 E2B');
+  });
+});
+
+describe('isVisionServeModel', () => {
+  it('is true only for start targets with a vision projector', () => {
+    expect(isVisionServeModel('lfm3')).toBe(true);
+    expect(isVisionServeModel('gemma-e2b')).toBe(true);
+    expect(isVisionServeModel('gemma-uncensored')).toBe(true);
+    expect(isVisionServeModel('qwen2b')).toBe(true);
+    expect(isVisionServeModel('lfm3-abliterated')).toBe(true);
+    expect(isVisionServeModel('gemma-e2b-heretic')).toBe(true);
+    // NEGATIVE: text-only targets
+    expect(isVisionServeModel('qwen')).toBe(false);
+    expect(isVisionServeModel('nemotron')).toBe(false);
+    expect(isVisionServeModel('whiterabbitneo')).toBe(false);
   });
 });

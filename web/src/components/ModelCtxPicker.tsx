@@ -7,11 +7,13 @@ import {
   ctxPresetsFor,
   formatCtxPreset,
   isUncensoredServeModel,
+  isVisionServeModel,
   matchServeModel,
   serveModelLabel,
   uncensoredOptions,
 } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
+import { VisionMark } from './VisionMark';
 import { draftToOptions, EMPTY_SERVE_DRAFT } from './ServerPanel';
 
 type Status =
@@ -80,7 +82,10 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
       <button
         key={id}
         type="button"
-        className={isUncensoredServeModel(id) ? 'has-uncensored-warn' : undefined}
+        className={[
+          isUncensoredServeModel(id) || isVisionServeModel(id) ? 'has-model-mark' : '',
+          isUncensoredServeModel(id) ? 'has-uncensored-warn' : '',
+        ].filter(Boolean).join(' ') || undefined}
         aria-pressed={model === id}
         disabled={disabled}
         onClick={() => {
@@ -89,6 +94,7 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
           if (ctxPreset !== null && !next.includes(ctxPreset)) setCtxPreset(null);
         }}
       >
+        {isVisionServeModel(id) && <VisionMark />}
         {isUncensoredServeModel(id) && <UncensoredMark />}
         {label}
       </button>

@@ -24,6 +24,16 @@ describe('ServerPanel', () => {
     expect(screen.getByText(/token dump/)).toBeTruthy();
   });
 
+
+  it('marks serve buttons that read images with a vision icon', () => {
+    render(
+      <I18nProvider locale="en">
+        <ServerPanel busy={false} onStarted={() => {}} />
+      </I18nProvider>,
+    );
+    expect(document.querySelectorAll('.serve-model-groups .model-vision')).toHaveLength(6);
+  });
+
   it('groups serve buttons under stock and uncensored headings', () => {
     render(
       <I18nProvider locale="en">
