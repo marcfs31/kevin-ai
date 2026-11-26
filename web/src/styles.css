@@ -272,9 +272,27 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   color: var(--muted);
 }
 .model-picker-choices { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.model-picker-group .model-picker-choices {
+  flex-direction: column;
+  align-items: stretch;
+}
+.model-picker-group .model-picker-choices button {
+  inline-size: 100%;
+  justify-content: flex-start;
+}
+.serve-model-groups .serve-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+.serve-model-groups .serve-actions button {
+  inline-size: 100%;
+  justify-content: flex-start;
+}
 .serve-model-groups { display: flex; flex-direction: column; gap: 0.85rem; }
 .serve-model-groups .serve-actions { margin: 0; }
+.model-picker-choices button.has-model-mark,
 .model-picker-choices button.has-uncensored-warn,
+.serve-actions button.has-model-mark,
 .serve-actions button.has-uncensored-warn {
   display: inline-flex;
   align-items: center;
@@ -287,6 +305,13 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   flex: none;
 }
 .model-warn-icon { display: block; }
+.model-vision {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  flex: none;
+}
+.model-vision-icon { display: block; }
 .model-picker-choices button[aria-pressed='true'],
 .model-picker-choices button[aria-checked='true'] {
   background: var(--surface-2);

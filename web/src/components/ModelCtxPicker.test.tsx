@@ -44,6 +44,17 @@ describe('ModelCtxPicker', () => {
     expect(groups[1]?.querySelector('.model-warn')).toBeTruthy();
   });
 
+
+  it('marks models that read images with a vision icon', () => {
+    renderPicker();
+    fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
+    expect(document.querySelectorAll('.model-vision')).toHaveLength(6);
+    const lfm = screen.getByRole('button', { name: /LFM3-VL 2B$/ });
+    const qwen = screen.getByRole('button', { name: /^Qwen3\.5-4B$/ });
+    expect(lfm.querySelector('.model-vision')).toBeTruthy();
+    expect(qwen.querySelector('.model-vision')).toBeNull();
+  });
+
   it('marks Uncensored models with a warning', () => {
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
