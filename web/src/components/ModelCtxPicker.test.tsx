@@ -49,7 +49,7 @@ describe('ModelCtxPicker', () => {
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
     expect(document.querySelectorAll('.model-vision')).toHaveLength(6);
-    const lfm = screen.getByRole('button', { name: /LFM3-VL 2B$/ });
+    const lfm = screen.getByRole('button', { name: /LFM3-VL 2B(?! Abliterated)/ });
     const qwen = screen.getByRole('button', { name: /^Qwen3\.5-4B$/ });
     expect(lfm.querySelector('.model-vision')).toBeTruthy();
     expect(qwen.querySelector('.model-vision')).toBeNull();

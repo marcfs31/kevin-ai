@@ -94,9 +94,13 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
           if (ctxPreset !== null && !next.includes(ctxPreset)) setCtxPreset(null);
         }}
       >
-        {isVisionServeModel(id) && <VisionMark />}
-        {isUncensoredServeModel(id) && <UncensoredMark />}
-        {label}
+        <span className="model-choice-label">{label}</span>
+        {(isVisionServeModel(id) || isUncensoredServeModel(id)) && (
+          <span className="model-marks">
+            {isVisionServeModel(id) && <VisionMark />}
+            {isUncensoredServeModel(id) && <UncensoredMark />}
+          </span>
+        )}
       </button>
     );
   };
