@@ -335,6 +335,14 @@ textarea { resize: vertical; inline-size: 100%; line-height: 1.5; }
   flex: none;
 }
 .model-vision-icon { display: block; }
+/* Primary serve buttons use accent fill; muted/warn marks would vanish on that ground. */
+button.primary .model-vision,
+button.primary .model-warn {
+  color: var(--accent-text);
+}
+button.primary .model-warn-icon path:last-of-type {
+  fill: var(--accent);
+}
 .model-picker-choices button[aria-pressed='true'],
 .model-picker-choices button[aria-checked='true'] {
   background: var(--surface-2);

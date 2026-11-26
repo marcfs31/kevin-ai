@@ -10,10 +10,12 @@ export function VisionMark({ className = '' }: { className?: string }) {
           fill="none"
           stroke="currentColor"
           strokeWidth="1.35"
+          strokeLinecap="round"
           strokeLinejoin="round"
-          d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"
+          d="M1.25 8C2.9 4.75 5.15 3.25 8 3.25S13.1 4.75 14.75 8C13.1 11.25 10.85 12.75 8 12.75S2.9 11.25 1.25 8z"
         />
-        <circle cx="8" cy="8" r="2.15" fill="currentColor" />
+        <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.35" />
+        <circle cx="8" cy="8" r="1.05" fill="currentColor" />
       </svg>
       <span className="sr-only">{t('picker.visionMark')}</span>
     </span>

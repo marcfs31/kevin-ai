@@ -48,11 +48,16 @@ describe('ModelCtxPicker', () => {
   it('marks models that read images with a vision icon', () => {
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
-    expect(document.querySelectorAll('.model-vision')).toHaveLength(6);
+    expect(document.querySelectorAll('.model-vision')).toHaveLength(9);
     const lfm = screen.getByRole('button', { name: /LFM3-VL 2B(?! Abliterated)/ });
-    const qwen = screen.getByRole('button', { name: /^Qwen3\.5-4B$/ });
+    const qwen = screen.getByRole('button', { name: /^Qwen3\.5-4B(?! Uncensored)/ });
+    const gemma = screen.getByRole('button', { name: /^Gemma 4 E4B(?! Uncensored)/ });
+    const rabbit = screen.getByRole('button', { name: /WhiteRabbitNeo/ });
     expect(lfm.querySelector('.model-vision')).toBeTruthy();
-    expect(qwen.querySelector('.model-vision')).toBeNull();
+    expect(qwen.querySelector('.model-vision')).toBeTruthy();
+    expect(gemma.querySelector('.model-vision')).toBeTruthy();
+    // NEGATIVE: text-only stock target
+    expect(rabbit.querySelector('.model-vision')).toBeNull();
   });
 
   it('marks Uncensored models with a warning', () => {
@@ -62,7 +67,7 @@ describe('ModelCtxPicker', () => {
     expect(warns).toHaveLength(7);
     expect(screen.getByRole('button', { name: /Qwen3.5-4B Uncensored/ }).querySelector('.model-warn')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Gemma 4 E4B Uncensored/ }).querySelector('.model-warn')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Gemma 4 E4B' }).querySelector('.model-warn')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Gemma 4 E4B(?! Uncensored)/ }).querySelector('.model-warn')).toBeNull();
   });
 
   it('does not POST when confirm is cancelled', async () => {
@@ -70,7 +75,7 @@ describe('ModelCtxPicker', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Gemma 4 E4B' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Gemma 4 E4B(?! Uncensored)/ }));
     fireEvent.click(screen.getByRole('radio', { name: '8k' }));
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
@@ -88,7 +93,7 @@ describe('ModelCtxPicker', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Gemma 4 E4B' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Gemma 4 E4B(?! Uncensored)/ }));
     fireEvent.click(screen.getByRole('radio', { name: '8k' }));
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));

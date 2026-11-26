@@ -17,7 +17,7 @@ describe('ServerPanel', () => {
       </I18nProvider>,
     );
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Start Qwen3\.5-4B(?! Uncensored)/ }));
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe('Could not start the model on the server.');
     expect(alert.textContent).not.toContain('token dump');
@@ -31,7 +31,7 @@ describe('ServerPanel', () => {
         <ServerPanel busy={false} onStarted={() => {}} />
       </I18nProvider>,
     );
-    expect(document.querySelectorAll('.serve-model-groups .model-vision')).toHaveLength(6);
+    expect(document.querySelectorAll('.serve-model-groups .model-vision')).toHaveLength(9);
   });
 
   it('groups serve buttons under stock and uncensored headings', () => {
@@ -55,8 +55,8 @@ describe('ServerPanel', () => {
       </I18nProvider>,
     );
     expect(screen.getByRole('button', { name: /Start Qwen3\.5-4B Uncensored/ }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('false');
-    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: /^Start Qwen3\.5-4B(?! Uncensored)/ }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: /^Start Gemma 4 E4B(?! Uncensored)/ }).getAttribute('aria-pressed')).toBe('false');
   });
 
   it('keeps plain Qwen pressed for the plain model name', () => {
@@ -65,7 +65,7 @@ describe('ServerPanel', () => {
         <ServerPanel busy={false} runningModel="qwen3.5-4b" onStarted={() => {}} />
       </I18nProvider>,
     );
-    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: /^Start Qwen3\.5-4B(?! Uncensored)/ }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: /Start Qwen3\.5-4B Uncensored/ }).getAttribute('aria-pressed')).toBe('false');
   });
 
@@ -94,7 +94,7 @@ describe('ServerPanel', () => {
       </I18nProvider>,
     );
     expect(screen.getByRole('button', { name: /Start Gemma 4 E4B Uncensored/ }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: /^Start Gemma 4 E4B(?! Uncensored)/ }).getAttribute('aria-pressed')).toBe('false');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: /Start Gemma 4 E4B Uncensored/ }));
     await screen.findByRole('status');
@@ -111,7 +111,7 @@ describe('ServerPanel', () => {
       </I18nProvider>,
     );
     expect(screen.getByRole('button', { name: 'Start WhiteRabbitNeo 2.5 7B' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Start Qwen3.5-4B' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: /^Start Qwen3\.5-4B(?! Uncensored)/ }).getAttribute('aria-pressed')).toBe('false');
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Start WhiteRabbitNeo 2.5 7B' }));
     await screen.findByRole('status');
