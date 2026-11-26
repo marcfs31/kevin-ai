@@ -5,7 +5,7 @@ export default withMermaid(
   defineConfig({
     title: 'Kevin AI',
     description: 'Private local AI assistant — architecture, APIs, and how models run',
-    base: '/',
+    base: '/kevin-ai/',
     lastUpdated: true,
 
     themeConfig: {

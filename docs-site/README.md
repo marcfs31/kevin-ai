@@ -16,3 +16,10 @@ npx vitepress dev --port 5174
 ```
 
 Interactive GitDiagram: https://gitdiagram.com/marcfs31/kevin-ai
+
+## GitHub Pages
+
+Production site: <https://marcfs31.github.io/kevin-ai/>
+
+Built with `npm run docs:build` (VitePress `base` is `/kevin-ai/`). The static files are published on the `gh-pages` branch.
+
