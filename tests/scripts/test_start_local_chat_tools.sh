@@ -7,7 +7,8 @@ fails=0; checks=0
 check() { checks=$((checks + 1)); if ! eval "$1"; then fails=$((fails + 1)); echo "  FAIL $2"; fi; }
 
 home=$(mktemp -d)
-trap 'find "$home" -delete' EXIT
+extra=$(mktemp -d)
+trap 'find "$home" -delete; find "$extra" -delete' EXIT
 run() { HOME=$home bash "$script" "$@" 2>&1 || true; }
 
 out=$(run --dry-run)
@@ -34,6 +35,22 @@ done
 check '[ -z "$(ls -A "$home")" ]' "dry-run must not create files"
 # --stop must only kill a process whose command line is the service, never an unrelated pid from a stale file
 check 'grep -q "grep -q \"tools/chat_tools.py\"" "$script" && ! grep -q "sudo\|pkill\|killall" "$script"' "stop should verify the pid and not use pkill or sudo"
+# A relative state directory must export an absolute OXR binary. An explicit relative binary stays relative.
+mkdir -p "$extra/proj" "$extra/state/oxr"
+printf '#!/bin/sh\n' > "$extra/state/oxr/crispembed"
+chmod 755 "$extra/state/oxr/crispembed"
+printf x > "$extra/state/oxr/oxr-1.0-q4_k-head.gguf"
+printf y > "$extra/state/oxr/oxr-1.0-dfine-layout-f32.gguf"
+abs=$(cd "$extra/state/oxr" && pwd -P)
+out=$(cd "$extra/proj" && env -u KEVIN_OXR_BIN -u KEVIN_OXR_MODEL -u KEVIN_OXR_LAYOUT bash -c 'source "$1"; discover_oxr ../state; printf "%s\n%s\n%s\n" "$KEVIN_OXR_BIN" "$KEVIN_OXR_MODEL" "$KEVIN_OXR_LAYOUT"' _ "$script")
+bin=${out%%$'\n'*}
+rest=${out#*$'\n'}
+model=${rest%%$'\n'*}
+layout=${rest#*$'\n'}
+check '[[ "$bin" == "$abs/crispembed" && "$bin" == /* ]]' "relative state should export an absolute binary, got: $out"
+check '[[ "$model" == "$abs/oxr-1.0-q4_k-head.gguf" && "$layout" == "$abs/oxr-1.0-dfine-layout-f32.gguf" ]]' "model and layout should be absolute too, got: $out"
+out=$(cd "$extra/proj" && KEVIN_OXR_BIN=crispembed env -u KEVIN_OXR_MODEL -u KEVIN_OXR_LAYOUT bash -c 'source "$1"; discover_oxr ../state; printf "%s\n" "$KEVIN_OXR_BIN"' _ "$script")
+check '[[ "$out" == "crispembed" ]]' "an explicit relative binary must stay relative, got: $out"
 
 if [ "$fails" -ne 0 ]; then echo "test_start_local_chat_tools: $fails of $checks checks FAILED"; exit 1; fi
 echo "test_start_local_chat_tools: $checks checks passed"

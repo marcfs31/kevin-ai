@@ -12,7 +12,8 @@ the host whose service is asked.
 - Tools: project_list, fs_read, fs_list, fs_search, fs_write, fs_edit. Writes are capped in size and refused
   when the volume is short of free space (the SSD also holds the models).
 - doc_parse, only when the owner has installed SoMark OXR on this host (KEVIN_OXR_BIN and
-  KEVIN_OXR_MODEL). It runs that fixed binary on one jailed image. The model cannot pass a
+  KEVIN_OXR_MODEL) and at least one registered project can run it (the runtime is outside
+  that project). It runs that fixed binary on one jailed image. The model cannot pass a
   program, a URL, or extra arguments. The model server does not set those variables, so the
   tool stays off beside the loaded chat model.
 
@@ -202,9 +203,24 @@ def oxr_runtime(root=None):
     return binary, model, layout
 
 
-def tool_defs(extra=()):
+def oxr_advertised(roots):
+    """The installed runtime when some registered project can run it, else None.
+
+    Execution refuses a runtime that sits inside the project being parsed. Listing and the
+    kept-list version use the same check, so a runtime under every registered project is not
+    offered and then answered with "not installed"."""
+    if not roots or oxr_runtime() is None:
+        return None
+    for root in roots:
+        runtime = oxr_runtime(root)
+        if runtime is not None:
+            return runtime
+    return None
+
+
+def tool_defs(extra=(), roots=()):
     tools = list(TOOLS)
-    if oxr_runtime():
+    if oxr_advertised(roots):
         tools.append(DOC_PARSE)
     return tools + list(extra)
 
@@ -440,12 +456,13 @@ class ProjectHost:
         return [chat_commands.tool_def(pid, cmd) for pid, p in self.projects().items() for cmd in p["commands"].values()]
 
     def tools_version(self):
-        """Changes when a tool definition or an allowlisted command changes, so a kept tool list is never stale."""
+        """Changes when a tool definition, an allowlisted command, or OXR eligibility changes."""
         try:
-            commands = {pid: p["commands"] for pid, p in self.projects().items()}
+            projects = self.projects()
+            commands = {pid: p["commands"] for pid, p in projects.items()}
+            oxr = oxr_advertised([p["root"] for p in projects.values()])
         except RegistryError:
             return TOOLS_VERSION + "-bad"
-        oxr = oxr_runtime()
         marker = "" if oxr is None else json.dumps(oxr)
         return hashlib.sha256((TOOLS_VERSION + marker + json.dumps(commands, sort_keys=True)).encode()).hexdigest()[:12]
 
@@ -562,7 +579,9 @@ class NativeProjectClient:
             return {"protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "serverInfo": {"name": "kevin-projects", "version": TOOLS_VERSION}}
         if method == "tools/list":
             try:
-                return {"tools": tool_defs(self.host.command_tools())}
+                projects = self.host.projects()
+                roots = [p["root"] for p in projects.values()]
+                return {"tools": tool_defs(self.host.command_tools(), roots)}
             except RegistryError:
                 return {"tools": tool_defs()}
         if method == "tools/call":
