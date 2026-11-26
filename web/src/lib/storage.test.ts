@@ -4,9 +4,9 @@ import { BACKUP_KEY, DEFAULT_SETTINGS, STORAGE_KEY, deleteBackups, editableUserI
 describe('tools and internet settings', () => {
   const load = (settings: unknown) => migrate({ version: 1, settings })?.settings;
 
-  it('default to nothing on and the internet off, so a chat saved before them loads as it was', () => {
+  it('default to nothing on, the internet off, and the local SearXNG address, so a chat saved before them loads safely', () => {
     expect(load({})?.toolsConfig).toEqual({ servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [], localHost: false });
-    expect(load({})?.internet).toEqual({ on: false, searchUrl: '' });
+    expect(load({})?.internet).toEqual({ on: false, searchUrl: 'http://127.0.0.1:8888' });
   });
 
   it('keep a valid configuration', () => {

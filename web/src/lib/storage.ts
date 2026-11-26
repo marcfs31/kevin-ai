@@ -216,7 +216,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCompact: true,
   statsPane: 'auto',
   toolsConfig: { servers: {}, budgetTokens: 1500, approval: 'readonly-free', alwaysAllow: [], localHost: false },
-  internet: { on: false, searchUrl: '' },
+  internet: { on: false, searchUrl: 'http://127.0.0.1:8888' },
 };
 
 export const MAX_STEPS_LIMIT = 50;
@@ -355,7 +355,7 @@ function toolsConfig(v: unknown): ToolsConfig {
 
 function internetConfig(v: unknown): InternetConfig {
   const o = obj(v) ?? {};
-  const url = typeof o.searchUrl === 'string' ? o.searchUrl.trim() : '';
+  const url = typeof o.searchUrl === 'string' ? o.searchUrl.trim() : DEFAULT_SETTINGS.internet.searchUrl;
   return { on: o.on === true, searchUrl: url.length <= 300 ? url : '' };
 }
 

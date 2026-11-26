@@ -498,9 +498,11 @@ describe('App', () => {
       const url = within(panel).getByLabelText('Web search address (a SearXNG instance)') as HTMLInputElement;
       expect(box.checked).toBe(false);
       expect(url.disabled).toBe(true);
+      expect(url.value).toBe('http://127.0.0.1:8888');
       expect(screen.queryByText('Internet on')).toBeNull();
       fireEvent.click(box);
       expect(screen.getByText('Internet on')).toBeTruthy();
+      expect(saved().internet).toEqual({ on: true, searchUrl: 'http://127.0.0.1:8888' });
       fireEvent.change(url, { target: { value: ' http://127.0.0.1:8888 ' } });
       expect(saved().internet).toEqual({ on: true, searchUrl: 'http://127.0.0.1:8888' });
       fireEvent.click(within(panel).getByRole('button', { name: 'Test search' }));

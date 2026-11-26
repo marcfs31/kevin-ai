@@ -319,8 +319,8 @@ The chat reaches it at `/tools-local/*`: the dev proxy uses `LM_TOOLS_LOCAL_URL`
 `scripts/setup-remote-searxng.sh` installs SearXNG on the same machine (a pinned commit, in `~/opt/searxng`
 with its own virtualenv made by `uv`; settings in `~/.config/searxng/settings.yml`, written once, with
 a random key) and starts it on 127.0.0.1:8888 with the JSON format on. It needs about 250 MB. In
-Settings > Tools and internet, turn the internet on and put `http://127.0.0.1:8888` as the web search
-address: the address is used by the tool service, which runs on that machine too. Queries go from
+Settings > Tools and internet, turn the internet on: the web search address defaults to
+`http://127.0.0.1:8888` (change it if yours is elsewhere). The address is used by the tool service, which runs on that machine too. Queries go from
 SearXNG to the search engines it is configured for, and nowhere else. The packages are installed from
 `scripts/searxng-requirements.txt` (exact versions of the tested environment). The tool service only
 searches a loopback address other than its own port; a private address on the network must be listed

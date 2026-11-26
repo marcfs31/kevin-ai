@@ -3,7 +3,7 @@ import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { startRemoteServe, type ServeModelId } from '../lib/serve';
 import {
-  censoredOptions,
+  stockOptions,
   ctxPresetsFor,
   formatCtxPreset,
   isUncensoredServeModel,
@@ -155,16 +155,16 @@ export function ModelCtxPicker({ modelName, contextLength, busy, onStarted }: Pr
           </h2>
           <div className="model-picker-section">
             <h3>{t('picker.model')}</h3>
-            <div className="model-picker-groups">
+            <div className="model-picker-groups" role="group" aria-label={t('picker.model')}>
               <div className="model-picker-group">
-                <h4 className="model-picker-group-title">{t('picker.modelGroupStock')}</h4>
-                <div className="model-picker-choices" role="group" aria-label={t('picker.modelGroupStock')}>
-                  {censoredOptions.map(({ id }) => renderModelChoice(id))}
+                <h4 id={`${uid}-stock`} className="model-picker-group-title">{t('picker.modelGroupStock')}</h4>
+                <div className="model-picker-choices" aria-labelledby={`${uid}-stock`}>
+                  {stockOptions.map(({ id }) => renderModelChoice(id))}
                 </div>
               </div>
               <div className="model-picker-group">
-                <h4 className="model-picker-group-title">{t('picker.modelGroupUncensored')}</h4>
-                <div className="model-picker-choices" role="group" aria-label={t('picker.modelGroupUncensored')}>
+                <h4 id={`${uid}-uncensored`} className="model-picker-group-title">{t('picker.modelGroupUncensored')}</h4>
+                <div className="model-picker-choices" aria-labelledby={`${uid}-uncensored`}>
                   {uncensoredOptions.map(({ id }) => renderModelChoice(id))}
                 </div>
               </div>

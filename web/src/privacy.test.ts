@@ -18,7 +18,12 @@ describe('privacy', () => {
   const files = sources(SRC).map((path) => ({ path: relative(SRC, path), text: readFileSync(path, 'utf8') }));
 
   it('names no remote URL', () => {
-    for (const f of files) expect(f.text.match(/\b(?:https?|wss?):\/\/[^\s'"`]*/g) ?? [], f.path).toEqual([]);
+    // Loopback is fine (local SearXNG default). Anything else in source is a privacy bug.
+    const remote = (text: string) =>
+      (text.match(/\b(?:https?|wss?):\/\/[^\s'"`]*/g) ?? []).filter(
+        (u) => !/^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\/?$/i.test(u),
+      );
+    for (const f of files) expect(remote(f.text), f.path).toEqual([]);
   });
 
   it('uses no beacon, WebSocket or third-party storage', () => {
