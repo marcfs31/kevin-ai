@@ -108,9 +108,9 @@ run, with Mermaid diagrams:
 
 ```bash
 cd docs-site && npm ci && npm run docs:dev
+```
 
 Published docs: <https://marcfs31.github.io/kevin-ai/>.
-```
 
 Interactive repository map: [gitdiagram.com/marcfs31/kevin-ai](https://gitdiagram.com/marcfs31/kevin-ai)
 ([GitDiagram](https://gitdiagram.com/) — AI overview; verify details against this README and

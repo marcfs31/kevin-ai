@@ -21,5 +21,11 @@ Interactive GitDiagram: https://gitdiagram.com/marcfs31/kevin-ai
 
 Production site: <https://marcfs31.github.io/kevin-ai/>
 
-Built with `npm run docs:build` (VitePress `base` is `/kevin-ai/`). The static files are published on the `gh-pages` branch.
+`base` defaults to `/kevin-ai/` so the build matches project Pages. For a local preview at `/`, run `DOCS_BASE=/ npm run docs:dev`.
+
+Rebuild and push the `gh-pages` branch from the repo root:
+
+```bash
+scripts/publish-docs-pages.sh
+```
 

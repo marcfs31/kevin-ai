@@ -5,7 +5,8 @@ export default withMermaid(
   defineConfig({
     title: 'Kevin AI',
     description: 'Private local AI assistant — architecture, APIs, and how models run',
-    base: '/kevin-ai/',
+    // Project Pages: https://marcfs31.github.io/kevin-ai/. Use DOCS_BASE=/ for a local root preview.
+    base: process.env.DOCS_BASE ?? '/kevin-ai/',
     lastUpdated: true,
 
     themeConfig: {
