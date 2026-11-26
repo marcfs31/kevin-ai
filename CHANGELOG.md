@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [1.0.7] - 2026-11-26
 
 ### Added
-- Architecture docs on GitHub Pages at `https://marcfs31.github.io/kevin-ai/` (VitePress `base` `/kevin-ai/`, published from the `gh-pages` branch).
+- Architecture docs on GitHub Pages at `https://marcfs31.github.io/kevin-ai/` (VitePress `base` `/kevin-ai/`, republish with `scripts/publish-docs-pages.sh` onto `gh-pages`).
 
 ## [1.0.6] - 2026-11-26
 
