@@ -349,6 +349,15 @@ class ProjectServer(Base):
             json.dump({"projects": {"demo": {"title": "Demo", "root": "demo"}}}, f)
         self.host = chat_tools.chat_projects.ProjectHost(self.base, self.registry, min_free_gb=0)
         self.write_config({})
+        self._oxr = {k: os.environ.pop(k, None) for k in ("KEVIN_OXR_BIN", "KEVIN_OXR_MODEL", "KEVIN_OXR_LAYOUT")}
+
+    def tearDown(self):
+        for k, v in self._oxr.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        super().tearDown()
 
     def start(self, **kw):
         self.serve(self.manager(projects=self.host, **kw))
@@ -404,6 +413,36 @@ class ProjectServer(Base):
         again = self.http("GET", "/tools/servers/project/tools")[1]
         self.assertTrue(again["cached"])
         self.assertEqual(again["tools"], doc["tools"])
+
+    def test_installing_oxr_makes_a_new_manager_drop_the_kept_list(self):
+        for key in ("KEVIN_OXR_BIN", "KEVIN_OXR_MODEL", "KEVIN_OXR_LAYOUT"):
+            os.environ.pop(key, None)
+        self.start()
+        first = self.http("GET", "/tools/servers/project/tools")[1]
+        self.assertNotIn("doc_parse", [t["name"] for t in first["tools"]])
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "state", "tools", "project.json")))
+        self.http("POST", "/tools/servers/project/stop", {})
+        oxr = os.path.join(self.tmp, "oxr-runtime")
+        os.makedirs(oxr)
+        binary = os.path.join(oxr, "crispembed")
+        model = os.path.join(oxr, "model.gguf")
+        with open(binary, "w") as f:
+            f.write("#!/bin/sh\nprintf ok\n")
+        os.chmod(binary, 0o755)
+        with open(model, "wb") as f:
+            f.write(b"gguf")
+        os.environ["KEVIN_OXR_BIN"] = binary
+        os.environ["KEVIN_OXR_MODEL"] = model
+        try:
+            state = os.path.join(self.tmp, "state")
+            fresh = self.manager(projects=self.host)
+            listed = fresh.tools("project", False)
+        finally:
+            os.environ.pop("KEVIN_OXR_BIN", None)
+            os.environ.pop("KEVIN_OXR_MODEL", None)
+        self.assertFalse(listed["cached"])
+        self.assertIn("doc_parse", [t["name"] for t in listed["tools"]])
+        self.assertTrue(os.path.isdir(state))
 
     def test_a_changed_tool_definition_makes_the_kept_list_stale(self):
         self.start()

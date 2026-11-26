@@ -350,8 +350,8 @@ class DocParse(Base):
         self.assertIn("SoMark OXR", text)
         with open(os.path.join(self.bin_dir, "argv")) as f:
             argv = f.read().splitlines()
-        self.assertEqual(argv[0], self.binary)
-        self.assertEqual(argv[1:7], ["--ocr-pipeline", os.path.join(self.root, "page.png"), "--ocr-engine", "oxr", "--ocr-rec", self.model])
+        self.assertEqual(argv[0], os.path.realpath(self.binary))
+        self.assertEqual(argv[1:7], ["--ocr-pipeline", os.path.join(self.root, "page.png"), "--ocr-engine", "oxr", "--ocr-rec", os.path.realpath(self.model)])
         with open(os.path.join(self.bin_dir, "env")) as f:
             seen = f.read()
         self.assertNotIn("should-not-pass", seen)
@@ -359,6 +359,28 @@ class DocParse(Base):
         names = [t["name"] for t in cp.NativeProjectClient("project", {}, {}, self.host).request("tools/list")["tools"]]
         self.assertIn("doc_parse", names)
         self.assertEqual(len(names), 23)
+
+    def test_the_tool_list_version_changes_when_oxr_appears(self):
+        before = self.host.tools_version()
+        self._install("#!/bin/sh\nprintf ok\n")
+        self.assertNotEqual(self.host.tools_version(), before)
+        os.environ.pop("KEVIN_OXR_BIN", None)
+        self.assertEqual(self.host.tools_version(), before)
+
+    def test_a_relative_or_in_project_executable_is_refused(self):
+        marker = os.path.join(self.tmp, "ran")
+        planted = os.path.join(self.root, "crispembed")
+        with open(planted, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {marker}\n")
+        os.chmod(planted, 0o755)
+        self.put("page.png", b"\x89PNG\r\n", binary=True)
+        os.environ["KEVIN_OXR_MODEL"] = self.model
+        os.environ["KEVIN_OXR_BIN"] = "crispembed"
+        self.assertIsNone(cp.oxr_runtime())
+        self.fails("doc_parse", "not installed", path="page.png")
+        os.environ["KEVIN_OXR_BIN"] = planted
+        self.fails("doc_parse", "not installed", path="page.png")
+        self.assertFalse(os.path.exists(marker))
 
     def test_a_failing_parser_is_an_error_and_a_symlink_runtime_is_ignored(self):
         self._install("#!/bin/sh\necho no\nexit 3\n")
