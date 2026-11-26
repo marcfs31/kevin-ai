@@ -34,12 +34,14 @@ describe('ModelCtxPicker', () => {
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
     expect(screen.getByText('Stock models')).toBeTruthy();
     expect(screen.getByText('Uncensored')).toBeTruthy();
-    const stockGroup = screen.getByRole('group', { name: 'Stock models' });
-    const uncensoredGroup = screen.getByRole('group', { name: 'Uncensored' });
-    expect(stockGroup.querySelectorAll('button')).toHaveLength(8);
-    expect(uncensoredGroup.querySelectorAll('button')).toHaveLength(7);
-    expect(stockGroup.querySelector('.model-warn')).toBeNull();
-    expect(uncensoredGroup.querySelector('.model-warn')).toBeTruthy();
+    // One role=group for the whole model list (single selection); visual sections are headings only.
+    expect(screen.getByRole('group', { name: 'Model' })).toBeTruthy();
+    const groups = document.querySelectorAll('.model-picker-groups .model-picker-group');
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.querySelectorAll('button')).toHaveLength(8);
+    expect(groups[1]?.querySelectorAll('button')).toHaveLength(7);
+    expect(groups[0]?.querySelector('.model-warn')).toBeNull();
+    expect(groups[1]?.querySelector('.model-warn')).toBeTruthy();
   });
 
   it('marks Uncensored models with a warning', () => {

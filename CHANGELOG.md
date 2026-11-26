@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 - Model picker and Settings serve actions: stock models and uncensored models in separate groups (English and Spanish), with shared group styling.
+- Settings > Tools and internet: the web search address defaults to `http://127.0.0.1:8888` (local SearXNG). The internet switch stays off until you turn it on.
 
 ## [1.0.5] - 2026-11-25
 

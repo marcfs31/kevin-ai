@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { useI18n } from '../i18n';
 import { ApiError } from '../lib/api';
 import { SERVE_DEFAULTS, startRemoteServe, type ServeModelId, type ServeOptions } from '../lib/serve';
-import { censoredOptions, isServeModelRunning, serveModelLabel, uncensoredOptions } from '../lib/serveModels';
+import { stockOptions, isServeModelRunning, serveModelLabel, uncensoredOptions } from '../lib/serveModels';
 import { UncensoredMark } from './UncensoredMark';
 
 export interface ServeDraft {
@@ -81,7 +81,7 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
 
   const set = <K extends keyof ServeDraft>(k: K, v: ServeDraft[K]) => setDraft((d) => ({ ...d, [k]: v }));
 
-  const renderServeButton = (opt: (typeof censoredOptions)[number]) => {
+  const renderServeButton = (opt: (typeof stockOptions)[number]) => {
     const name = serveModelLabel(opt.id, locale);
     return (
       <button
@@ -132,12 +132,12 @@ export function ServerPanel({ busy, runningModel = null, onStarted }: Props) {
       </p>
       <div className="serve-model-groups" role="group" aria-describedby={`${id}-hint`}>
         <div className="model-picker-group">
-          <h3 className="model-picker-group-title">{t('picker.modelGroupStock')}</h3>
-          <div className="serve-actions">{censoredOptions.map(renderServeButton)}</div>
+          <h3 id={`${id}-stock`} className="model-picker-group-title">{t('picker.modelGroupStock')}</h3>
+          <div className="serve-actions" aria-labelledby={`${id}-stock`}>{stockOptions.map(renderServeButton)}</div>
         </div>
         <div className="model-picker-group">
-          <h3 className="model-picker-group-title">{t('picker.modelGroupUncensored')}</h3>
-          <div className="serve-actions">{uncensoredOptions.map(renderServeButton)}</div>
+          <h3 id={`${id}-uncensored`} className="model-picker-group-title">{t('picker.modelGroupUncensored')}</h3>
+          <div className="serve-actions" aria-labelledby={`${id}-uncensored`}>{uncensoredOptions.map(renderServeButton)}</div>
         </div>
       </div>
       {status.kind === 'ok' && (
