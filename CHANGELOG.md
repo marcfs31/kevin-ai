@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.9] - 2026-11-26
 
 ### Fixed
 - Vision eye marks on Settings start buttons: use the accent label colour so they stay visible on the filled primary chrome (muted grey on dark accent had vanished).
