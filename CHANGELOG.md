@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Vision eye marks on Settings start buttons: use the accent label colour so they stay visible on the filled primary chrome (muted grey on dark accent had vanished).
+- Stock Qwen3.5-4B, Qwen3.5-4B Uncensored, and Gemma 4 E4B show the eye mark: `lm-serve` opens their embedded vision encoder from the q8 weights.
+
+### Changed
+- Vision eye SVG uses explicit cubic lids plus iris ring so the mark stays clean at 14 px.
+
 ## [1.0.8] - 2026-11-26
 
 ### Added

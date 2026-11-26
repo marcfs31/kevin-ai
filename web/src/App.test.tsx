@@ -1246,7 +1246,7 @@ describe('App', () => {
     renderApp(['es-ES']);
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(await screen.findByRole('button', { name: 'Ajustes' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Arrancar Qwen3.5-4B' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Arrancar Qwen3\.5-4B(?! Uncensored)(?! sin censura)/ }));
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toBe('No se pudo arrancar el modelo en el servidor.');
     expect(alert.textContent).not.toContain('healthy');
@@ -1683,7 +1683,7 @@ describe('App', () => {
     renderApp();
     await screen.findByText('Model: qwen3.5-4b');
     fireEvent.click(screen.getByRole('button', { name: /Choose model and context window/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Gemma 4 E4B' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Gemma 4 E4B(?! Uncensored)/ }));
     fireEvent.click(screen.getByRole('radio', { name: '8k' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
     expect(confirm).toHaveBeenCalledWith('Stop the current model and start Gemma 4 E4B?');
@@ -1700,14 +1700,14 @@ describe('App', () => {
     renderApp();
     await screen.findByText('Model: qwen3.5-4b');
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    const qwen = screen.getByRole('button', { name: 'Start Qwen3.5-4B' });
+    const qwen = screen.getByRole('button', { name: /^Start Qwen3\.5-4B(?! Uncensored)/ });
     expect(qwen.getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: /^Start Gemma 4 E4B(?! Uncensored)/ }).getAttribute('aria-pressed')).toBe('false');
     fireEvent.click(qwen);
     expect(confirm).toHaveBeenCalledWith('Stop the current model and start Qwen3.5-4B?');
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/control/serve'))).toBe(false);
     confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Start Gemma 4 E4B' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Start Gemma 4 E4B(?! Uncensored)/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/control/serve'))).toBe(true));
     const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/control/serve'));
     expect(JSON.parse(String(call?.[1]?.body)).model).toBe('gemma');

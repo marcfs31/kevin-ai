@@ -17,9 +17,10 @@ export interface ServeModelOption {
 
 /** Fixed start targets Settings / the header picker can launch. */
 export const SERVE_MODEL_OPTIONS: ServeModelOption[] = [
-  { id: 'qwen', label: 'Qwen3.5-4B', labelEs: 'Qwen3.5-4B', alias: 'qwen3.5-4b', maxCtx: 131072, uncensored: false, vision: false },
-  { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored', labelEs: 'Qwen3.5-4B sin censura', alias: 'qwen3.5-4b-uncensored', maxCtx: 131072, uncensored: true, vision: false },
-  { id: 'gemma', label: 'Gemma 4 E4B', labelEs: 'Gemma 4 E4B', alias: 'gemma-4-e4b', maxCtx: 131072, uncensored: false, vision: false },
+  // lm-serve opens the embedded vision encoder from the q8 weights (no separate mmproj).
+  { id: 'qwen', label: 'Qwen3.5-4B', labelEs: 'Qwen3.5-4B', alias: 'qwen3.5-4b', maxCtx: 131072, uncensored: false, vision: true },
+  { id: 'qwen-uncensored', label: 'Qwen3.5-4B Uncensored', labelEs: 'Qwen3.5-4B sin censura', alias: 'qwen3.5-4b-uncensored', maxCtx: 131072, uncensored: true, vision: true },
+  { id: 'gemma', label: 'Gemma 4 E4B', labelEs: 'Gemma 4 E4B', alias: 'gemma-4-e4b', maxCtx: 131072, uncensored: false, vision: true },
   { id: 'whiterabbitneo', label: 'WhiteRabbitNeo 2.5 7B', labelEs: 'WhiteRabbitNeo 2.5 7B', alias: 'whiterabbitneo-2.5-7b', maxCtx: 16384, uncensored: false, vision: false },
   { id: 'gemma-uncensored', label: 'Gemma 4 E4B Uncensored', labelEs: 'Gemma 4 E4B Uncensored', alias: 'gemma-4-e4b-uncensored', maxCtx: 32768, uncensored: true, vision: true },
   // Gemma 4 E2B and Nemotron follow the gemma4 path (llama-server v1.0.0). Nemotron has no mmproj.

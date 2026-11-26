@@ -129,7 +129,10 @@ describe('the ten GGUF targets', () => {
 });
 
 describe('isVisionServeModel', () => {
-  it('is true only for start targets with a vision projector', () => {
+  it('is true for start targets with an embedded encoder or mmproj', () => {
+    expect(isVisionServeModel('qwen')).toBe(true);
+    expect(isVisionServeModel('qwen-uncensored')).toBe(true);
+    expect(isVisionServeModel('gemma')).toBe(true);
     expect(isVisionServeModel('lfm3')).toBe(true);
     expect(isVisionServeModel('gemma-e2b')).toBe(true);
     expect(isVisionServeModel('gemma-uncensored')).toBe(true);
@@ -137,8 +140,8 @@ describe('isVisionServeModel', () => {
     expect(isVisionServeModel('lfm3-abliterated')).toBe(true);
     expect(isVisionServeModel('gemma-e2b-heretic')).toBe(true);
     // NEGATIVE: text-only targets
-    expect(isVisionServeModel('qwen')).toBe(false);
     expect(isVisionServeModel('nemotron')).toBe(false);
     expect(isVisionServeModel('whiterabbitneo')).toBe(false);
+    expect(isVisionServeModel('granite')).toBe(false);
   });
 });
